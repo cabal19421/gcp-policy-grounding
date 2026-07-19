@@ -1,0 +1,30 @@
+{
+  "version": 3,
+  "etag": "BwYn8x2Qb0c=",
+  "bindings": [
+    {
+      "role": "roles/bigquery.dataViewer",
+      "members": [
+        "group:data-eng@acme.example",
+        "user:alice@acme.example"
+      ]
+    },
+    {
+      "role": "roles/bigquery.jobUser",
+      "members": [
+        "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com"
+      ]
+    },
+    {
+      "role": "roles/storage.objectViewer",
+      "members": [
+        "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com"
+      ],
+      "condition": {
+        "title": "expires-2027",
+        "description": "Temporary read access for the 2026 migration",
+        "expression": "request.time < timestamp(\"2027-01-01T00:00:00Z\")"
+      }
+    }
+  ]
+}
