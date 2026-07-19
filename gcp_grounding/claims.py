@@ -25,6 +25,12 @@ Claim kinds:
 - ``constraint_value`` — the policy uses the constraint with a value type
   (``is_list``: list-typed True, boolean-typed False); checked against the
   constraint's declared ``value_type`` in the snapshot.
+- ``permission`` — the referenced IAM permission should exist (value =
+  permission name; emitted by :mod:`~gcp_grounding.tf_claims` for custom-role
+  ``permissions[]``).
+- ``resource_type_ref`` — the referenced resource type should exist (value =
+  the type name; emitted by :mod:`~gcp_grounding.tf_claims` once per
+  google-provider resource).
 
 Both Org Policy formats are parsed: legacy v1 (``constraint`` +
 ``booleanPolicy``/``listPolicy``) and v2 (``name`` ending in
@@ -44,7 +50,8 @@ logger = get_logger(__name__)
 
 __all__ = ["KINDS", "Claim", "iam_policy_claims", "org_policy_claims"]
 
-KINDS = ("role", "principal", "cel", "constraint", "constraint_value")
+KINDS = ("role", "permission", "principal", "cel", "constraint", "constraint_value",
+         "resource_type_ref")
 
 #: Member prefixes that name estate principals a snapshot can enumerate.
 #: Everything else (allUsers, allAuthenticatedUsers, deleted:…, principal://
