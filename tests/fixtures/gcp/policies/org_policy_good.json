@@ -1,0 +1,11 @@
+{
+  "name": "organizations/123456789012/policies/iam.disableServiceAccountKeyCreation",
+  "spec": {
+    "etag": "CO3B0aQGEKDkxwM=",
+    "rules": [
+      {
+        "enforce": true
+      }
+    ]
+  }
+}
