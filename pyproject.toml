@@ -15,6 +15,9 @@ dependencies = []
 z3 = ["z3-solver"]
 dev = ["pytest", "z3-solver"]
 
+[project.scripts]
+gcp-ground = "gcp_grounding.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["gcp_grounding*"]
 
