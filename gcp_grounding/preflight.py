@@ -1,0 +1,216 @@
+"""End-to-end orchestration: one document in, one grounding report out.
+
+:func:`ground_policy` is the gate's single entry point. It auto-detects what
+kind of document it was handed (IAM allow/deny policy JSON, Org Policy JSON,
+or ``terraform show -json`` plan output), extracts that kind's claims, runs
+the Datalog existence reasoner and the constraint-solver layer, and merges
+everything into one vendored
+:class:`~gcp_grounding.core.report.GroundingReport`.
+
+**Fail-open contract:** the gate never crashes on bad input. An unreadable
+file, invalid JSON, an unrecognizable document shape, or a claim extractor
+that chokes all record an honest ``unverified`` verdict and move on —
+``unverified`` does not fail the gate (``report.ok`` only turns on
+ungrounded/contradicted), so a document the gate cannot judge passes with
+its ignorance on the record rather than blocking or, worse, silently
+half-passing.
+
+The ``terraform`` claim extractor (:mod:`gcp_grounding.tf_claims`) is looked
+up dynamically: where the module is not present, a tf plan document yields a
+single ``unverified`` verdict saying so instead of an import error. Claim
+kinds no layer decides (e.g. ``resource_type_ref``, whose terraform-type
+vocabulary is not the snapshot's asset-type enumeration) likewise land in
+``unverified`` — every extracted claim receives exactly one verdict.
+
+The optional *baseline* enables the z3 new⊆old policy comparison
+(:func:`~gcp_grounding.constraints.check_policy_subset`); it is defined for
+IAM policies only, and any other pairing is recorded as ``unverified``.
+"""
+
+from __future__ import annotations
+
+import importlib
+import json
+import os
+from typing import Any, Mapping
+
+from .claims import iam_policy_claims, org_policy_claims
+from .constraints import check_cel, check_constraint_value, check_policy_subset
+from .core.log import get_logger
+from .core.report import GroundingReport, Verdict
+from .core.solver import get_solver
+from .knowledge import GcpSnapshot
+from .reasoner import EXISTENCE_KINDS, ground_existence
+
+logger = get_logger(__name__)
+
+__all__ = ["DOCUMENT_KINDS", "detect_kind", "ground_policy"]
+
+#: Document kinds :func:`detect_kind` can recognize.
+DOCUMENT_KINDS = ("iam_policy", "org_policy", "tf_plan")
+
+#: Top-level keys marking ``terraform show -json`` plan output.
+_TF_PLAN_KEYS = ("format_version", "terraform_version", "planned_values",
+                 "resource_changes")
+
+#: Top-level keys marking a legacy-v1 Org Policy document.
+_ORG_V1_KEYS = ("constraint", "booleanPolicy", "listPolicy")
+
+
+def detect_kind(doc: Any) -> str | None:
+    """Which of :data:`DOCUMENT_KINDS` *doc* looks like — or None.
+
+    Checked most-distinctive first: tf plan markers, then Org Policy (v1
+    typed-policy keys, or a v2 ``…/policies/<id>`` name / ``spec`` block),
+    then an IAM policy's ``bindings`` (``etag`` + ``version`` alone also
+    count: an empty IAM policy carries only those).
+    """
+    if not isinstance(doc, Mapping):
+        return None
+    if any(key in doc for key in _TF_PLAN_KEYS):
+        return "tf_plan"
+    if any(key in doc for key in _ORG_V1_KEYS):
+        return "org_policy"
+    name = doc.get("name")
+    if isinstance(name, str) and "/policies/" in name:
+        return "org_policy"
+    if isinstance(doc.get("spec"), Mapping):
+        return "org_policy"
+    if "bindings" in doc or ("etag" in doc and "version" in doc):
+        return "iam_policy"
+    return None
+
+
+def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
+                  baseline: Any = None) -> GroundingReport:
+    """Ground one policy document end-to-end against *snapshot*.
+
+    *path_or_obj* is a JSON file path (``str``/``os.PathLike``) or an
+    already-parsed document. *baseline* (same forms) opts into the new⊆old
+    IAM-policy comparison. Never raises on bad input — see the module
+    docstring's fail-open contract.
+    """
+    report = GroundingReport()
+    solver = get_solver()
+    report.backend = solver.backend
+
+    doc, source, error = _load_document(path_or_obj)
+    if error is not None:
+        logger.debug("fail-open: %s: %s", source, error)
+        report.add(Verdict("unverified", "document", source, 0,
+                           f"{source}: {error} — nothing was checked"))
+        if baseline is not None:
+            report.add(Verdict("unverified", "subset", "iam-policy", 0,
+                               f"{source}: {error} — new⊆old was not decided"))
+        return report
+
+    kind = detect_kind(doc)
+    claims = _extract_claims(doc, kind, source, report)
+
+    existence = [c for c in claims if c.kind in EXISTENCE_KINDS]
+    if existence:
+        ground_existence(existence, snapshot, report)
+    for claim in claims:
+        if claim.kind == "cel":
+            report.add(check_cel(claim, solver))
+        elif claim.kind == "constraint_value":
+            report.add(check_constraint_value(claim, snapshot))
+        elif claim.kind not in EXISTENCE_KINDS:
+            report.add(Verdict("unverified", claim.kind, claim.value, 0,
+                               f"{claim.location}: no offline check is wired for "
+                               f"claim kind {claim.kind!r} — not decided"))
+
+    if baseline is not None:
+        report.add(_subset_verdict(doc, kind, baseline, solver))
+
+    counts = report.counts()
+    logger.debug("ground_policy(%s): kind=%s claims=%d verdicts=%s ok=%s",
+                 source, kind, len(claims), counts, report.ok)
+    return report
+
+
+# -- document loading ---------------------------------------------------------
+
+
+def _load_document(path_or_obj: Any) -> tuple[Any, str, str | None]:
+    """→ (document, source label, error). Exactly one of document/error is
+    meaningful; a parse or read failure is returned, never raised."""
+    if not isinstance(path_or_obj, (str, os.PathLike)):
+        return path_or_obj, "<policy object>", None
+    source = os.fspath(path_or_obj)
+    try:
+        with open(path_or_obj, encoding="utf-8") as fh:
+            return json.load(fh), source, None
+    except OSError as exc:
+        return None, source, f"the document could not be read ({exc})"
+    except json.JSONDecodeError as exc:
+        return None, source, f"the document is not valid JSON ({exc})"
+
+
+# -- claim extraction (per detected kind, fail-open) --------------------------
+
+
+def _extract_claims(doc: Any, kind: str | None, source: str,
+                    report: GroundingReport) -> list[Any]:
+    """The claims *doc* makes; extraction trouble becomes an ``unverified``
+    verdict on *report* (fail-open), never an exception."""
+    if kind is None:
+        shape = (f"top-level keys {sorted(doc)}" if isinstance(doc, Mapping)
+                 else f"top-level JSON is {type(doc).__name__}, not an object")
+        report.add(Verdict("unverified", "document", source, 0,
+                           f"{source}: document kind was not recognized ({shape}) "
+                           f"— nothing was checked"))
+        return []
+    if kind == "tf_plan":
+        extract = _tf_plan_extractor()
+        if extract is None:
+            report.add(Verdict("unverified", "document", source, 0,
+                               f"{source}: detected a terraform plan, but the tf-plan "
+                               f"claim extractor (gcp_grounding.tf_claims) is not "
+                               f"available — its claims were not extracted"))
+            return []
+    else:
+        extract = iam_policy_claims if kind == "iam_policy" else org_policy_claims
+    try:
+        return list(extract(doc))
+    except Exception as exc:  # fail-open: never crash the gate on bad input
+        logger.debug("fail-open: %s claim extraction failed for %s", kind, source,
+                     exc_info=True)
+        report.add(Verdict("unverified", "document", source, 0,
+                           f"{source}: {kind} claim extraction failed ({exc}) "
+                           f"— nothing was checked"))
+        return []
+
+
+def _tf_plan_extractor():
+    """``tf_claims.terraform_plan_claims`` — or None where the module is not
+    part of this checkout. Resolved dynamically so the gate degrades to an
+    honest ``unverified`` instead of an import error."""
+    try:
+        module = importlib.import_module("gcp_grounding.tf_claims")
+    except ImportError:
+        return None
+    return module.terraform_plan_claims
+
+
+# -- baseline (new⊆old) comparison --------------------------------------------
+
+
+def _subset_verdict(doc: Mapping[str, Any], kind: str | None, baseline: Any,
+                    solver) -> Verdict:
+    """The new⊆old verdict for *doc* against *baseline* — defined for IAM
+    policies only; every other pairing is recorded, not raised."""
+    if kind != "iam_policy":
+        return Verdict("unverified", "subset", "iam-policy", 0,
+                       f"a baseline was given, but the document was detected as "
+                       f"{kind or 'unrecognized'}, not an IAM policy — new⊆old "
+                       f"was not decided")
+    old_doc, old_source, error = _load_document(baseline)
+    if error is not None:
+        return Verdict("unverified", "subset", "iam-policy", 0,
+                       f"{old_source}: baseline {error} — new⊆old was not decided")
+    try:
+        return check_policy_subset(doc, old_doc, solver)
+    except ValueError as exc:
+        return Verdict("unverified", "subset", "iam-policy", 0,
+                       f"new⊆old was not decided: {exc}")
