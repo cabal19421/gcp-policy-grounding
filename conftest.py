@@ -1,3 +1,7 @@
-"""Root conftest: pytest prepends this file's directory — the repo root — to
-``sys.path``, so the in-repo ``gcp_grounding`` package is importable from a
-plain checkout without ``pip install -e .``."""
+"""Make `gcp_grounding` importable when pytest runs straight from a checkout
+(plain `pytest`, no editable install): the repo root is this file's directory."""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
