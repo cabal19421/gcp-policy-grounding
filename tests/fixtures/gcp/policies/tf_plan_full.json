@@ -1,0 +1,355 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_project_iam_binding.viewers",
+          "mode": "managed",
+          "type": "google_project_iam_binding",
+          "name": "viewers",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "project": "acme-prod",
+            "role": "roles/bigquery.dataViewer",
+            "members": [
+              "group:data-eng@acme.example",
+              "user:alice@acme.example"
+            ],
+            "condition": []
+          },
+          "sensitive_values": {
+            "members": [false, false],
+            "condition": []
+          }
+        },
+        {
+          "address": "google_project_iam_custom_role.deployer",
+          "mode": "managed",
+          "type": "google_project_iam_custom_role",
+          "name": "deployer",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "project": "acme-prod",
+            "role_id": "customDeployer",
+            "title": "Custom Deployer",
+            "stage": "GA",
+            "description": null,
+            "permissions": [
+              "bigquery.job.create",
+              "storage.objects.get",
+              "storage.objects.list"
+            ]
+          },
+          "sensitive_values": {
+            "permissions": [false, false, false]
+          }
+        },
+        {
+          "address": "google_project_iam_member.etl",
+          "mode": "managed",
+          "type": "google_project_iam_member",
+          "name": "etl",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "project": "acme-prod",
+            "role": "roles/bigquery.jobUser",
+            "member": "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com",
+            "condition": [
+              {
+                "title": "expires",
+                "description": null,
+                "expression": "request.time < timestamp(\"2027-01-01T00:00:00Z\")"
+              }
+            ]
+          },
+          "sensitive_values": {
+            "condition": [{}]
+          }
+        },
+        {
+          "address": "google_project_iam_policy.authoritative",
+          "mode": "managed",
+          "type": "google_project_iam_policy",
+          "name": "authoritative",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "project": "acme-prod",
+            "policy_data": "{\"bindings\":[{\"members\":[\"user:bob@acme.example\"],\"role\":\"roles/bigquery.reader\"}]}"
+          },
+          "sensitive_values": {}
+        },
+        {
+          "address": "random_id.suffix",
+          "mode": "managed",
+          "type": "random_id",
+          "name": "suffix",
+          "provider_name": "registry.terraform.io/hashicorp/random",
+          "schema_version": 0,
+          "values": {
+            "byte_length": 4,
+            "keepers": null,
+            "prefix": null
+          },
+          "sensitive_values": {}
+        }
+      ],
+      "child_modules": [
+        {
+          "address": "module.audit",
+          "resources": [
+            {
+              "address": "module.audit.google_org_policy_policy.no_serial_ports",
+              "mode": "managed",
+              "type": "google_org_policy_policy",
+              "name": "no_serial_ports",
+              "provider_name": "registry.terraform.io/hashicorp/google-beta",
+              "schema_version": 0,
+              "values": {
+                "name": "projects/acme-prod/policies/compute.disableSerialPortAccess",
+                "parent": "projects/acme-prod",
+                "spec": [
+                  {
+                    "inherit_from_parent": null,
+                    "reset": null,
+                    "rules": [
+                      {
+                        "allow_all": null,
+                        "deny_all": null,
+                        "enforce": "TRUE",
+                        "values": [],
+                        "condition": []
+                      }
+                    ]
+                  }
+                ]
+              },
+              "sensitive_values": {
+                "spec": [{"rules": [{"values": [], "condition": []}]}]
+              }
+            },
+            {
+              "address": "module.audit.google_org_policy_policy.vm_external_ip",
+              "mode": "managed",
+              "type": "google_org_policy_policy",
+              "name": "vm_external_ip",
+              "provider_name": "registry.terraform.io/hashicorp/google-beta",
+              "schema_version": 0,
+              "values": {
+                "name": "projects/acme-prod/policies/compute.vmExternalIpAccess",
+                "parent": "projects/acme-prod",
+                "spec": [
+                  {
+                    "inherit_from_parent": null,
+                    "reset": null,
+                    "rules": [
+                      {
+                        "allow_all": null,
+                        "deny_all": "TRUE",
+                        "enforce": null,
+                        "values": [],
+                        "condition": []
+                      }
+                    ]
+                  }
+                ]
+              },
+              "sensitive_values": {
+                "spec": [{"rules": [{"values": [], "condition": []}]}]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "google_project_iam_binding.viewers",
+      "mode": "managed",
+      "type": "google_project_iam_binding",
+      "name": "viewers",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "project": "acme-prod",
+          "role": "roles/bigquery.dataViewer",
+          "members": [
+            "group:data-eng@acme.example",
+            "user:alice@acme.example"
+          ],
+          "condition": []
+        },
+        "after_unknown": {"id": true, "etag": true}
+      }
+    },
+    {
+      "address": "google_project_iam_custom_role.deployer",
+      "mode": "managed",
+      "type": "google_project_iam_custom_role",
+      "name": "deployer",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "project": "acme-prod",
+          "role_id": "customDeployer",
+          "title": "Custom Deployer",
+          "stage": "GA",
+          "description": null,
+          "permissions": [
+            "bigquery.job.create",
+            "storage.objects.get",
+            "storage.objects.list"
+          ]
+        },
+        "after_unknown": {"id": true, "name": true, "deleted": true}
+      }
+    },
+    {
+      "address": "google_project_iam_member.deprecated_ci",
+      "mode": "managed",
+      "type": "google_project_iam_member",
+      "name": "deprecated_ci",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["delete"],
+        "before": {
+          "project": "acme-prod",
+          "role": "roles/editor",
+          "member": "serviceAccount:ci@acme-prod.iam.gserviceaccount.com",
+          "condition": []
+        },
+        "after": null,
+        "after_unknown": {}
+      }
+    },
+    {
+      "address": "google_project_iam_member.etl",
+      "mode": "managed",
+      "type": "google_project_iam_member",
+      "name": "etl",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "project": "acme-prod",
+          "role": "roles/bigquery.jobUser",
+          "member": "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com",
+          "condition": [
+            {
+              "title": "expires",
+              "description": null,
+              "expression": "request.time < timestamp(\"2027-01-01T00:00:00Z\")"
+            }
+          ]
+        },
+        "after_unknown": {"id": true, "etag": true}
+      }
+    },
+    {
+      "address": "google_project_iam_policy.authoritative",
+      "mode": "managed",
+      "type": "google_project_iam_policy",
+      "name": "authoritative",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "project": "acme-prod",
+          "policy_data": "{\"bindings\":[{\"members\":[\"user:bob@acme.example\"],\"role\":\"roles/bigquery.reader\"}]}"
+        },
+        "after_unknown": {"id": true, "etag": true}
+      }
+    },
+    {
+      "address": "module.audit.google_org_policy_policy.no_serial_ports",
+      "mode": "managed",
+      "type": "google_org_policy_policy",
+      "name": "no_serial_ports",
+      "provider_name": "registry.terraform.io/hashicorp/google-beta",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "projects/acme-prod/policies/compute.disableSerialPortAccess",
+          "parent": "projects/acme-prod",
+          "spec": [
+            {
+              "inherit_from_parent": null,
+              "reset": null,
+              "rules": [
+                {
+                  "allow_all": null,
+                  "deny_all": null,
+                  "enforce": "TRUE",
+                  "values": [],
+                  "condition": []
+                }
+              ]
+            }
+          ]
+        },
+        "after_unknown": {"id": true, "etag": true}
+      }
+    },
+    {
+      "address": "module.audit.google_org_policy_policy.vm_external_ip",
+      "mode": "managed",
+      "type": "google_org_policy_policy",
+      "name": "vm_external_ip",
+      "provider_name": "registry.terraform.io/hashicorp/google-beta",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "projects/acme-prod/policies/compute.vmExternalIpAccess",
+          "parent": "projects/acme-prod",
+          "spec": [
+            {
+              "inherit_from_parent": null,
+              "reset": null,
+              "rules": [
+                {
+                  "allow_all": null,
+                  "deny_all": "TRUE",
+                  "enforce": null,
+                  "values": [],
+                  "condition": []
+                }
+              ]
+            }
+          ]
+        },
+        "after_unknown": {"id": true, "etag": true}
+      }
+    },
+    {
+      "address": "random_id.suffix",
+      "mode": "managed",
+      "type": "random_id",
+      "name": "suffix",
+      "provider_name": "registry.terraform.io/hashicorp/random",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "byte_length": 4,
+          "keepers": null,
+          "prefix": null
+        },
+        "after_unknown": {"id": true, "hex": true}
+      }
+    }
+  ]
+}
