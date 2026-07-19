@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gcp-policy-grounding"
+version = "0.1.0"
+description = "Neuro-symbolic (Datalog + z3) grounding gate for GCP IAM / Org Policy and the Terraform that generates them"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+z3 = ["z3-solver"]
+dev = ["pytest", "z3-solver"]
+
+[tool.setuptools.packages.find]
+include = ["gcp_grounding*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
