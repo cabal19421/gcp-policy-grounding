@@ -1,0 +1,15 @@
+{
+  "name": "projects/acme-prod/policies/compute.disableSerialPortAccess",
+  "spec": {
+    "etag": "CO3B0aQGEKDkxwQ=",
+    "rules": [
+      {
+        "values": {
+          "allowedValues": [
+            "true"
+          ]
+        }
+      }
+    ]
+  }
+}
