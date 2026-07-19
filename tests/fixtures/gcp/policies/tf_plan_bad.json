@@ -1,0 +1,62 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "google_project_iam_member.bq_reader",
+      "mode": "managed",
+      "type": "google_project_iam_member",
+      "name": "bq_reader",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "project": "acme-prod",
+          "role": "roles/bigquery.reader",
+          "member": "group:data-eng@acme.example"
+        }
+      }
+    },
+    {
+      "address": "google_project_iam_member.ghost_sa",
+      "mode": "managed",
+      "type": "google_project_iam_member",
+      "name": "ghost_sa",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "project": "acme-prod",
+          "role": "roles/storage.objectViewer",
+          "member": "serviceAccount:ghost-runner@acme-prod.iam.gserviceaccount.com"
+        }
+      }
+    },
+    {
+      "address": "google_org_policy_policy.serial_port",
+      "mode": "managed",
+      "type": "google_org_policy_policy",
+      "name": "serial_port",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "projects/acme-prod/policies/compute.disableSerialPortAcces",
+          "parent": "projects/acme-prod",
+          "spec": [
+            {
+              "rules": [
+                {
+                  "enforce": "TRUE"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
