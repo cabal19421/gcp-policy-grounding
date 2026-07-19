@@ -1,0 +1,29 @@
+{
+  "version": 3,
+  "etag": "BwYn8x2Qb0d=",
+  "bindings": [
+    {
+      "role": "roles/bigquery.reader",
+      "members": [
+        "group:data-eng@acme.example"
+      ]
+    },
+    {
+      "role": "roles/storage.objectViewer",
+      "members": [
+        "serviceAccount:ghost-runner@acme-prod.iam.gserviceaccount.com"
+      ]
+    },
+    {
+      "role": "roles/bigquery.jobUser",
+      "members": [
+        "user:alice@acme.example"
+      ],
+      "condition": {
+        "title": "never-true",
+        "description": "Contradictory time window: before 2020 AND from 2025 on",
+        "expression": "request.time < timestamp(\"2020-01-01T00:00:00Z\") && request.time >= timestamp(\"2025-01-01T00:00:00Z\")"
+      }
+    }
+  ]
+}

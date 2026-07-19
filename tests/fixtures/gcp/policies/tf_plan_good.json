@@ -1,0 +1,46 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "google_project_iam_member.etl_bq_jobs",
+      "mode": "managed",
+      "type": "google_project_iam_member",
+      "name": "etl_bq_jobs",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "project": "acme-prod",
+          "role": "roles/bigquery.jobUser",
+          "member": "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com"
+        }
+      }
+    },
+    {
+      "address": "google_org_policy_policy.no_sa_keys",
+      "mode": "managed",
+      "type": "google_org_policy_policy",
+      "name": "no_sa_keys",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "projects/acme-prod/policies/iam.disableServiceAccountKeyCreation",
+          "parent": "projects/acme-prod",
+          "spec": [
+            {
+              "rules": [
+                {
+                  "enforce": "TRUE"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

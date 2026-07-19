@@ -1,0 +1,89 @@
+{
+  "captured_at": "2026-07-18T09:30:00Z",
+  "roles": {
+    "projects/acme-prod/roles/ciDeployer": {
+      "title": "Acme CI deployer",
+      "stage": "GA",
+      "included_permissions": [
+        "storage.objects.create",
+        "storage.objects.get"
+      ]
+    },
+    "roles/bigquery.dataViewer": {
+      "title": "BigQuery Data Viewer",
+      "stage": "GA",
+      "included_permissions": [
+        "bigquery.datasets.get",
+        "bigquery.tables.get",
+        "bigquery.tables.getData",
+        "bigquery.tables.list"
+      ]
+    },
+    "roles/bigquery.jobUser": {
+      "title": "BigQuery Job User",
+      "stage": "GA",
+      "included_permissions": [
+        "bigquery.jobs.create"
+      ]
+    },
+    "roles/storage.objectViewer": {
+      "title": "Storage Object Viewer",
+      "stage": "GA",
+      "included_permissions": [
+        "storage.objects.get",
+        "storage.objects.list"
+      ]
+    },
+    "roles/viewer": {
+      "title": "Viewer",
+      "stage": "GA",
+      "included_permissions": [
+        "resourcemanager.projects.get"
+      ]
+    }
+  },
+  "permissions": [
+    "bigquery.datasets.get",
+    "bigquery.jobs.create",
+    "bigquery.tables.get",
+    "bigquery.tables.getData",
+    "bigquery.tables.list",
+    "compute.instances.get",
+    "iam.serviceAccounts.actAs",
+    "resourcemanager.projects.get",
+    "storage.objects.create",
+    "storage.objects.get",
+    "storage.objects.list"
+  ],
+  "principals": [
+    "group:data-eng@acme.example",
+    "serviceAccount:ci-deployer@acme-prod.iam.gserviceaccount.com",
+    "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com",
+    "user:alice@acme.example"
+  ],
+  "constraints": {
+    "constraints/compute.disableSerialPortAccess": {
+      "value_type": "boolean",
+      "description": "Disable VM serial port access"
+    },
+    "constraints/compute.vmExternalIpAccess": {
+      "value_type": "list",
+      "description": "Define allowed external IPs for VM instances"
+    },
+    "constraints/iam.allowedPolicyMemberDomains": {
+      "value_type": "list",
+      "description": "Domain restricted sharing"
+    },
+    "constraints/iam.disableServiceAccountKeyCreation": {
+      "value_type": "boolean",
+      "description": "Disable service account key creation"
+    }
+  },
+  "resource_types": [
+    "bigquery.googleapis.com/Dataset",
+    "cloudresourcemanager.googleapis.com/Project",
+    "compute.googleapis.com/Instance",
+    "iam.googleapis.com/ServiceAccount",
+    "storage.googleapis.com/Bucket"
+  ]
+}
