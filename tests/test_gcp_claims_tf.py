@@ -168,6 +168,35 @@ def test_deleted_resource_claims_only_its_type_reference():
                             "google_project_iam_member.gone")]
 
 
+def test_deposed_delete_does_not_swallow_the_replacement_create():
+    # create_before_destroy: terraform lists the deposed object's delete
+    # entry (change.after null, "deposed" key set) and the created object's
+    # entry at the same address. With the delete listed first it must not
+    # claim the address — the create's role/principal claims survive.
+    deposed = member_change("google_project_iam_member.x", None, actions=("delete",))
+    deposed["deposed"] = "abc123"
+    create = member_change("google_project_iam_member.x",
+                           {"role": "roles/viewer", "member": "user:alice@acme.example"})
+    claims = terraform_plan_claims({"resource_changes": [deposed, create]})
+    assert claims == [
+        Claim("resource_type_ref", "google_project_iam_member",
+              "google_project_iam_member.x"),
+        Claim("role", "roles/viewer", "google_project_iam_member.x.role"),
+        Claim("principal", "user:alice@acme.example",
+              "google_project_iam_member.x.member"),
+    ]
+
+
+def test_deposed_only_delete_still_claims_its_type_reference():
+    # A deposed delete with no surviving entry at its address is an ordinary
+    # destroy: the type reference is still claimed, nothing more.
+    deposed = member_change("google_project_iam_member.gone", None, actions=("delete",))
+    deposed["deposed"] = "abc123"
+    claims = terraform_plan_claims({"resource_changes": [deposed]})
+    assert claims == [Claim("resource_type_ref", "google_project_iam_member",
+                            "google_project_iam_member.gone")]
+
+
 # -- provider / mode filtering ---------------------------------------------
 
 

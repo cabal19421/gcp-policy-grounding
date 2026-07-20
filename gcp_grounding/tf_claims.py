@@ -32,7 +32,10 @@ recursively) first; ``resource_changes`` entries then contribute only
 addresses not already seen, with ``change.after`` as the planned values.
 A plan carrying only one of the two sections still yields full claims, and
 one carrying both does not double-claim. A destroyed resource
-(``change.after`` is null) yields only its ``resource_type_ref``. As in
+(``change.after`` is null) yields only its ``resource_type_ref``, and a
+``deposed``-keyed delete entry (the doomed half of a create_before_destroy
+replacement) never shadows the created object's entry at the same address.
+As in
 :mod:`~gcp_grounding.claims`, anything that does not resolve unambiguously
 is skipped, never guessed at.
 """
@@ -88,7 +91,14 @@ def terraform_plan_claims(plan: Mapping[str, Any]) -> list[Claim]:
 
 def _google_resources(plan: Mapping[str, Any]) -> Iterator[tuple[str, str, Any]]:
     """(address, type, planned values) for every google managed resource,
-    ``planned_values`` first, then ``resource_changes`` for unseen addresses."""
+    ``planned_values`` first, then ``resource_changes`` for unseen addresses.
+
+    A create_before_destroy replacement carries two ``resource_changes``
+    entries at one address: the created object's, and a ``deposed``-keyed
+    delete whose ``change.after`` is null. Non-deposed entries are taken
+    first (the sort is stable, so order is otherwise unchanged) so a
+    deposed delete listed earlier cannot claim the address and silently
+    drop the created object's claims."""
     seen: set[str] = set()
     planned = plan.get("planned_values")
     if isinstance(planned, Mapping):
@@ -99,11 +109,17 @@ def _google_resources(plan: Mapping[str, Any]) -> Iterator[tuple[str, str, Any]]
                 yield entry
     changes = plan.get("resource_changes")
     if isinstance(changes, list):
-        for resource in changes:
+        for resource in sorted(changes, key=_is_deposed):
             entry = _google_entry(resource, from_change=True)
             if entry is not None and entry[0] not in seen:
                 seen.add(entry[0])
                 yield entry
+
+
+def _is_deposed(resource: Any) -> bool:
+    """Whether a ``resource_changes`` entry describes a deposed object — the
+    old copy a create_before_destroy replacement is about to delete."""
+    return isinstance(resource, Mapping) and bool(resource.get("deposed"))
 
 
 def _module_resources(module: Any) -> Iterator[Any]:

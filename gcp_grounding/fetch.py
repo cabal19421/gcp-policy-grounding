@@ -10,9 +10,13 @@ estate:
   (the only source :mod:`~gcp_grounding.knowledge` accepts as proof of
   *absence* — the union of role-included permissions deliberately is not);
 - org-policy constraint names + value types via the Org Policy v2 API;
-- principals via Cloud Asset Inventory ``searchAllIamPolicies`` and the
-  resource inventory via ``assets.list``;
-- Terraform resource types via a cached ``terraform providers schema -json``.
+- principals via Cloud Asset Inventory ``searchAllIamPolicies``;
+- Terraform resource types via a cached ``terraform providers schema -json``
+  — the sole source of snapshot ``resource_types``, since that category is
+  the terraform provider vocabulary :mod:`~gcp_grounding.tf_claims` emits
+  and the reasoner checks. CAI asset types (``assets.list``, available
+  standalone via :func:`fetch_asset_types`) name a different namespace and
+  feed no snapshot category.
 
 Every network call sits behind a function taking a *client* argument — an
 object with the same call shape as a ``googleapiclient`` discovery Resource
@@ -265,7 +269,12 @@ def fetch_principals(asset: Any, scope: str) -> frozenset[str]:
 
 def fetch_asset_types(asset: Any, parent: str) -> frozenset[str]:
     """The asset types actually present under *parent* (e.g.
-    ``compute.googleapis.com/Instance``), via CAI ``assets.list``."""
+    ``compute.googleapis.com/Instance``), via CAI ``assets.list``.
+
+    Standalone only: asset types are not terraform resource-type names, so
+    :func:`capture_snapshot` never folds them into snapshot
+    ``resource_types`` — that would mark the category captured with the
+    wrong vocabulary and manufacture false "ungrounded" evidence."""
     types: set[str] = set()
     for entry in _paginate(asset.assets().list, "assets",
                            parent=parent, contentType="RESOURCE"):
@@ -345,7 +354,6 @@ def capture_snapshot(*, iam: Any = None, orgpolicy: Any = None, asset: Any = Non
                      permission_resources: Iterable[str] = (),
                      orgpolicy_parent: str | None = None,
                      asset_scope: str | None = None,
-                     asset_parent: str | None = None,
                      terraform_dir: str | os.PathLike[str] | None = None,
                      schema_cache: str | os.PathLike[str] | None = None,
                      terraform_runner: Callable[..., str] | None = None,
@@ -360,6 +368,12 @@ def capture_snapshot(*, iam: Any = None, orgpolicy: Any = None, asset: Any = Non
     A half-configured source (client without its parent/scope, or vice
     versa) raises ValueError — silently skipping a category the caller
     thought they requested would poison every downstream verdict.
+
+    ``resource_types`` comes from the terraform schema alone and is marked
+    captured only when that schema was actually requested: it is the
+    terraform provider vocabulary, and unioning CAI asset types into it
+    would flag the category as enumerated with the wrong namespace — a
+    partial capture manufacturing false "ungrounded" evidence.
     """
     custom_role_parents = tuple(custom_role_parents)
     permission_resources = tuple(permission_resources)
@@ -369,12 +383,9 @@ def capture_snapshot(*, iam: Any = None, orgpolicy: Any = None, asset: Any = Non
     if (orgpolicy is None) != (orgpolicy_parent is None):
         raise ValueError("org-policy capture needs both an orgpolicy client and "
                          "an orgpolicy_parent")
-    if asset is not None and asset_scope is None and asset_parent is None:
-        raise ValueError("asset client given but neither asset_scope (principals) "
-                         "nor asset_parent (resource inventory)")
-    if asset is None and (asset_scope is not None or asset_parent is not None):
-        raise ValueError("asset_scope/asset_parent given but no Cloud Asset "
-                         "Inventory client")
+    if (asset is None) != (asset_scope is None):
+        raise ValueError("principal capture needs both a Cloud Asset Inventory "
+                         "client and an asset_scope")
 
     data: dict[str, Any] = {"captured_at": captured_at or fresh_captured_at()}
     if iam is not None:
@@ -383,20 +394,12 @@ def capture_snapshot(*, iam: Any = None, orgpolicy: Any = None, asset: Any = Non
             data["permissions"] = sorted(fetch_permissions(iam, permission_resources))
     if orgpolicy is not None:
         data["constraints"] = fetch_constraints(orgpolicy, orgpolicy_parent)
-    if asset is not None and asset_scope is not None:
+    if asset is not None:
         data["principals"] = sorted(fetch_principals(asset, asset_scope))
-
-    want_inventory = asset is not None and asset_parent is not None
-    want_terraform = (terraform_dir is not None or terraform_runner is not None
-                      or schema_cache is not None)
-    if want_inventory or want_terraform:
-        types: set[str] = set()
-        if want_inventory:
-            types |= fetch_asset_types(asset, asset_parent)
-        if want_terraform:
-            types |= fetch_resource_types(terraform_dir, cache_path=schema_cache,
-                                          runner=terraform_runner)
-        data["resource_types"] = sorted(types)
+    if (terraform_dir is not None or terraform_runner is not None
+            or schema_cache is not None):
+        data["resource_types"] = sorted(fetch_resource_types(
+            terraform_dir, cache_path=schema_cache, runner=terraform_runner))
 
     snapshot = GcpSnapshot.from_dict(data)
     logger.debug("captured snapshot (captured_at=%s, categories=%s)",
