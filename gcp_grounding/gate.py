@@ -244,11 +244,12 @@ class PolicyGroundingGate:
     def _sniffs_as_policy(self, path: str) -> bool:
         """Whether a plain ``.json`` file's content looks like a policy
         document. Unreadable or invalid files sniff False — by name alone
-        they were never policy-relevant."""
+        they were never policy-relevant. RecursionError (deeply nested
+        JSON) degrades to False too: check() never raises on its input."""
         try:
             with open(path, encoding="utf-8") as fh:
                 doc = json.load(fh)
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return False
         return detect_kind(doc) is not None
 

@@ -72,6 +72,20 @@ def test_unrecognized_document_fails_open_to_exit_zero(capsys, tmp_path):
     assert "unverified=1" in out
 
 
+def test_unparsable_files_fail_open_to_exit_zero(capsys, tmp_path):
+    garbled = tmp_path / "garbled.json"
+    garbled.write_bytes(b"\xff\xfe{\x00}")
+    deep = tmp_path / "deep.json"
+    deep.write_text("[" * 2_000_000 + "]" * 2_000_000, encoding="utf-8")
+    for doc in (garbled, deep):
+        # Non-UTF-8 bytes / deeply nested JSON: unverified with no traceback,
+        # never exit 1 — that code is reserved for real findings.
+        code, out, _ = invoke(capsys, "verify-policy", str(doc),
+                              "--snapshot", str(SNAPSHOT))
+        assert code == 0
+        assert "unverified=1" in out
+
+
 # -- --format json ------------------------------------------------------------
 
 
@@ -209,6 +223,18 @@ def test_explain_covers_the_subset_assertion(capsys, baseline_pair):
         assert "[subset]" in err and "ci-deployer" in err
 
 
+def test_explain_fails_open_on_an_unparsable_file(capsys, tmp_path):
+    garbled = tmp_path / "garbled.json"
+    garbled.write_bytes(b"\xff\xfe{\x00}")
+    code, _, err = invoke(capsys, "verify-policy", str(garbled),
+                          "--snapshot", str(SNAPSHOT), "--explain")
+    assert code == 0  # the unparsable file is unverified, not a crash
+    if HAVE_Z3:
+        assert "no constraints were generated" in err
+    else:
+        assert "z3 is not available" in err
+
+
 # -- --hook (PostToolUse) -----------------------------------------------------
 
 
@@ -253,6 +279,24 @@ def test_hook_fails_open_on_a_broken_event(capsys, monkeypatch):
     assert "fail-open" in err
     code, _, _ = run_hook(capsys, monkeypatch, json.dumps({"tool_name": "Write"}))
     assert code == 0
+
+
+def test_hook_fails_open_on_an_unparsable_policy_file(capsys, monkeypatch,
+                                                      tmp_path):
+    garbled = tmp_path / "garbled.policy.json"
+    garbled.write_bytes(b"\xff\xfe{\x00}")
+    code, out, err = run_hook(capsys, monkeypatch, hook_event(garbled))
+    assert code == 0  # unparsable input must never block an edit
+    assert out == "" and err == ""
+
+
+def test_hook_suffix_match_is_case_insensitive(capsys, monkeypatch, tmp_path):
+    upper = tmp_path / "IAM.POLICY.JSON"
+    upper.write_text(BAD.read_text(encoding="utf-8"), encoding="utf-8")
+    code, out, err = run_hook(capsys, monkeypatch, hook_event(upper))
+    assert code == 2  # grounded and blocked, exactly as a lowercase name is
+    assert out == ""
+    assert "roles/bigquery.reader" in err
 
 
 def test_hook_fails_open_without_a_snapshot(capsys, monkeypatch):

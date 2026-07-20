@@ -176,6 +176,34 @@ def test_undecodable_bytes_never_crash_the_gate(gate, tmp_path):
     assert statuses(result) == ["unverified"]
 
 
+def test_deeply_nested_json_never_crashes_the_gate(gate, tmp_path):
+    deep = tmp_path / "deep.json"
+    deep.write_text("[" * 2_000_000 + "]" * 2_000_000, encoding="utf-8")
+    # A plain .json goes through the content sniff, which must degrade on
+    # RecursionError instead of breaking check()'s never-raises contract.
+    result = gate.check([deep])
+    assert result.ok and result.risk == "none"
+    [file] = result.files
+    assert file.status == "unverified" and not file.policy_candidate
+
+
+def test_zero_claim_policy_document_is_low_risk_unverified(gate, tmp_path):
+    sneaky = tmp_path / "sneaky.policy.json"
+    sneaky.write_text(json.dumps(
+        {"bindings": {"role": "roles/hacker.superAdmin",
+                      "members": ["user:evil@x.y"]}}), encoding="utf-8")
+    empty = tmp_path / "empty.policy.json"
+    empty.write_text(json.dumps({"etag": "BwX=", "version": 3}),
+                     encoding="utf-8")
+    result = gate.check([sneaky, empty])
+    # The recognized-but-unextractable content is on the record and raises
+    # risk; the legitimately empty policy stays clean — they must not be
+    # indistinguishable.
+    assert result.ok and result.risk == "low"
+    assert statuses(result) == ["unverified", "ok"]
+    assert "nothing checkable" in "\n".join(result.findings())
+
+
 # -- the aggregate ------------------------------------------------------------
 
 
