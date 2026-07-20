@@ -21,7 +21,9 @@ fallback otherwise — this module never imports z3 itself):
   (role, member) grant sets are encoded in z3 and "some new grant is not an
   old grant" is checked for satisfiability; a witness grant →
   ``contradicted``. Conditional bindings make the comparison
-  request-time-dependent → ``unverified``.
+  request-time-dependent → ``unverified``; so does any document whose grant
+  set cannot be extracted faithfully (deny policies, no ``bindings`` array,
+  unrecognized binding keys).
 
 Where z3 is absent, :func:`check_cel` and :func:`check_policy_subset`
 degrade to ``unverified`` with the reason spelled out;
@@ -66,16 +68,39 @@ _TOKEN = re.compile(
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
+# The literal shapes the encoding represents exactly: a full RFC 3339 instant
+# with an explicit UTC offset. datetime.fromisoformat is too lenient to gate
+# this itself — it silently truncates fractional digits beyond microseconds
+# and accepts naive/date-only strings, all of which must land in unverified.
+_TIMESTAMP_SHAPE = re.compile(
+    r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}"
+    r"(?:\.(?P<frac>\d+))?"
+    r"(?:[Zz]|[+-]\d{2}:\d{2})")
+
 
 def _epoch_micros(text: str) -> int:
-    """A CEL timestamp literal → integer microseconds since the epoch."""
-    iso = text[:-1] + "+00:00" if text.endswith("Z") else text
+    """A CEL timestamp literal → integer microseconds since the epoch.
+
+    Only full RFC 3339 instants with an explicit UTC offset and at most
+    microsecond precision are representable. Anything else — nanosecond
+    digits (fromisoformat would silently truncate them, collapsing distinct
+    instants), a missing offset, or a date-only literal (both invalid CEL:
+    timestamp() requires RFC 3339, and an erroring condition never grants) —
+    raises :class:`UnsupportedCel` → unverified, never a false verdict.
+    """
+    shape = _TIMESTAMP_SHAPE.fullmatch(text)
+    if shape is None:
+        raise UnsupportedCel(f"timestamp({text!r}) is not an RFC 3339 instant "
+                             "with an explicit UTC offset")
+    frac = shape.group("frac")
+    if frac is not None and len(frac) > 6:
+        raise UnsupportedCel(f"timestamp({text!r}) has sub-microsecond precision, "
+                             "which the encoding cannot represent")
+    iso = text[:-1] + "+00:00" if text[-1] in "Zz" else text
     try:
         dt = datetime.fromisoformat(iso)
     except ValueError:
         raise UnsupportedCel(f"timestamp({text!r}) is not an ISO-8601 instant") from None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
     return (dt - _EPOCH) // timedelta(microseconds=1)
 
 
@@ -122,7 +147,11 @@ class _CelToZ3:
         return formula
 
     # grammar: or := and ("||" and)* ; and := unary ("&&" unary)* ;
-    # unary := "!" unary | "(" or ")" | atom
+    # unary := "!" ("!" | "(" | "true" | "false") ... | "(" or ")" | atom
+    # — '!' binds tighter than comparisons in CEL, so '!' before anything
+    # but a parenthesized formula, a boolean literal or another '!' would
+    # mean e.g. (!request.time) < ts, a type error the encoding cannot
+    # represent; it raises UnsupportedCel instead of mis-parsing.
 
     def _or(self):
         formula = self._and()
@@ -138,6 +167,14 @@ class _CelToZ3:
 
     def _unary(self):
         if self._match("op", "!"):
+            tok = self._peek()
+            if tok not in (("op", "!"), ("op", "("),
+                           ("name", "true"), ("name", "false")):
+                got = "end of expression" if tok is None else repr(tok[1])
+                raise UnsupportedCel(
+                    f"'!' immediately before {got} — in CEL '!' binds tighter "
+                    "than comparisons, so only '!(...)', '!true', '!false' and "
+                    "'!!' are in the supported subset")
             return self._z3.Not(self._unary())
         if self._match("op", "("):
             formula = self._or()
@@ -263,6 +300,14 @@ def check_cel(claim: Claim, solver: Optional[ConstraintSolver] = None) -> Verdic
         return Verdict("unverified", "cel", claim.value, 0,
                        f"{where}: CEL outside the supported subset ({exc}) — "
                        "satisfiability was not decided")
+    except RecursionError:
+        # The recursive-descent translation recurses once per nesting level;
+        # a deeply nested expression must degrade, not crash the fail-open
+        # ground_policy/CLI paths with a traceback.
+        logger.debug("cel check unverified: expression too deeply nested to translate")
+        return Verdict("unverified", "cel", claim.value, 0,
+                       f"{where}: expression is too deeply nested to translate — "
+                       "satisfiability was not decided")
     satisfiable = _decide(z3, formula)
     if satisfiable is None:
         return Verdict("unverified", "cel", claim.value, 0,
@@ -324,10 +369,16 @@ class _Undecidable(Exception):
 def _grant_pairs(policy: Mapping[str, Any], label: str) -> frozenset[tuple[str, str]]:
     """The (role, member) grant set of an IAM policy. Every member string
     counts (allUsers widens the grant surface like any principal does);
-    malformed fields and conditional bindings raise :class:`_Undecidable`."""
+    deny-policy documents ('rules'), documents without a 'bindings' array,
+    malformed fields, unrecognized binding keys and conditional bindings
+    raise :class:`_Undecidable`. Only ``"bindings": []`` is the empty set."""
+    if "rules" in policy:
+        raise _Undecidable(f"the {label} policy has 'rules' — a deny policy's "
+                           "access surface is not a (role, member) grant set")
     bindings = policy.get("bindings")
     if bindings is None:
-        return frozenset()
+        raise _Undecidable(f"the {label} policy has no 'bindings' — "
+                           "not an IAM allow-policy shape")
     if not isinstance(bindings, list):
         raise _Undecidable(f"the {label} policy's 'bindings' is "
                            f"{type(bindings).__name__}, not an array")
@@ -335,6 +386,12 @@ def _grant_pairs(policy: Mapping[str, Any], label: str) -> frozenset[tuple[str, 
     for i, binding in enumerate(bindings):
         if not isinstance(binding, Mapping):
             raise _Undecidable(f"the {label} policy's bindings[{i}] is not an object")
+        unrecognized = sorted(repr(k) for k in binding
+                              if k not in ("role", "members", "condition"))
+        if unrecognized:
+            raise _Undecidable(f"the {label} policy's bindings[{i}] has "
+                               f"unrecognized key(s) {', '.join(unrecognized)} — "
+                               "the grant set cannot be extracted faithfully")
         if "condition" in binding:
             raise _Undecidable(f"the {label} policy's bindings[{i}] is conditional — "
                                "grant comparison is request-time-dependent")
