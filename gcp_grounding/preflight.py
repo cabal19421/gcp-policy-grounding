@@ -13,7 +13,10 @@ that chokes all record an honest ``unverified`` verdict and move on —
 ``unverified`` does not fail the gate (``report.ok`` only turns on
 ungrounded/contradicted), so a document the gate cannot judge passes with
 its ignorance on the record rather than blocking or, worse, silently
-half-passing.
+half-passing. That includes a recognized document whose content the
+conservative extractors skipped entirely: zero claims from a non-empty
+policy records an ``unverified`` verdict too (a legitimately empty IAM
+allow policy — no bindings — is the one shape where zero claims is honest).
 
 The ``terraform`` claim extractor (:mod:`gcp_grounding.tf_claims`) is looked
 up dynamically: where the module is not present, a tf plan document yields a
@@ -106,6 +109,18 @@ def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
 
     kind = detect_kind(doc)
     claims = _extract_claims(doc, kind, source, report)
+    if (kind is not None and not claims and not report.verdicts
+            and not _legitimately_empty(doc, kind)):
+        # Zero-claims honesty: the document was recognized and carries
+        # content, but the conservative extractor skipped all of it (e.g.
+        # `bindings` as an object, a hybrid v1+v2 org policy). Silence here
+        # would read as a clean pass — put the ignorance on the record.
+        logger.debug("fail-open: %s: detected %s but extracted no claims",
+                     source, kind)
+        report.add(Verdict("unverified", "document", source, 0,
+                           f"{source}: detected {kind} content, but nothing "
+                           f"checkable could be extracted from it — nothing "
+                           f"was checked"))
 
     existence = [c for c in claims if c.kind in EXISTENCE_KINDS]
     if existence:
@@ -129,6 +144,14 @@ def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
     return report
 
 
+def _legitimately_empty(doc: Any, kind: str) -> bool:
+    """Whether zero claims is the honest outcome for *doc*: an empty IAM
+    allow policy (no ``bindings``, or ``bindings: []``) asserts nothing, so
+    extracting nothing from it is not ignorance."""
+    return (kind == "iam_policy" and isinstance(doc, Mapping)
+            and doc.get("bindings", []) == [])
+
+
 # -- document loading ---------------------------------------------------------
 
 
@@ -145,6 +168,12 @@ def _load_document(path_or_obj: Any) -> tuple[Any, str, str | None]:
         return None, source, f"the document could not be read ({exc})"
     except json.JSONDecodeError as exc:
         return None, source, f"the document is not valid JSON ({exc})"
+    except (ValueError, RecursionError) as exc:
+        # json.load also raises UnicodeDecodeError (a ValueError that is not
+        # a JSONDecodeError) on non-UTF-8 bytes and RecursionError on deeply
+        # nested JSON — both are bad input, not gate bugs, so they fail open.
+        return None, source, (f"the document could not be parsed "
+                              f"({type(exc).__name__}: {exc})")
 
 
 # -- claim extraction (per detected kind, fail-open) --------------------------
@@ -209,6 +238,13 @@ def _subset_verdict(doc: Mapping[str, Any], kind: str | None, baseline: Any,
     if error is not None:
         return Verdict("unverified", "subset", "iam-policy", 0,
                        f"{old_source}: baseline {error} — new⊆old was not decided")
+    if detect_kind(old_doc) != "iam_policy":
+        # A wrapped setIamPolicy body, an org policy, a deny policy: passing
+        # it raw into check_policy_subset would read its absent `bindings` as
+        # "grants nothing" and mint a false `contradicted`.
+        return Verdict("unverified", "subset", "iam-policy", 0,
+                       f"{old_source}: the baseline's shape was not recognized "
+                       f"as an IAM allow policy — new⊆old was not decided")
     try:
         return check_policy_subset(doc, old_doc, solver)
     except ValueError as exc:

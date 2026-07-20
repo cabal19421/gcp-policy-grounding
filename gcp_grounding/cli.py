@@ -22,7 +22,8 @@ a hook or CI job configures the estate snapshot once instead of per call.
 
 ``--hook`` reads a Claude-Code PostToolUse event (JSON on stdin), pulls the
 edited file out of ``tool_input.file_path``, and grounds it when it looks
-like a policy document (``.tf``/``.json``). Everything else — unparsable
+like a policy document (``.tf``/``.json``, case-insensitive, matching the
+gate's suffix rules). Everything else — unparsable
 events, missing paths, non-policy files, an unavailable snapshot — exits 0:
 a broken hook setup must never block an edit. A raw ``.tf`` file is not
 ``terraform show -json`` output, so it lands in ``unverified`` via the
@@ -168,7 +169,9 @@ def _run_hook(args: argparse.Namespace) -> int:
     """Ground the file a PostToolUse event says was edited. Fail-open: only
     a real ungrounded/contradicted finding exits nonzero."""
     path = _hook_file_path(_read_hook_event(sys.stdin))
-    if path is None or not path.endswith(_HOOK_SUFFIXES):
+    # casefold() mirrors the gate's case-insensitive suffix match: an edited
+    # 'IAM.POLICY.JSON' is a policy document too.
+    if path is None or not path.casefold().endswith(_HOOK_SUFFIXES):
         logger.debug("--hook: nothing to ground (path=%r)", path)
         return EXIT_OK
     snapshot, problem = _load_snapshot(args.snapshot)
@@ -304,3 +307,8 @@ def _read_json(path: str) -> tuple[Any, str | None]:
         return None, f"the document could not be read ({exc})"
     except json.JSONDecodeError as exc:
         return None, f"the document is not valid JSON ({exc})"
+    except (ValueError, RecursionError) as exc:
+        # Non-UTF-8 bytes (UnicodeDecodeError) and deeply nested JSON
+        # (RecursionError) — same fail-open arm as preflight._load_document.
+        return None, (f"the document could not be parsed "
+                      f"({type(exc).__name__}: {exc})")

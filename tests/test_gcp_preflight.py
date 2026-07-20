@@ -185,11 +185,62 @@ def test_unrecognized_document_fails_open_to_unverified(snap):
     assert "not recognized" in v.message
 
 
+def test_non_utf8_bytes_fail_open_to_unverified(snap, tmp_path):
+    garbled = tmp_path / "garbled.json"
+    garbled.write_bytes(b"\xff\xfe{\x00}")
+    report = ground_policy(garbled, snap)
+    assert report.ok  # bad bytes are bad input, not a gate failure
+    [v] = report.verdicts
+    assert (v.status, v.kind) == ("unverified", "document")
+    assert "could not be parsed" in v.message and "UnicodeDecodeError" in v.message
+
+
+def test_deeply_nested_json_fails_open_to_unverified(snap, tmp_path):
+    deep = tmp_path / "deep.json"
+    deep.write_text("[" * 2_000_000 + "]" * 2_000_000, encoding="utf-8")
+    report = ground_policy(deep, snap)
+    assert report.ok
+    [v] = report.verdicts
+    assert (v.status, v.kind) == ("unverified", "document")
+    assert "could not be parsed" in v.message and "RecursionError" in v.message
+
+
 def test_parsed_object_input_matches_path_input(snap):
     from_path = ground_policy(POLICIES / "iam_policy_bad.json", snap)
     from_obj = ground_policy(load("iam_policy_bad.json"), snap)
     assert [(v.status, v.kind, v.target) for v in from_obj.verdicts] == \
            [(v.status, v.kind, v.target) for v in from_path.verdicts]
+
+
+# -- zero-claims honesty on recognized documents ------------------------------
+
+
+@pytest.mark.parametrize("doc", [
+    # bindings as an object, not an array — the extractor skips it wholesale.
+    {"bindings": {"role": "roles/hacker.superAdmin", "members": ["user:evil@x.y"]}},
+    # every binding malformed (role as array, members as string) — all skipped.
+    {"bindings": [{"role": ["roles/hallucinated.role"], "members": "user:evil@x.y"}]},
+    # hybrid org policy: v1 'constraint' and v2 'name' at once — ambiguous.
+    {"constraint": "constraints/compute.disableSerialPortAccessz",
+     "name": "projects/p/policies/compute.disableSerialPortAccessz",
+     "listPolicy": {"allValues": "DENY"}},
+])
+def test_recognized_document_with_zero_extractable_claims_is_unverified(snap, doc):
+    assert detect_kind(doc) is not None  # recognized, yet nothing extracts
+    report = ground_policy(doc, snap)
+    assert report.ok  # unverified is honest ignorance, not a gate failure
+    [v] = report.verdicts
+    assert (v.status, v.kind) == ("unverified", "document")
+    assert "nothing checkable" in v.message
+
+
+def test_legitimately_empty_iam_policy_yields_no_verdicts(snap):
+    # An empty allow policy asserts nothing: zero claims is the honest
+    # outcome, not ignorance — no unverified verdict to record.
+    for doc in ({"etag": "BwX=", "version": 3},
+                {"etag": "BwX=", "version": 3, "bindings": []}):
+        report = ground_policy(doc, snap)
+        assert report.ok and report.verdicts == []
 
 
 # -- baseline (new⊆old) opt-in ----------------------------------------------
@@ -227,6 +278,20 @@ def test_baseline_against_non_iam_document_is_unverified(snap):
     [subset_v] = [v for v in report.verdicts if v.kind == "subset"]
     assert subset_v.status == "unverified"
     assert "not an IAM policy" in subset_v.message
+
+
+def test_unrecognized_baseline_shape_is_unverified_not_contradicted(snap):
+    new = {"bindings": [{"role": "roles/viewer",
+                         "members": ["user:alice@acme.example"]}]}
+    # A wrapped setIamPolicy-style body carries the very same bindings; read
+    # raw it would look like "grants nothing" and mint a false contradicted.
+    for baseline in ({"policy": new}, load("org_policy_good.json")):
+        report = ground_policy(new, snap, baseline=baseline)
+        [subset_v] = [v for v in report.verdicts if v.kind == "subset"]
+        assert subset_v.status == "unverified"
+        assert "baseline" in subset_v.message
+        assert "not recognized" in subset_v.message
+        assert report.counts()["contradicted"] == 0 and report.ok
 
 
 # -- the aggregate across all bundles ----------------------------------------
