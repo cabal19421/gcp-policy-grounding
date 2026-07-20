@@ -306,7 +306,7 @@ def test_capture_snapshot_end_to_end_round_trips(tmp_path):
     snap = capture_snapshot(
         iam=_iam_mock(), orgpolicy=_orgpolicy_mock(), asset=_asset_mock(),
         custom_role_parents=(ORG,), permission_resources=(RESOURCE,),
-        orgpolicy_parent=ORG, asset_scope=SCOPE, asset_parent=SCOPE,
+        orgpolicy_parent=ORG, asset_scope=SCOPE,
         terraform_dir="/repo/infra", schema_cache=tmp_path / "tf-schema.json",
         terraform_runner=runner,
         captured_at="2026-07-19T12:00:00Z", out_path=out)
@@ -319,9 +319,10 @@ def test_capture_snapshot_end_to_end_round_trips(tmp_path):
     assert snap.permission_exists("storage.objects.list") is True
     assert snap.principal_exists("user:alice@acme.example") is True
     assert snap.constraint("constraints/compute.vmExternalIpAccess")["value_type"] == "list"
-    # resource types merge the CAI inventory and the terraform schema
-    assert snap.resource_type_exists("compute.googleapis.com/Instance") is True
+    # resource_types is the terraform provider vocabulary alone — a CAI
+    # asset-type name is provably absent from it, never a member
     assert snap.resource_type_exists("google_project_iam_binding") is True
+    assert snap.resource_type_exists("compute.googleapis.com/Instance") is False
     # the written snapshot loads back identical
     assert GcpSnapshot.load(out) == snap
 
@@ -344,13 +345,44 @@ def test_capture_snapshot_defaults_to_a_fresh_captured_at():
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", snap.captured_at)
 
 
+def test_capture_snapshot_cai_only_leaves_resource_types_uncaptured():
+    # CAI feeds principals only. Its asset types are not terraform resource
+    # types, so resource_types must stay uncaptured (UNKNOWN, → 'unverified')
+    # rather than enumerated with the wrong vocabulary — a captured-but-wrong
+    # category would let ground_existence refute real names.
+    snap = capture_snapshot(asset=_asset_mock(), asset_scope=SCOPE,
+                            captured_at="2026-07-19T12:00:00Z")
+    assert snap.captured_categories() == ("principals",)
+    assert snap.principal_exists("user:alice@acme.example") is True
+    assert snap.resource_type_exists("google_project_iam_binding") is UNKNOWN
+    assert snap.resource_type_exists("compute.googleapis.com/Instance") is UNKNOWN
+
+
+def test_capture_snapshot_tf_schema_only_captures_resource_types_alone():
+    # The dual: a terraform-schema-only capture enumerates the provider
+    # vocabulary and nothing else — principals must not be marked captured.
+    snap = capture_snapshot(terraform_runner=lambda d: json.dumps(TF_SCHEMA),
+                            captured_at="2026-07-19T12:00:00Z")
+    assert snap.captured_categories() == ("resource_types",)
+    assert snap.resource_type_exists("google_project_iam_binding") is True
+    assert snap.principal_exists("user:alice@acme.example") is UNKNOWN
+
+
+def test_capture_snapshot_no_longer_accepts_a_cai_resource_inventory():
+    # asset_parent used to union CAI asset types into resource_types; the
+    # parameter is gone so the polluting path cannot be resurrected quietly.
+    with pytest.raises(TypeError):
+        capture_snapshot(asset=_asset_mock(), asset_scope=SCOPE,
+                         asset_parent=SCOPE)
+
+
 def test_capture_snapshot_rejects_halfway_configuration():
     with pytest.raises(ValueError):
         capture_snapshot(orgpolicy=mock.Mock())          # client without parent
     with pytest.raises(ValueError):
         capture_snapshot(orgpolicy_parent=ORG)           # parent without client
     with pytest.raises(ValueError):
-        capture_snapshot(asset=mock.Mock())              # client without scope/parent
+        capture_snapshot(asset=mock.Mock())              # client without scope
     with pytest.raises(ValueError):
         capture_snapshot(asset_scope=SCOPE)              # scope without client
     with pytest.raises(ValueError):
