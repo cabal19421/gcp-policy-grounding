@@ -22,6 +22,12 @@ snapshot's enumeration for the claim's own category, which is what turns the
 canonical hallucination ``roles/bigquery.reader`` into a pointer at
 ``roles/bigquery.dataViewer``.
 
+Claim kind and snapshot category coincide for every existence question except
+resource types: extractors spell that claim kind ``resource_type_ref``
+(:data:`gcp_grounding.claims.KINDS`), while the snapshot category — and
+therefore the fact/relation names and the verdict's ``kind`` — stays
+``resource_type``. :func:`_category` maps between the two.
+
 Claim kinds that are not existence questions (``cel``, ``constraint_value``)
 contribute no facts and get no verdict here — the constraint-solver layer
 decides those.
@@ -41,28 +47,43 @@ logger = get_logger(__name__)
 __all__ = ["EXISTENCE_KINDS", "existence_program", "ground_existence", "suggest"]
 
 #: Claim kinds the Datalog pass decides; each maps to one snapshot category.
-EXISTENCE_KINDS = ("role", "permission", "principal", "constraint", "resource_type")
+EXISTENCE_KINDS = ("role", "permission", "principal", "constraint", "resource_type_ref")
+
+#: Claim kind → snapshot category, where the two differ. A ``resource_type_ref``
+#: claim asserts the existence of a ``resource_type``.
+_CLAIM_CATEGORIES = {"resource_type_ref": "resource_type"}
 
 _MAX_SUGGESTIONS = 3
+
+
+def _category(kind: str) -> str:
+    """The snapshot category (= Datalog relation suffix = verdict kind) a
+    claim *kind* asks about; identity for all but ``resource_type_ref``."""
+    return _CLAIM_CATEGORIES.get(kind, kind)
 
 
 # -- snapshot → facts ---------------------------------------------------------
 
 
 def _enumerated(snapshot: GcpSnapshot, kind: str) -> tuple[frozenset[str], bool]:
-    """The names the snapshot proves exist for *kind*, and whether the
-    category was captured (i.e. absence from it is provable).
+    """The names the snapshot proves exist for *kind* (a claim kind or its
+    snapshot category), and whether the category was captured (i.e. absence
+    from it is provable).
 
     Mirrors the lookup semantics of :class:`GcpSnapshot`: a permission is
     proven by the flat enumeration *or* by appearing in a captured role's
     ``included_permissions``, but only the enumeration can prove absence.
     """
+    kind = _category(kind)
     if kind == "role":
         return frozenset(snapshot.roles or ()), snapshot.roles is not None
     if kind == "permission":
         names = set(snapshot.permissions or ())
         for record in (snapshot.roles or {}).values():
-            names.update(record.get("included_permissions", ()))
+            # `or ()`: from_dict rejects a null included_permissions, but a
+            # hand-constructed snapshot may still carry None — read it as
+            # "nothing included", never crash.
+            names.update(record.get("included_permissions") or ())
         return frozenset(names), snapshot.permissions is not None
     if kind == "principal":
         return snapshot.principals or frozenset(), snapshot.principals is not None
@@ -86,23 +107,24 @@ def existence_program(claims: Iterable[Any], snapshot: GcpSnapshot) -> Datalog:
     dl = Datalog()
     n, loc = var("n"), var("loc")
     for kind in EXISTENCE_KINDS:
-        names, captured = _enumerated(snapshot, kind)
+        category = _category(kind)
+        names, captured = _enumerated(snapshot, category)
         for name in names:
-            dl.fact(kind, name)
+            dl.fact(category, name)
         if captured:
-            dl.fact("captured", kind)
-        claims_rel = f"claims_{kind}"
-        dl.rule(lit(f"grounded_{kind}", n, loc),
-                [lit(claims_rel, n, loc), lit(kind, n)])
-        dl.rule(lit(f"ungrounded_{kind}", n, loc),
-                [lit(claims_rel, n, loc), lit("captured", kind),
-                 lit(kind, n, negated=True)])
-        dl.rule(lit(f"unverified_{kind}", n, loc),
-                [lit(claims_rel, n, loc), lit("captured", kind, negated=True),
-                 lit(kind, n, negated=True)])
+            dl.fact("captured", category)
+        claims_rel = f"claims_{category}"
+        dl.rule(lit(f"grounded_{category}", n, loc),
+                [lit(claims_rel, n, loc), lit(category, n)])
+        dl.rule(lit(f"ungrounded_{category}", n, loc),
+                [lit(claims_rel, n, loc), lit("captured", category),
+                 lit(category, n, negated=True)])
+        dl.rule(lit(f"unverified_{category}", n, loc),
+                [lit(claims_rel, n, loc), lit("captured", category, negated=True),
+                 lit(category, n, negated=True)])
     for claim in claims:
         if claim.kind in EXISTENCE_KINDS:
-            dl.fact(f"claims_{claim.kind}", claim.value, claim.location)
+            dl.fact(f"claims_{_category(claim.kind)}", claim.value, claim.location)
     return dl
 
 
@@ -125,10 +147,10 @@ def ground_existence(claims: Iterable[Any], snapshot: GcpSnapshot,
     dl.run()
     skipped = 0
     for claim in claims:
-        kind = claim.kind
-        if kind not in EXISTENCE_KINDS:
+        if claim.kind not in EXISTENCE_KINDS:
             skipped += 1
             continue
+        kind = _category(claim.kind)
         value, location = claim.value, claim.location
         if dl.holds(f"grounded_{kind}", value, location):
             report.add(Verdict(
