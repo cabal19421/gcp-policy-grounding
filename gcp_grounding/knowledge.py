@@ -161,10 +161,16 @@ class GcpSnapshot:
         roles = _record_map(data.get("roles"), "roles")
         if roles is not None:
             for name, record in roles.items():
-                perms = record.get("included_permissions")
-                if perms is not None:
-                    got = _str_set(perms, f"roles[{name!r}].included_permissions")
-                    record["included_permissions"] = tuple(sorted(got or ()))
+                if "included_permissions" not in record:
+                    continue
+                perms = record["included_permissions"]
+                if perms is None:
+                    raise ValueError(
+                        f"snapshot.roles[{name!r}].included_permissions must be an "
+                        f"array of strings, got null — omit the key when the role's "
+                        f"permissions were not captured")
+                got = _str_set(perms, f"roles[{name!r}].included_permissions")
+                record["included_permissions"] = tuple(sorted(got or ()))
 
         constraints = _record_map(data.get("constraints"), "constraints")
         if constraints is not None:
@@ -256,5 +262,8 @@ class GcpSnapshot:
     def _role_included_permissions(self) -> frozenset[str]:
         found: set[str] = set()
         for record in (self.roles or {}).values():
-            found.update(record.get("included_permissions", ()))
+            # `or ()`: from_dict rejects a null included_permissions, but a
+            # hand-constructed snapshot may still carry None — read it as
+            # "nothing included", never crash.
+            found.update(record.get("included_permissions") or ())
         return frozenset(found)

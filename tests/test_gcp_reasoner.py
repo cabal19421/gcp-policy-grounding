@@ -3,13 +3,13 @@ good policies ground every claim, bad ones surface exactly the hallucinated
 names (with near-miss suggestions), and a category the snapshot never
 captured yields an honest 'unverified', never 'ungrounded'."""
 
+import importlib.util
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-from gcp_grounding.claims import iam_policy_claims, org_policy_claims
+from gcp_grounding.claims import Claim, iam_policy_claims, org_policy_claims
 from gcp_grounding.knowledge import GcpSnapshot
 from gcp_grounding.reasoner import (
     EXISTENCE_KINDS,
@@ -23,16 +23,7 @@ POLICIES = FIXTURES / "policies"
 
 GHOST = "serviceAccount:ghost-runner@acme-prod.iam.gserviceaccount.com"
 
-
-@dataclass(frozen=True)
-class TfClaim:
-    """Stand-in for tf_claims kinds ('permission', 'resource_type') that
-    claims.Claim cannot mint — the reasoner is duck-typed over kind/value/
-    location, so any claim-shaped object participates."""
-
-    kind: str
-    value: str
-    location: str
+HAVE_TF_CLAIMS = importlib.util.find_spec("gcp_grounding.tf_claims") is not None
 
 
 @pytest.fixture()
@@ -147,11 +138,15 @@ def test_captured_empty_category_is_ungrounded_not_unverified():
 
 
 def test_permission_and_resource_type_existence(snap):
+    # The real extractor kinds: 'permission' and 'resource_type_ref'
+    # (tf_claims emits both as claims.Claim records); a resource_type_ref
+    # claim is decided against snapshot.resource_types and its verdict keeps
+    # the category name 'resource_type'.
     claims = [
-        TfClaim("permission", "bigquery.jobs.create", "perms[0]"),
-        TfClaim("permission", "bigquery.jobs.imagine", "perms[1]"),
-        TfClaim("resource_type", "compute.googleapis.com/Instance", "resources[0].type"),
-        TfClaim("resource_type", "compute.googleapis.com/Droplet", "resources[1].type"),
+        Claim("permission", "bigquery.jobs.create", "perms[0]"),
+        Claim("permission", "bigquery.jobs.imagine", "perms[1]"),
+        Claim("resource_type_ref", "compute.googleapis.com/Instance", "resources[0].type"),
+        Claim("resource_type_ref", "compute.googleapis.com/Droplet", "resources[1].type"),
     ]
     report = ground_existence(claims, snap)
     assert not report.ok
@@ -173,11 +168,70 @@ def test_permission_proven_by_role_inclusion_without_enumeration():
         "captured_at": "2026-07-18T09:30:00Z",
         "roles": {"roles/viewer": {"included_permissions": ["resourcemanager.projects.get"]}},
     })
-    claims = [TfClaim("permission", "resourcemanager.projects.get", "perms[0]"),
-              TfClaim("permission", "resourcemanager.projects.imagine", "perms[1]")]
+    claims = [Claim("permission", "resourcemanager.projects.get", "perms[0]"),
+              Claim("permission", "resourcemanager.projects.imagine", "perms[1]")]
     report = ground_existence(claims, partial)
     assert report.ok
     assert [v.status for v in report.verdicts] == ["grounded", "unverified"]
+
+
+def test_null_included_permissions_cannot_crash_the_reasoner():
+    # Belt and suspenders: from_dict rejects a null included_permissions, but
+    # a hand-constructed snapshot may still carry None — the reasoner must
+    # read it as "nothing included", never raise.
+    snap = GcpSnapshot(captured_at="2026-07-18T09:30:00Z",
+                       roles={"roles/viewer": {"included_permissions": None}})
+    claims = [Claim("role", "roles/viewer", "bindings[0].role"),
+              Claim("permission", "storage.objects.get", "perms[0]")]
+    report = ground_existence(claims, snap)
+    assert [(v.status, v.kind) for v in report.verdicts] == [
+        ("grounded", "role"), ("unverified", "permission")]
+
+
+# -- resource_type_ref end-to-end (tf_claims -> ground_existence) -----------
+
+
+@pytest.mark.skipif(not HAVE_TF_CLAIMS,
+                    reason="the tf-plan claim extractor is not part of this checkout")
+def test_invented_tf_resource_type_is_ungrounded_end_to_end():
+    # The full path the gate exercises: tf_claims emits 'resource_type_ref',
+    # and the reasoner decides it against snapshot.resource_types — an
+    # invented type is ungrounded when the vocabulary was captured, with the
+    # real name suggested.
+    from gcp_grounding.tf_claims import terraform_plan_claims
+    plan = {"format_version": "1.2", "planned_values": {"root_module": {"resources": [
+        {"mode": "managed", "address": "google_project_iam_bindng.x",
+         "type": "google_project_iam_bindng",
+         "provider_name": "registry.terraform.io/hashicorp/google", "values": {}}]}}}
+    claims = terraform_plan_claims(plan)
+    assert [c.kind for c in claims] == ["resource_type_ref"]
+    captured = GcpSnapshot.from_dict({
+        "captured_at": "2026-07-18T09:30:00Z",
+        "resource_types": ["google_project_iam_binding", "google_project_iam_member"],
+    })
+    report = ground_existence(claims, captured)
+    assert not report.ok
+    [v] = report.ungrounded
+    assert (v.kind, v.target) == ("resource_type", "google_project_iam_bindng")
+    assert "google_project_iam_binding" in v.suggestions
+    assert "google_project_iam_bindng.x" in v.message  # the resource address
+
+
+@pytest.mark.skipif(not HAVE_TF_CLAIMS,
+                    reason="the tf-plan claim extractor is not part of this checkout")
+def test_tf_resource_type_without_captured_vocabulary_is_unverified():
+    # The honest dual: no resource_types enumeration → the same invented type
+    # is unverified, never ungrounded.
+    from gcp_grounding.tf_claims import terraform_plan_claims
+    plan = {"format_version": "1.2", "planned_values": {"root_module": {"resources": [
+        {"mode": "managed", "address": "google_project_iam_bindng.x",
+         "type": "google_project_iam_bindng",
+         "provider_name": "registry.terraform.io/hashicorp/google", "values": {}}]}}}
+    uncaptured = GcpSnapshot.from_dict({"captured_at": "2026-07-18T09:30:00Z"})
+    report = ground_existence(terraform_plan_claims(plan), uncaptured)
+    assert report.ok
+    [v] = report.verdicts
+    assert (v.status, v.kind) == ("unverified", "resource_type")
 
 
 # -- the Datalog program itself --------------------------------------------
@@ -197,7 +251,12 @@ def test_datalog_relations_are_derived_by_name(snap):
 
 def test_existence_kinds_cover_the_five_categories():
     assert set(EXISTENCE_KINDS) == {"role", "permission", "principal",
-                                    "constraint", "resource_type"}
+                                    "constraint", "resource_type_ref"}
+    # Every existence kind must be a kind an extractor can actually emit —
+    # a spelling drift here (e.g. 'resource_type' vs 'resource_type_ref')
+    # silently severs the whole category from the reasoner.
+    for kind in EXISTENCE_KINDS:
+        Claim(kind, "some-name", "some.location")
 
 
 # -- suggestions -----------------------------------------------------------

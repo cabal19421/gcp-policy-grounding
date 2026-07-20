@@ -131,6 +131,36 @@ def test_from_dict_rejects_unrecognized_keys():
         GcpSnapshot.from_dict({"captured_at": "2026-07-18T09:30:00Z", "role": {}})
 
 
+def test_from_dict_rejects_null_included_permissions():
+    # JSON null is not "not captured": accepting it would defer a TypeError
+    # into every later grounding run — a broken snapshot must fail at load
+    # time, like every other malformed role record.
+    with pytest.raises(ValueError):
+        GcpSnapshot.from_dict({
+            "captured_at": "2026-07-18T09:30:00Z",
+            "roles": {"roles/viewer": {"included_permissions": None}},
+        })
+
+
+def test_load_rejects_null_included_permissions_with_the_path(tmp_path):
+    bad = tmp_path / "snapshot.json"
+    bad.write_text(json.dumps({
+        "captured_at": "2026-07-18T09:30:00Z",
+        "roles": {"roles/viewer": {"included_permissions": None}},
+    }), encoding="utf-8")
+    with pytest.raises(ValueError, match="included_permissions"):
+        GcpSnapshot.load(bad)
+
+
+def test_hand_built_null_included_permissions_never_crashes_lookups():
+    # Belt and suspenders: from_dict rejects null, but a directly constructed
+    # snapshot may still carry None — lookups read it as "nothing included".
+    snap = GcpSnapshot(captured_at="2026-07-18T09:30:00Z",
+                       roles={"roles/viewer": {"included_permissions": None}})
+    assert snap.permission_exists("storage.objects.get") is UNKNOWN
+    assert snap.role_exists("roles/viewer") is True
+
+
 def test_from_dict_requires_constraint_value_type():
     with pytest.raises(ValueError):
         GcpSnapshot.from_dict({
