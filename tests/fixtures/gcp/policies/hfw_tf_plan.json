@@ -1,0 +1,50 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "google_compute_firewall_policy_rule.rdp_allow",
+      "mode": "managed",
+      "type": "google_compute_firewall_policy_rule",
+      "name": "rdp_allow",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "firewall_policy": "organizations/1/locations/global/firewallPolicies/pol-hfw",
+          "priority": 200,
+          "action": "allow",
+          "direction": "INGRESS",
+          "disabled": false,
+          "match": [
+            {
+              "src_ip_ranges": ["0.0.0.0/0"],
+              "dest_ip_ranges": [],
+              "layer4_config": [{"ip_protocol": "tcp", "ports": ["3389"]}]
+            }
+          ],
+          "target_resources": [],
+          "target_service_accounts": [],
+          "target_secure_tags": []
+        }
+      }
+    },
+    {
+      "address": "google_compute_firewall_policy_association.attach_folder2",
+      "mode": "managed",
+      "type": "google_compute_firewall_policy_association",
+      "name": "attach_folder2",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "firewall_policy": "organizations/1/locations/global/firewallPolicies/pol-hfw",
+          "attachment_target": "folders/2",
+          "name": "attach-folder2"
+        }
+      }
+    }
+  ]
+}
