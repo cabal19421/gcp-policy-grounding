@@ -249,9 +249,20 @@ def test_datalog_relations_are_derived_by_name(snap):
     assert dl.query("ungrounded_resource_type") == set()
 
 
-def test_existence_kinds_cover_the_five_categories():
-    assert set(EXISTENCE_KINDS) == {"role", "permission", "principal",
-                                    "constraint", "resource_type_ref"}
+def test_existence_kinds_cover_the_fifteen_categories():
+    assert set(EXISTENCE_KINDS) == {
+        "role", "permission", "principal", "constraint", "resource_type_ref",
+        "network_ref", "subnetwork_ref", "network_tag_ref", "service_account_ref",
+        "access_level_ref", "restricted_service_ref", "perimeter_ref",
+        "firewall_policy_ref", "security_policy_ref", "hierarchy_node_ref"}
+    # The five originals survive as a subset: swapping one out fails loudly
+    # even if the count still matches.
+    assert frozenset({"role", "permission", "principal", "constraint",
+                      "resource_type_ref"}) <= set(EXISTENCE_KINDS)
+    # Appended, not reordered.
+    assert EXISTENCE_KINDS[:5] == ("role", "permission", "principal",
+                                   "constraint", "resource_type_ref")
+    assert len(EXISTENCE_KINDS) == len(set(EXISTENCE_KINDS)) == 15
     # Every existence kind must be a kind an extractor can actually emit —
     # a spelling drift here (e.g. 'resource_type' vs 'resource_type_ref')
     # silently severs the whole category from the reasoner.
