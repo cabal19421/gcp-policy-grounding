@@ -149,11 +149,15 @@ def _tf_full_expected():
     ("tf_plan_full", _tf_full_expected()),
 ])
 def test_no_providers_is_byte_identical(snap, name, expected):
-    # Nothing in the default PROVIDER_MODULES is part of this checkout, so the
-    # registry must contribute nothing at all.
+    # A domain provider module that is part of this checkout (e.g. armor_claims)
+    # may register tf_extractors, but it never shadows a built-in google resource
+    # type and none of these fixtures carry a domain resource — so the registry
+    # contributes nothing to *these* documents and the gate's behaviour stays
+    # byte-identical to before the seam existed.
     assert registry.document_checks() == ()
-    assert registry.tf_extractors() == {}
     assert registry.claim_checks("role") == ()
+    from gcp_grounding.tf_claims import _EXTRACTORS
+    assert set(registry.tf_extractors()) & set(_EXTRACTORS) == set()
     report = ground_policy(POLICIES / f"{name}.json", snap)
     got = sorted((v.status, v.kind, v.target) for v in report.verdicts)
     assert got == sorted(expected)
