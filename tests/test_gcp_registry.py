@@ -38,6 +38,14 @@ POLICIES = FIXTURES / "policies"
 HAVE_Z3 = get_solver().backend == "z3"
 HAVE_TF = importlib.util.find_spec("gcp_grounding.tf_claims") is not None
 
+#: The resource types the built-in tf extractors own; a provider module must
+#: never register one of these (built-ins win), so the registry's contributed
+#: tf extractors stay disjoint from this set no matter which domains land.
+if HAVE_TF:
+    from gcp_grounding.tf_claims import _EXTRACTORS as _BUILTIN_TF_TYPES
+else:
+    _BUILTIN_TF_TYPES = {}
+
 STUB = "gcp_grounding_stub_provider"
 
 CEL_GOOD = 'request.time < timestamp("2027-01-01T00:00:00Z")'
@@ -149,10 +157,14 @@ def _tf_full_expected():
     ("tf_plan_full", _tf_full_expected()),
 ])
 def test_no_providers_is_byte_identical(snap, name, expected):
-    # Nothing in the default PROVIDER_MODULES is part of this checkout, so the
-    # registry must contribute nothing at all.
+    # The registry must not contribute anything that changes these baseline
+    # (non-firewall/non-armor/…) fixtures' grounding. As domain modules land in
+    # this checkout (fw_claims, …) they add NEW google resource types, never
+    # shadowing a built-in and never touching these fixtures — so the invariant
+    # relaxes from "registry is empty" to "registry never shadows a built-in tf
+    # type", which keeps the gate byte-identical to before the seam existed.
     assert registry.document_checks() == ()
-    assert registry.tf_extractors() == {}
+    assert set(registry.tf_extractors()).isdisjoint(_BUILTIN_TF_TYPES)
     assert registry.claim_checks("role") == ()
     report = ground_policy(POLICIES / f"{name}.json", snap)
     got = sorted((v.status, v.kind, v.target) for v in report.verdicts)
