@@ -1,8 +1,10 @@
 """End-to-end orchestration: one document in, one grounding report out.
 
 :func:`ground_policy` is the gate's single entry point. It auto-detects what
-kind of document it was handed (IAM allow/deny policy JSON, Org Policy JSON,
-or ``terraform show -json`` plan output), extracts that kind's claims, runs
+kind of document it was handed — an IAM allow policy, an IAM deny policy, an
+Org Policy, a VPC-SC service perimeter, an access level, a VPC firewall rule,
+a hierarchical/network firewall policy, a Cloud Armor security policy, or
+``terraform show -json`` plan output — extracts that kind's claims, runs
 the Datalog existence reasoner and the constraint-solver layer, and merges
 everything into one vendored
 :class:`~gcp_grounding.core.report.GroundingReport`.
@@ -54,7 +56,9 @@ logger = get_logger(__name__)
 __all__ = ["DOCUMENT_KINDS", "detect_kind", "ground_policy"]
 
 #: Document kinds :func:`detect_kind` can recognize.
-DOCUMENT_KINDS = ("iam_policy", "org_policy", "tf_plan")
+DOCUMENT_KINDS = ("iam_policy", "org_policy", "tf_plan", "iam_deny_policy",
+                  "vpc_sc_perimeter", "access_level", "firewall_rule",
+                  "firewall_policy", "security_policy")
 
 #: Top-level keys marking ``terraform show -json`` plan output.
 _TF_PLAN_KEYS = ("format_version", "terraform_version", "planned_values",
@@ -64,24 +68,143 @@ _TF_PLAN_KEYS = ("format_version", "terraform_version", "planned_values",
 _ORG_V1_KEYS = ("constraint", "booleanPolicy", "listPolicy")
 
 
+#: Blocks (``status`` / ``spec``) whose presence of any of these keys marks a
+#: VPC Service Controls service perimeter.
+_PERIMETER_KEYS = ("resources", "restrictedServices", "restricted_services",
+                   "accessLevels", "access_levels", "ingressPolicies",
+                   "ingress_policies", "egressPolicies", "egress_policies")
+
+#: ``match`` keys that mark a hierarchical/network firewall policy rule (both
+#: the REST camelCase and terraform snake_case spellings).
+_FW_POLICY_MATCH_KEYS = ("srcIpRanges", "src_ip_ranges",
+                         "destIpRanges", "dest_ip_ranges")
+
+#: ``match`` keys that mark a Cloud Armor security policy rule.
+_SECURITY_POLICY_MATCH_KEYS = ("versionedExpr", "versioned_expr", "expr", "config")
+
+#: ``spec`` keys required for a bare-``spec`` document to read as an Org Policy
+#: v2 (a spec block that carries none of these is some other domain's).
+_ORG_V2_SPEC_KEYS = ("rules", "inheritFromParent", "inherit_from_parent", "reset")
+
+
+def _is_iam_deny_policy(doc: Mapping[str, Any]) -> bool:
+    """A v3 IAM *deny* policy: a non-empty top-level ``rules`` list with a
+    ``denyRule``/``deny_rule`` item. Org Policy v2 nests ``rules`` under
+    ``spec``, and Cloud Armor rule items carry ``match``/``action`` and never
+    ``denyRule`` — neither collides."""
+    rules = doc.get("rules")
+    return (isinstance(rules, list) and len(rules) > 0
+            and any(isinstance(r, Mapping) and ("denyRule" in r or "deny_rule" in r)
+                    for r in rules))
+
+
+def _is_vpc_sc_perimeter(doc: Mapping[str, Any]) -> bool:
+    """A VPC Service Controls service perimeter: a ``…/servicePerimeters/…``
+    name, or a ``status``/``spec`` block carrying any perimeter field."""
+    name = doc.get("name")
+    if isinstance(name, str) and "/servicePerimeters/" in name:
+        return True
+    return any(isinstance(block, Mapping)
+               and any(key in block for key in _PERIMETER_KEYS)
+               for block in (doc.get("status"), doc.get("spec")))
+
+
+def _is_access_level(doc: Mapping[str, Any]) -> bool:
+    """An Access Context Manager access level: a ``…/accessLevels/…`` name, a
+    ``basic`` block with ``conditions``, or a ``custom`` block with ``expr``."""
+    name = doc.get("name")
+    if isinstance(name, str) and "/accessLevels/" in name:
+        return True
+    basic = doc.get("basic")
+    if isinstance(basic, Mapping) and "conditions" in basic:
+        return True
+    custom = doc.get("custom")
+    return isinstance(custom, Mapping) and "expr" in custom
+
+
+def _is_firewall_rule(doc: Mapping[str, Any]) -> bool:
+    """A VPC firewall rule: the ``compute#firewall`` kind, or a ``network``
+    string alongside an ``allowed``/``denied``/``allow``/``deny`` list (the
+    bare ``allow``/``deny`` spellings are the terraform block names)."""
+    if doc.get("kind") == "compute#firewall":
+        return True
+    return (isinstance(doc.get("network"), str)
+            and any(isinstance(doc.get(key), list)
+                    for key in ("allowed", "denied", "allow", "deny")))
+
+
+def _is_firewall_policy(doc: Mapping[str, Any]) -> bool:
+    """A hierarchical/network firewall policy: the ``compute#firewallPolicy``
+    kind, a ``…/firewallPolicies/…`` name/selfLink, or a ``rules`` list whose
+    item has both a ``direction`` key and a ``match`` block with a CIDR field.
+    The ``direction`` key is what tells this apart from a Cloud Armor policy."""
+    if doc.get("kind") == "compute#firewallPolicy":
+        return True
+    for field in ("name", "selfLink"):
+        value = doc.get(field)
+        if isinstance(value, str) and "/firewallPolicies/" in value:
+            return True
+    rules = doc.get("rules")
+    return isinstance(rules, list) and any(
+        isinstance(r, Mapping) and "direction" in r
+        and isinstance(r.get("match"), Mapping)
+        and any(key in r["match"] for key in _FW_POLICY_MATCH_KEYS)
+        for r in rules)
+
+
+def _is_security_policy(doc: Mapping[str, Any]) -> bool:
+    """A Cloud Armor security policy: the ``compute#securityPolicy`` kind, or a
+    ``rules`` list whose item has a str ``action`` and a ``match`` block with a
+    Cloud Armor field — and where NO item carries a ``direction`` key (which,
+    with firewall-policy detection running first, disambiguates the two)."""
+    if doc.get("kind") == "compute#securityPolicy":
+        return True
+    rules = doc.get("rules")
+    if not isinstance(rules, list):
+        return False
+    if any(isinstance(r, Mapping) and "direction" in r for r in rules):
+        return False
+    return any(isinstance(r, Mapping) and isinstance(r.get("action"), str)
+               and isinstance(r.get("match"), Mapping)
+               and any(key in r["match"] for key in _SECURITY_POLICY_MATCH_KEYS)
+               for r in rules)
+
+
 def detect_kind(doc: Any) -> str | None:
     """Which of :data:`DOCUMENT_KINDS` *doc* looks like — or None.
 
-    Checked most-distinctive first: tf plan markers, then Org Policy (v1
-    typed-policy keys, or a v2 ``…/policies/<id>`` name / ``spec`` block),
-    then an IAM policy's ``bindings`` (``etag`` + ``version`` alone also
-    count: an empty IAM policy carries only those).
+    Checked most-distinctive first: tf plan markers, then the six security
+    domains (IAM deny policy, VPC-SC perimeter, access level, firewall rule,
+    firewall policy, Cloud Armor security policy) each by its own predicate,
+    then Org Policy (v1 typed-policy keys, or a v2 ``…/policies/<id>`` name /
+    ``rules``-bearing ``spec`` block), then an IAM allow policy's ``bindings``
+    (``etag`` + ``version`` alone also count: an empty IAM policy carries only
+    those). The perimeter and firewall predicates precede the bare-``spec``
+    Org Policy fallback so a perimeter or policy spec is not misread as one.
     """
     if not isinstance(doc, Mapping):
         return None
     if any(key in doc for key in _TF_PLAN_KEYS):
         return "tf_plan"
+    if _is_iam_deny_policy(doc):
+        return "iam_deny_policy"
+    if _is_vpc_sc_perimeter(doc):
+        return "vpc_sc_perimeter"
+    if _is_access_level(doc):
+        return "access_level"
+    if _is_firewall_rule(doc):
+        return "firewall_rule"
+    if _is_firewall_policy(doc):
+        return "firewall_policy"
+    if _is_security_policy(doc):
+        return "security_policy"
     if any(key in doc for key in _ORG_V1_KEYS):
         return "org_policy"
     name = doc.get("name")
     if isinstance(name, str) and "/policies/" in name:
         return "org_policy"
-    if isinstance(doc.get("spec"), Mapping):
+    spec = doc.get("spec")
+    if isinstance(spec, Mapping) and any(key in spec for key in _ORG_V2_SPEC_KEYS):
         return "org_policy"
     if "bindings" in doc or ("etag" in doc and "version" in doc):
         return "iam_policy"
