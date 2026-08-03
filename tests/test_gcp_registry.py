@@ -158,10 +158,17 @@ def _tf_full_expected():
 ])
 def test_no_providers_is_byte_identical(snap, name, expected):
     # The default PROVIDER_MODULES that ARE part of this checkout contribute no
-    # document/role checks and no TF extractor that shadows a built-in, so the
-    # gate's behaviour on the four built-in-domain fixtures is byte-identical to
-    # before the seam existed.
-    assert registry.document_checks() == ()
+    # document/role checks that fire on these fixtures, and no TF extractor that
+    # shadows a built-in, so the gate's behaviour on the four built-in-domain
+    # fixtures is byte-identical to before the seam existed.
+    #
+    # `iam_checks.check_escalation` IS a registered document check (escalation
+    # needs both halves of a binding, so it cannot hang off one claim), but it
+    # is silent unless a role hits the curated escalation table — which none of
+    # these fixtures' roles does. The verdict-list equality below is what
+    # actually proves that; this line only pins that no OTHER document check
+    # sneaked in.
+    assert {f.__name__ for f in registry.document_checks()} <= {"check_escalation"}
     assert registry.tf_extractors().keys().isdisjoint(_BUILTIN_TF_TYPES)
     assert registry.claim_checks("role") == ()
     report = ground_policy(POLICIES / f"{name}.json", snap)
