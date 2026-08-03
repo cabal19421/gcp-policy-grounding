@@ -5,7 +5,7 @@ Two subcommands, exposed both as the ``gcp-ground`` console script and as
 
     gcp-ground verify-policy FILE [--snapshot PATH] [--baseline PATH]
                              [--format text|json] [--explain] [--hook]
-                             [--bash-policy block|warn|off]
+                             [--bash-policy block|warn|off] [--abstain-notes]
     gcp-ground scan-command --command STR|- [--format text|json]
 
 ``verify-policy`` runs the preflight gate
@@ -84,6 +84,26 @@ handled by the bash arm, which runs before this check — a Bash event carries
 a ``command``, never a ``tool_input.file_path``, so this check returns
 "proceed" for it either way.
 
+``--hook`` has an ABSTAIN CHANNEL, opt-in via ``--abstain-notes`` /
+:data:`ABSTAIN_NOTES_ENV`. Without it, a hook run that could not judge the
+document is completely silent — zero stdout, zero stderr, exit 0 — which is
+byte-for-byte what a clean pass looks like, so a raw ``.tf`` file, an
+unparsable policy, a CEL condition z3 was not there to decide, a missing
+``tf_claims``, an uncaptured snapshot category and a tautology warning all
+reach the agent as an unqualified success. With it, every ``unverified``
+verdict is printed to stderr under a ``NOT DECIDED`` header, rendered exactly
+as the human report renders its unverified lines, and the ignorance is on the
+record while the exit code stays 0. This channel NEVER blocks and never
+changes an exit code; it is opt-in because the hook's stderr is agent-visible
+and the default contract is silence on a passing run.
+
+The eventual replacement is structured JSON on stdout — a
+``hookSpecificOutput`` object with an ``additionalContext`` field, which
+Claude Code feeds to the agent without blocking, so the ignorance would reach
+the agent as data rather than as prose on stderr. That option needs stdout,
+and the stdout-is-empty invariant of hook mode is preserved here deliberately
+— the notes go to stderr alone — so it stays available.
+
 ``--explain`` re-derives and dumps (to stderr, keeping stdout parseable for
 ``--format json``) the z3 constraints this run generated: the translated
 formula per ``cel`` condition and the new⊈old satisfiability assertion when
@@ -119,17 +139,32 @@ from .core.report import GroundingReport, Verdict
 from .core.solver import get_solver
 from .knowledge import GcpSnapshot
 from .preflight import detect_kind, ground_policy
-from .report import PolicyReport
+# _MARKS / _STAMPED are the human render's own presentation rules: the abstain
+# channel reuses them so its lines cannot drift from the unverified lines of the
+# report a blocking run prints.
+from .report import _MARKS, _STAMPED, PolicyReport
 
 logger = get_logger(__name__)
 
-__all__ = ["BASH_POLICY_ENV", "SNAPSHOT_ENV", "build_parser", "main"]
+__all__ = ["ABSTAIN_NOTES_ENV", "BASH_POLICY_ENV", "SNAPSHOT_ENV",
+           "build_parser", "main"]
 
 #: Environment variable consulted when ``--snapshot`` is not given.
 SNAPSHOT_ENV = "GCP_GROUNDING_SNAPSHOT"
 
 #: Environment variable consulted when ``--bash-policy`` is not given.
 BASH_POLICY_ENV = "GCP_GROUNDING_BASH_POLICY"
+
+#: Environment variable that turns the ``--hook`` abstain channel on when
+#: ``--abstain-notes`` is not given — one export configures a whole session's
+#: hooks, exactly as :data:`SNAPSHOT_ENV` does.
+ABSTAIN_NOTES_ENV = "GCP_GROUNDING_ABSTAIN_NOTES"
+
+#: Environment values that mean "on", case-insensitively, mirroring the
+#: harness's truthy set. ANYTHING else is False — including ``"off"``,
+#: ``"0"``, the empty string and a typo — because the channel is opt-in and an
+#: unrecognized value must not opt an operator in behind their back.
+_TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
 
 #: How ``--hook`` treats a state-mutating shell command: ``block`` exits 2,
 #: ``warn`` reports it and exits 0, ``off`` does not scan at all.
@@ -153,6 +188,12 @@ _BASH_CAPTURED_AT = "not consulted"
 #: text pass, so the report names no backend rather than the one z3 that
 #: happened to be importable.
 _BASH_BACKEND = "none"
+
+#: The mark and the freshness stamping rule the human render gives an
+#: ``unverified`` line (report.py's ``_MARKS`` / ``_STAMPED``), read once here
+#: so the abstain channel reads identically to the report's own lines.
+_ABSTAIN_MARK = dict(_MARKS)["unverified"]
+_ABSTAIN_STAMPED = "unverified" in _STAMPED
 
 #: CLI ``--format`` values → :meth:`PolicyReport.render` formats.
 _FORMATS = {"text": "human", "json": "json"}
@@ -229,6 +270,12 @@ def build_parser() -> argparse.ArgumentParser:
              f"(default: {_DEFAULT_BASH_POLICY}, falling back to "
              f"${BASH_POLICY_ENV}); block exits 2, warn reports and exits 0, "
              f"off skips the scan")
+    verify.add_argument(
+        "--abstain-notes", action="store_true", default=False,
+        help=f"in --hook mode, print the verdicts the gate could not judge "
+             f"(the 'unverified' bucket) to stderr and still exit 0 — this "
+             f"NEVER blocks anything (default: off, honouring "
+             f"${ABSTAIN_NOTES_ENV}=1|true|yes|on)")
     verify.set_defaults(handler=_cmd_verify_policy)
     scan = sub.add_parser(
         "scan-command",
@@ -342,6 +389,12 @@ def _run_hook(args: argparse.Namespace) -> int:
     :func:`_hook_scope_skip` runs next and decides whether a file event is in
     scope at all — a read-only tool, or a ``PreToolUse`` file edit, never
     reaches the grounding pass.
+
+    When the gate passes and :func:`_abstain_notes` is enabled, the verdicts it
+    could not judge go to stderr before the exit-0 return. That channel is
+    reporting only: it NEVER changes an exit code, in any case, and it lives
+    inside the ``report.ok`` arm, so a blocking run renders its report exactly
+    as before.
     """
     event = _read_hook_event(sys.stdin)
     if event is None:
@@ -372,6 +425,10 @@ def _run_hook(args: argparse.Namespace) -> int:
     if args.explain:
         print("\n".join(_explain_lines(path, args.baseline)), file=sys.stderr)
     if report.ok:
+        if _abstain_notes(args):
+            notes = _abstain_note_lines(report, snapshot.captured_at)
+            if notes:
+                print("\n".join(notes), file=sys.stderr)
         return EXIT_OK
     rendered = PolicyReport(report, captured_at=snapshot.captured_at,
                             source=path).render("human")
@@ -427,6 +484,47 @@ def _hook_file_path(event: Mapping[str, Any] | None) -> str | None:
         return None
     path = tool_input.get("file_path")
     return path if isinstance(path, str) and path else None
+
+
+# -- --hook: the abstain channel ----------------------------------------------
+
+
+def _abstain_notes(args: argparse.Namespace) -> bool:
+    """Whether ``--hook`` should print what it could not judge.
+
+    The flag wins; otherwise :data:`ABSTAIN_NOTES_ENV` enables the channel when
+    it is one of :data:`_TRUTHY_ENV`, case-insensitively. Anything else —
+    ``"off"``, ``"0"``, the empty string, a typo — is False: an opt-in channel
+    that guessed would be an opt-out one.
+    """
+    if getattr(args, "abstain_notes", False):
+        return True
+    raw = os.environ.get(ABSTAIN_NOTES_ENV)
+    return raw is not None and raw.strip().casefold() in _TRUTHY_ENV
+
+
+def _abstain_note_lines(report: GroundingReport, captured_at: str) -> list[str]:
+    """The stderr block naming every claim the gate could not judge, or ``[]``.
+
+    Empty when nothing is ``unverified``: no notes means no header, because a
+    channel that fires on a clean pass is noise, and noise is what gets a
+    guardrail switched off.
+
+    Deliberately NOT :meth:`PolicyReport.render` — that prints the PASSED
+    header and every grounded line too, and this channel is for the ignorance
+    alone. The per-line shape is still the render's (:data:`_ABSTAIN_MARK`,
+    :data:`_ABSTAIN_STAMPED`), so an operator reading hook stderr sees the same
+    lines here and in a blocking report.
+    """
+    unverified = report.by_status("unverified")
+    if not unverified:
+        return []
+    stamp = f" [snapshot {captured_at}]" if _ABSTAIN_STAMPED else ""
+    lines = [f"gcp-ground --hook: NOT DECIDED — {len(unverified)} claim(s) "
+             f"could not be judged (exit 0, nothing blocked)"]
+    lines.extend(f"  {_ABSTAIN_MARK} [{v.kind}] {v.message}{stamp}"
+                 for v in unverified)
+    return lines
 
 
 # -- --hook: the bash arm ------------------------------------------------------
