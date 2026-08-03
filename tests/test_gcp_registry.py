@@ -109,6 +109,9 @@ def _org_bad_expected():
     return [
         ("grounded", "constraint", "constraints/compute.disableSerialPortAccess"),
         ("contradicted", "constraint", "constraints/compute.disableSerialPortAccess"),
+        # gcp_grounding.org_checks IS part of this checkout, so its claim check
+        # runs — and abstains, because this snapshot captures no org policies.
+        ("unverified", "org_enforcement", "constraints/compute.disableSerialPortAccess"),
     ]
 
 
@@ -149,9 +152,11 @@ def _tf_full_expected():
     ("tf_plan_full", _tf_full_expected()),
 ])
 def test_no_providers_is_byte_identical(snap, name, expected):
-    # Nothing in the default PROVIDER_MODULES is part of this checkout, so the
-    # registry must contribute nothing at all.
-    assert registry.document_checks() == ()
+    # Of the default PROVIDER_MODULES only gcp_grounding.org_checks is part of
+    # this checkout, and it owns exactly one document check and one claim kind
+    # of its own — it must contribute nothing to any other kind, nor to the
+    # terraform extractors.
+    assert {f.__name__ for f in registry.document_checks()} <= {"check_org_estate"}
     assert registry.tf_extractors() == {}
     assert registry.claim_checks("role") == ()
     report = ground_policy(POLICIES / f"{name}.json", snap)
