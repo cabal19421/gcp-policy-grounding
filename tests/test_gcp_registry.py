@@ -38,6 +38,14 @@ POLICIES = FIXTURES / "policies"
 HAVE_Z3 = get_solver().backend == "z3"
 HAVE_TF = importlib.util.find_spec("gcp_grounding.tf_claims") is not None
 
+#: The terraform resource types the built-in ``tf_claims`` extractor owns. A
+#: provider module in this checkout (e.g. ``iam_deny``) may register its own
+#: domain TF extractor, but it must stay DISJOINT from these so it never shadows
+#: a built-in and the byte-identical fixtures below are unaffected.
+_BUILTIN_TF_TYPES = frozenset(
+    importlib.import_module("gcp_grounding.tf_claims")._EXTRACTORS
+) if HAVE_TF else frozenset()
+
 STUB = "gcp_grounding_stub_provider"
 
 CEL_GOOD = 'request.time < timestamp("2027-01-01T00:00:00Z")'
@@ -149,10 +157,12 @@ def _tf_full_expected():
     ("tf_plan_full", _tf_full_expected()),
 ])
 def test_no_providers_is_byte_identical(snap, name, expected):
-    # Nothing in the default PROVIDER_MODULES is part of this checkout, so the
-    # registry must contribute nothing at all.
+    # The default PROVIDER_MODULES that ARE part of this checkout contribute no
+    # document/role checks and no TF extractor that shadows a built-in, so the
+    # gate's behaviour on the four built-in-domain fixtures is byte-identical to
+    # before the seam existed.
     assert registry.document_checks() == ()
-    assert registry.tf_extractors() == {}
+    assert registry.tf_extractors().keys().isdisjoint(_BUILTIN_TF_TYPES)
     assert registry.claim_checks("role") == ()
     report = ground_policy(POLICIES / f"{name}.json", snap)
     got = sorted((v.status, v.kind, v.target) for v in report.verdicts)
