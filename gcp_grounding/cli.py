@@ -12,10 +12,13 @@ Exit codes carry the gate's honesty contract:
 - ``0`` — the gate passed: every claim grounded *or* was honestly
   ``unverified`` (fail-open — ignorance never fails the gate);
 - ``1`` — something is ungrounded or contradicted;
-- ``2`` — the invocation itself is unusable (bad flags, no snapshot), or, in
-  ``--hook`` mode, the gate found ungrounded/contradicted claims — ``2`` is
-  the Claude-Code blocking exit code, and the findings go to stderr so the
-  hook runner feeds them back to the agent.
+- ``2`` — a usage error in NORMAL mode (bad flags, no snapshot), or a real
+  ungrounded/contradicted finding in ``--hook`` mode — ``2`` is the
+  Claude-Code blocking exit code, and the findings go to stderr so the hook
+  runner feeds them back to the agent. In hook mode there is no such thing as
+  a usage error: an unusable invocation reports itself on stderr and exits 0,
+  because a misconfigured hook must degrade to checking nothing, never to
+  blocking everything.
 
 ``--snapshot`` falls back to the :data:`SNAPSHOT_ENV` environment variable —
 a hook or CI job configures the estate snapshot once instead of per call.
@@ -28,6 +31,35 @@ events, missing paths, non-policy files, an unavailable snapshot — exits 0:
 a broken hook setup must never block an edit. A raw ``.tf`` file is not
 ``terraform show -json`` output, so it lands in ``unverified`` via the
 preflight fail-open contract and passes, honestly unjudged.
+
+The hook is SCOPED, and the scope is the contract: it grounds events from
+any tool EXCEPT a curated read-only set (:data:`_READ_ONLY_TOOLS`), and it
+declines ``PreToolUse`` file events with an explanation on stderr instead of
+judging them. Two decisions, each with a reason.
+
+*Reading a policy is not changing one.* A ``Read`` of a bad policy used to
+exit 2, which blocks on a file the agent did not write; a guardrail that
+fires on inspection is the classic reason operators switch guardrails off.
+The exit-2 stderr is fed back to the agent as if it had just made that
+error, corrupting the block-then-retry loop; and it is trivially
+self-inflicted, since an agent asked to AUDIT policies cannot read them. The
+obvious counter-argument — that scoping opens a bypass — is answered by the
+*shape* of the fix: :data:`_READ_ONLY_TOOLS` is a DENY-list of read-only
+tools, never an ALLOW-list of mutators. An unknown ``tool_name``, an absent
+one, and every ``mcp__*`` tool all stay INSIDE the gate, so the change
+removes a false-positive class and cannot remove coverage.
+
+*A PreToolUse file event cannot be judged honestly.* ``ground_policy`` reads
+the file FROM DISK, and on ``PreToolUse`` the edit has not landed, so disk
+still holds the OLD content: grounding it would produce a verdict about the
+wrong document — a WRONG verdict, not merely a useless one. Abstaining out
+loud is the only honest option, and the stderr line names the path and tells
+the operator to register the hook on ``PostToolUse`` instead. ``PreToolUse``
+for a BASH command is the opposite case: there the mutation genuinely has
+not happened yet, which is precisely when you want to intervene, and it is
+handled by the bash arm, which runs before this check — a Bash event carries
+a ``command``, never a ``tool_input.file_path``, so this check returns
+"proceed" for it either way.
 
 ``--explain`` re-derives and dumps (to stderr, keeping stdout parseable for
 ``--format json``) the z3 constraints this run generated: the translated
@@ -51,7 +83,14 @@ from .claims import iam_policy_claims, org_policy_claims
 # Explain reuses the constraint layer's own encoders (private to the package,
 # not the world) — re-implementing the CEL translation here would let the
 # dumped formulas drift from the ones actually decided.
-from .constraints import UnsupportedCel, _CelToZ3, _grant_pairs, _Undecidable, _z3_module
+from .constraints import (
+    UnsupportedCel,
+    _CelToZ3,
+    _condition_formula,
+    _grant_pairs,
+    _Undecidable,
+    _z3_module,
+)
 from .core.log import get_logger
 from .core.solver import get_solver
 from .knowledge import GcpSnapshot
@@ -70,6 +109,30 @@ _FORMATS = {"text": "human", "json": "json"}
 
 #: File suffixes ``--hook`` treats as policy documents worth grounding.
 _HOOK_SUFFIXES = (".tf", ".json")
+
+#: Tools whose events ``--hook`` refuses to ground, because they change
+#: nothing: reading a policy is not proposing one.
+#:
+#: A DENY-list, deliberately — NOT an allow-list of mutating tools. An unknown
+#: ``tool_name`` (a new MCP writer, a tool this release has never heard of) is
+#: not on it, so it stays INSIDE the gate. That asymmetry is what makes the
+#: scoping safe: it can only ever remove false positives, never open a bypass.
+_READ_ONLY_TOOLS = frozenset({
+    "Read",
+    "NotebookRead",
+    "Glob",
+    "Grep",
+    "LS",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+    "TodoWrite",
+    "BashOutput",
+    "KillShell",
+    "ExitPlanMode",
+    "SlashCommand",
+    "AskUserQuestion",
+})
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -115,7 +178,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    try:
+        args = build_parser().parse_args(raw)
+    except SystemExit:
+        # argparse has already failed and exited, so there is no namespace to
+        # consult (no ``args.hook``) — the raw argv is all we have left. If it
+        # carries the literal ``--hook``, degrade to checking nothing (stderr +
+        # exit 0), because a misconfigured hook must fail open, never block
+        # every edit with a SystemExit(2). ``--help`` also exits 0 here, which
+        # is correct: argparse already printed the help text. Normal mode
+        # re-raises, keeping the usage-error exit 2.
+        if "--hook" in raw:
+            print("gcp-ground --hook: the hook command line is not usable — "
+                  "nothing was checked (fail-open)", file=sys.stderr)
+            return EXIT_OK
+        raise
     return args.handler(args)
 
 
@@ -126,7 +204,7 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
     if args.hook:
         if args.file is not None:
             return _usage("FILE and --hook are mutually exclusive — the hook "
-                          "event names the edited file")
+                          "event names the edited file", hook=True)
         return _run_hook(args)
     if args.file is None:
         return _usage("FILE is required (only --hook mode reads the file from "
@@ -143,7 +221,14 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
     return EXIT_OK if report.ok else EXIT_FAILED
 
 
-def _usage(problem: str) -> int:
+def _usage(problem: str, *, hook: bool = False) -> int:
+    if hook:
+        # Reuse the fail-open wording so operators see one phrase across the
+        # stdin, snapshot and argv arms — a hook usage error checks nothing and
+        # exits 0, never blocking the edit (see the exit-code docstring above).
+        print(f"gcp-ground --hook: {problem} — nothing was checked (fail-open)",
+              file=sys.stderr)
+        return EXIT_OK
     print(f"gcp-ground verify-policy: error: {problem}", file=sys.stderr)
     return EXIT_BLOCK
 
@@ -167,8 +252,24 @@ def _load_snapshot(flag: str | None) -> tuple[GcpSnapshot | None, str | None]:
 
 def _run_hook(args: argparse.Namespace) -> int:
     """Ground the file a PostToolUse event says was edited. Fail-open: only
-    a real ungrounded/contradicted finding exits nonzero."""
-    path = _hook_file_path(_read_hook_event(sys.stdin))
+    a real ungrounded/contradicted finding exits nonzero.
+
+    :func:`_hook_scope_skip` runs first and decides whether this event is in
+    scope at all — a read-only tool, or a ``PreToolUse`` file edit, never
+    reaches the grounding pass.
+    """
+    event = _read_hook_event(sys.stdin)
+    if event is None:
+        return EXIT_OK
+    skip = _hook_scope_skip(event)
+    if skip is not None:
+        if skip:
+            print(f"gcp-ground --hook: {skip}", file=sys.stderr)
+        else:
+            logger.debug("--hook: out of scope (tool_name=%r)",
+                         event.get("tool_name"))
+        return EXIT_OK
+    path = _hook_file_path(event)
     # casefold() mirrors the gate's case-insensitive suffix match: an edited
     # 'IAM.POLICY.JSON' is a policy document too.
     if path is None or not path.casefold().endswith(_HOOK_SUFFIXES):
@@ -202,6 +303,32 @@ def _read_hook_event(stream: Any) -> Mapping[str, Any] | None:
               f"object — nothing was checked (fail-open)", file=sys.stderr)
         return None
     return event
+
+
+def _hook_scope_skip(event: Mapping[str, Any]) -> str | None:
+    """Why this event must not be grounded, or ``None`` to proceed.
+
+    The empty string means "skip silently" (nothing happened that a guardrail
+    should have an opinion about); a non-empty string is the explanation to
+    print on stderr before skipping. See the module docstring for why the
+    scope is a deny-list and why ``PreToolUse`` file events are declined
+    rather than judged.
+    """
+    tool_name = event.get("tool_name")
+    if isinstance(tool_name, str) and tool_name in _READ_ONLY_TOOLS:
+        return ""  # a read is not a change — there is nothing to judge
+    if event.get("hook_event_name") == "PreToolUse":
+        path = _hook_file_path(event)
+        if path:
+            # The edit has not landed, so grounding the disk content would
+            # judge the wrong document. Abstain out loud, and say how to fix
+            # the registration.
+            return (f"PreToolUse for {path}: the edit has not landed yet, so "
+                    f"the file on disk is still the pre-edit content — "
+                    f"grounding it would judge the wrong document. Nothing "
+                    f"was checked; register this hook on PostToolUse to "
+                    f"ground the file the agent actually wrote.")
+    return None
 
 
 def _hook_file_path(event: Mapping[str, Any] | None) -> str | None:
@@ -265,14 +392,19 @@ def _explain_subset(z3: Any, doc: Mapping[str, Any], baseline: str) -> str:
         return f"  [subset] no constraint — {exc}"
     role = z3.String("role")
     member = z3.String("member")
+    cond_cache: dict = {}
 
-    def granted(pairs):
-        if not pairs:
+    def granted(grants):
+        if not grants:
             return z3.BoolVal(False)
-        return z3.Or([z3.And(role == z3.StringVal(r), member == z3.StringVal(m))
-                      for r, m in sorted(pairs)])
+        return z3.Or([z3.And(role == z3.StringVal(r), member == z3.StringVal(m),
+                             _condition_formula(z3, c, cond_cache))
+                      for r, m, c in sorted(grants, key=lambda t: (t[0], t[1], t[2] or ""))])
 
-    assertion = z3.And(granted(new_grants), z3.Not(granted(old_grants)))
+    try:
+        assertion = z3.And(granted(new_grants), z3.Not(granted(old_grants)))
+    except (UnsupportedCel, RecursionError) as exc:
+        return f"  [subset] no constraint — a condition is CEL outside the supported subset ({exc})"
     return f"  [subset] iam-policy: {assertion.sexpr()}"
 
 
