@@ -149,12 +149,16 @@ def _tf_full_expected():
     ("tf_plan_full", _tf_full_expected()),
 ])
 def test_no_providers_is_byte_identical(snap, name, expected):
-    # A domain provider module that is part of this checkout (e.g. armor_claims)
-    # may register tf_extractors, but it never shadows a built-in google resource
-    # type and none of these fixtures carry a domain resource — so the registry
+    # A domain provider module that is part of this checkout (e.g. armor_claims,
+    # armor_checks) may register tf_extractors and a DOCUMENT_CHECKS entry, but
+    # it never shadows a built-in google resource type and none of these
+    # fixtures carry a domain resource or a domain claim — so the registry
     # contributes nothing to *these* documents and the gate's behaviour stays
-    # byte-identical to before the seam existed.
-    assert registry.document_checks() == ()
+    # byte-identical to before the seam existed. That is exactly what the
+    # verdict comparison below asserts; a registered document check is only
+    # allowed to be one of this package's own domain modules.
+    assert all(getattr(fn, "__module__", "").startswith("gcp_grounding.")
+               for fn in registry.document_checks())
     assert registry.claim_checks("role") == ()
     from gcp_grounding.tf_claims import _EXTRACTORS
     assert set(registry.tf_extractors()) & set(_EXTRACTORS) == set()
