@@ -1,0 +1,12 @@
+{
+  "bindings": [
+    {
+      "members": [
+        "group:data-eng@acme.example"
+      ],
+      "role": "roles/bigquery.dataViewer"
+    }
+  ],
+  "etag": "BwYCb07Shrinking=",
+  "version": 1
+}

@@ -1,0 +1,28 @@
+{
+  "bindings": [
+    {
+      "condition": {
+        "description": "a tag lookup _CelToZ3 cannot represent",
+        "expression": "resource.matchTag('env','prod')",
+        "title": "prod-tagged only"
+      },
+      "members": [
+        "user:alice@acme.example"
+      ],
+      "role": "roles/storage.objectViewer"
+    },
+    {
+      "condition": {
+        "description": "a tag lookup _CelToZ3 cannot represent",
+        "expression": "resource.matchTag('env','prod')",
+        "title": "prod-tagged only"
+      },
+      "members": [
+        "user:bob@acme.example"
+      ],
+      "role": "roles/storage.admin"
+    }
+  ],
+  "etag": "BwYCa15bUntrans=",
+  "version": 3
+}
