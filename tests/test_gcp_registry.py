@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from gcp_grounding import preflight, registry
+from gcp_grounding import preflight, registry, tf_claims
 from gcp_grounding.claims import Claim, iam_policy_claims
 from gcp_grounding.core.report import Verdict
 from gcp_grounding.core.solver import get_solver
@@ -149,11 +149,13 @@ def _tf_full_expected():
     ("tf_plan_full", _tf_full_expected()),
 ])
 def test_no_providers_is_byte_identical(snap, name, expected):
-    # Nothing in the default PROVIDER_MODULES is part of this checkout, so the
-    # registry must contribute nothing at all.
+    # The registry adds no checks of its own and never shadows a builtin
+    # terraform resource type, so these fixture bundles — which use none of the
+    # VPC-SC resource types the vpcsc_claims provider contributes — ground
+    # byte-identically to before the seam existed.
     assert registry.document_checks() == ()
-    assert registry.tf_extractors() == {}
     assert registry.claim_checks("role") == ()
+    assert set(registry.tf_extractors()).isdisjoint(tf_claims._EXTRACTORS)
     report = ground_policy(POLICIES / f"{name}.json", snap)
     got = sorted((v.status, v.kind, v.target) for v in report.verdicts)
     assert got == sorted(expected)
