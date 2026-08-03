@@ -69,7 +69,7 @@ from __future__ import annotations
 import importlib
 from typing import Any, Callable, Iterable, Mapping
 
-from . import sec_ast, sec_encode, sec_rules, tf_claims
+from . import evidence, sec_ast, sec_encode, sec_rules, tf_claims
 from .core.log import get_logger
 from .knowledge import UNKNOWN
 from .sec_ast import CollectionSpec
@@ -532,14 +532,16 @@ def _perimeter_entries(module, collection: str, field: str, source: str,
 # -- registration -------------------------------------------------------------
 
 def _guarded(collection: str, fn: Callable) -> Callable:
-    """*fn* with the two honest failure channels wired up: an
-    :class:`_Undecidable` becomes the missing_reason verbatim, and any other
-    exception becomes a missing_reason naming the extractor — a crashing domain
-    module abstains, it never breaks the gate."""
+    """*fn* with the honest failure channels wired up: an :class:`_Undecidable`
+    becomes the missing_reason verbatim, an
+    :class:`gcp_grounding.evidence.NotEvaluated` — the shared typed abstain —
+    goes through the SAME channel, so a domain extractor may raise either, and
+    any other exception becomes a missing_reason naming the extractor: a crashing
+    domain module abstains, it never breaks the gate."""
     def extract(ctx):
         try:
             return fn(ctx)
-        except _Undecidable as exc:
+        except (_Undecidable, evidence.NotEvaluated) as exc:
             return (), str(exc)
         except Exception as exc:  # noqa: BLE001 - a broken domain must not crash
             logger.debug("the %s extractor failed (%s); the rule abstains",

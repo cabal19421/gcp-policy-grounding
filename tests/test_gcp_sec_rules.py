@@ -16,7 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from gcp_grounding import sec_artifact, sec_ast, sec_encode, sec_probes, sec_rules
+from gcp_grounding import (evidence, sec_artifact, sec_ast, sec_encode,
+                           sec_probes, sec_rules)
 from gcp_grounding.constraints import _z3_module
 from gcp_grounding.core.solver import get_solver
 from gcp_grounding.knowledge import GcpSnapshot
@@ -195,14 +196,52 @@ def test_polarity_mirror_flips_the_buckets():
     assert asserts.evaluate(bad).status == "grounded"
 
 
-def test_empty_bindings_forall_grounded_exists_contradicted():
+def test_empty_bindings_abstains_without_an_attestation():
+    """THE EVIDENCE FLOOR at the compiled-rule tier.
+
+    ``{"bindings": []}`` used to ground the forall VACUOUSLY: an empty instance
+    encodes to a trivially true formula, and "no records" read as agreement. The
+    built-in extractor returns no records and does not say whether it observed
+    emptiness or never looked, so ``_normalize_extraction`` forces a
+    missing_reason and the rule abstains. This is a re-pin to the ABSTAINING
+    expectation, not a relaxation of the guard — grounding over nothing is still
+    reachable, it now costs one explicit attestation (see the test below). The
+    per-domain task that teaches ``_iam_records`` ``observed_empty`` sharpens
+    this generic message into a precise one.
+    """
+    empty = ctx({"bindings": []}, "iam_policy")
+    forall_rule = rule(placeholder_promise("f", "assert_satisfiable", AST_VIEWER))
+    exists_rule = rule(placeholder_promise("e", "assert_satisfiable", AST_VIEWER_EXISTS))
+
+    # Both polarities abstain, in both worlds: the floor fires before z3 is
+    # consulted at all.
+    for r in (forall_rule, exists_rule):
+        v = r.evaluate(empty)
+        assert v.status == "unverified"
+        assert v.status != "grounded"
+        assert "iam_bindings" in v.message
+        assert "did not say whether" in v.message
+
+
+def test_attested_empty_collection_keeps_the_quantifier_semantics():
+    """The z3 semantics the abstention above no longer reaches, pinned through an
+    extractor that ATTESTS its emptiness: empty-forall is True, empty-exists is
+    False. The grounded verdict must also SAY how it knows the collection was
+    empty, so the attestation never travels silently."""
+    detail = "'bindings' is present and holds no bindings"
+    sec_rules.register_extractor(
+        "iam_bindings",
+        lambda c: evidence.observed_empty("the document under review", detail))
     empty = ctx({"bindings": []}, "iam_policy")
     forall_rule = rule(placeholder_promise("f", "assert_satisfiable", AST_VIEWER))
     exists_rule = rule(placeholder_promise("e", "assert_satisfiable", AST_VIEWER_EXISTS))
     if not HAVE_Z3:
         assert forall_rule.evaluate(empty).status == "unverified"
+        assert "z3 is not available" in forall_rule.evaluate(empty).message
         return
-    assert forall_rule.evaluate(empty).status == "grounded"      # empty-forall is True
+    v = forall_rule.evaluate(empty)
+    assert v.status == "grounded"                                # empty-forall is True
+    assert f"the document under review: {detail}" in v.message
     assert exists_rule.evaluate(empty).status == "contradicted"  # empty-exists is False
 
 
