@@ -1,0 +1,42 @@
+{
+  "format_version": "1.2",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_project_iam_member.etl_runner_job_user",
+          "mode": "managed",
+          "name": "etl_runner_job_user",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "type": "google_project_iam_member",
+          "values": {
+            "member": "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com",
+            "project": "acme-prod",
+            "role": "roles/bigquery.jobUser"
+          }
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "google_project_iam_member.etl_runner_job_user",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "after": {
+          "member": "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com",
+          "project": "acme-prod",
+          "role": "roles/bigquery.jobUser"
+        },
+        "before": null
+      },
+      "mode": "managed",
+      "name": "etl_runner_job_user",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "type": "google_project_iam_member"
+    }
+  ],
+  "terraform_version": "1.9.5"
+}

@@ -1,0 +1,10 @@
+{
+  "name": "projects/acme-prod/policies/compute.requireShieldedVm",
+  "spec": {
+    "rules": [
+      {
+        "enforce": true
+      }
+    ]
+  }
+}

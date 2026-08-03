@@ -1,0 +1,60 @@
+{
+  "format_version": "1.2",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_project_iam_custom_role.events_etl",
+          "mode": "managed",
+          "name": "events_etl",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "type": "google_project_iam_custom_role",
+          "values": {
+            "description": "Least-privilege role for the events-etl pipeline",
+            "permissions": [
+              "bigquery.jobs.create",
+              "bigquery.tables.get",
+              "bigquery.tables.getData",
+              "bigquery.tables.updateData",
+              "pubsub.subscriptions.consume",
+              "storage.objects.get"
+            ],
+            "project": "acme-prod",
+            "role_id": "eventsEtlRunner",
+            "stage": "GA",
+            "title": "Acme events-etl Runner"
+          }
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "google_project_iam_custom_role.events_etl",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "after": {
+          "permissions": [
+            "bigquery.jobs.create",
+            "bigquery.tables.get",
+            "bigquery.tables.getData",
+            "bigquery.tables.updateData",
+            "pubsub.subscriptions.consume",
+            "storage.objects.get"
+          ],
+          "project": "acme-prod",
+          "role_id": "eventsEtlRunner",
+          "title": "Acme events-etl Runner"
+        },
+        "before": null
+      },
+      "mode": "managed",
+      "name": "events_etl",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "type": "google_project_iam_custom_role"
+    }
+  ],
+  "terraform_version": "1.9.5"
+}

@@ -1,0 +1,76 @@
+{
+  "format_version": "1.2",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_compute_firewall.ingest_https",
+          "mode": "managed",
+          "name": "ingest_https",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "type": "google_compute_firewall",
+          "values": {
+            "allow": [
+              {
+                "ports": [
+                  "443"
+                ],
+                "protocol": "tcp"
+              }
+            ],
+            "direction": "INGRESS",
+            "disabled": false,
+            "name": "ingest-https",
+            "network": "acme-prod-vpc",
+            "priority": 1000,
+            "source_ranges": [
+              "10.0.0.0/8"
+            ],
+            "target_tags": [
+              "events-etl"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "google_compute_firewall.ingest_https",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "after": {
+          "direction": "INGRESS",
+          "name": "ingest-https",
+          "network": "acme-prod-vpc",
+          "priority": 1000,
+          "source_ranges": [
+            "10.0.0.0/8"
+          ],
+          "target_tags": [
+            "events-etl"
+          ]
+        },
+        "before": {
+          "direction": "INGRESS",
+          "name": "ingest-https",
+          "network": "acme-prod-vpc",
+          "priority": 1000,
+          "source_ranges": [
+            "0.0.0.0/0"
+          ],
+          "target_tags": [
+            "events-etl"
+          ]
+        }
+      },
+      "mode": "managed",
+      "name": "ingest_https",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "type": "google_compute_firewall"
+    }
+  ],
+  "terraform_version": "1.9.5"
+}
