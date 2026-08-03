@@ -6,11 +6,26 @@ and pytest fixtures cannot be used there. A fixture is evaluated per-test; a
 probe is a plain module-level ``bool`` decided once, at import.
 
 The domain probes (``HAVE_FIREWALL_DOMAIN`` … ``HAVE_ORG_ENFORCEMENT``) are the
-decoupling mechanism between this suite and the six-domain grounding work: each
-adversarial family's tests skip until the kind name it keys off appears in
-:data:`gcp_grounding.claims.KINDS` — the one mandatory edit point the domain
-tasks share — so this suite can land and stay green before any domain module
-exists.
+decoupling mechanism between this suite and the six-domain grounding work, and
+they are BEHAVIOURAL: each is a thin delegate to
+:func:`tests.agentic.capabilities.probe`, which runs the real gate over a
+known-bad input and a known-good near-twin and requires it to decide the first
+and stay quiet on the second. The names here are unchanged so no consumer
+breaks; the COMPUTATION behind them no longer asks whether a name is in a tuple.
+
+That change is the whole point. ``"firewall_rule" in claims.KINDS`` keeps
+answering True after the checker is deleted, after its ``DOCUMENT_CHECKS``
+tuple is emptied, after its verdict kind is renamed — every one of which leaves
+a family collecting greens from a gate that can no longer block. A probe that
+measures cannot be fooled that way, and a dead capability produces a LOUD SKIP
+carrying the report it actually measured.
+
+:func:`_module_available` survives for exactly one job: components with NO
+``ground_policy`` channel to measure (the sec-requirements compiler and the
+bash mutation scanner, which are reached through their own CLI entry points)
+and genuinely external optionality such as z3. Nothing else may use it —
+``tests/test_gcp_capabilities.py`` parses this file and pins the argument list,
+so a re-added presence check for a module under test goes red there.
 
 Every probe is computed inside a ``try``/``except`` and can never raise at
 import: a broken or absent dependency degrades a probe to ``False``, it does not
@@ -22,6 +37,8 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+
+from tests.agentic import capabilities
 
 # -- paths --------------------------------------------------------------------
 
@@ -45,7 +62,12 @@ ESTATE_CAPTURED_AT = "2026-07-25T08:00:00Z"
 def have_claim_kinds(*kinds: str) -> bool:
     """True when every name in *kinds* is a member of
     :data:`gcp_grounding.claims.KINDS`. Never raises: a missing or broken module
-    degrades to ``False``."""
+    degrades to ``False``.
+
+    A VOCABULARY QUESTION, and only that. No probe here keys off it any more:
+    the vocabulary carries a kind long before — and long after — anything can
+    decide it, which is exactly why the domain gates became behavioural. Assert
+    it in its own right where the vocabulary is the property under test."""
     try:
         from gcp_grounding.claims import KINDS
 
@@ -67,7 +89,14 @@ def merged_estate_document() -> dict:
 
 def _module_available(name: str) -> bool:
     """``find_spec(name) is not None``, folded into a bool that can never raise
-    at import (a missing *parent* package would otherwise raise)."""
+    at import (a missing *parent* package would otherwise raise).
+
+    ONLY for components whose evidence never reaches a
+    :class:`~gcp_grounding.core.report.GroundingReport`, and so cannot be
+    measured by :func:`tests.agentic.capabilities.probe`, plus genuinely
+    external optionality. Anything a check decides is probed behaviourally
+    instead — presence answers True for a gutted checker, which is how a
+    family collects greens from a gate that cannot block."""
     try:
         return importlib.util.find_spec(name) is not None
     except Exception:
@@ -86,34 +115,47 @@ try:
 except Exception:
     HAVE_Z3 = False
 
-HAVE_TF_CLAIMS = _module_available("gcp_grounding.tf_claims")
+# The sec-requirements compiler and the bash mutation scanner never reach
+# ``ground_policy``: their findings are produced by their own CLI entry points,
+# so there is no report for a capability probe to measure. These three are the
+# whole permitted residue of presence-checking, and the pin in
+# tests/test_gcp_capabilities.py stops it growing.
 HAVE_SEC_RULES = _module_available("gcp_grounding.sec_rules")
 HAVE_SEC_COMPILE = _module_available("gcp_grounding.sec_compile")
 HAVE_BASH_MUTATION = _module_available("gcp_grounding.bash_mutation")
 
-# -- domain probes (one per adversarial family) -------------------------------
+# -- behavioural probes (one per adversarial family) --------------------------
 #
-# Kind-only, because for each of these the kind name and its checker land in the
-# same task: the moment ``claims.KINDS`` carries the kind, a check can block.
-HAVE_FIREWALL_DOMAIN = have_claim_kinds("firewall_rule")
-HAVE_HIER_FIREWALL_DOMAIN = have_claim_kinds("firewall_policy_rule")
-HAVE_ARMOR_DOMAIN = have_claim_kinds("security_policy_rule")
-# ``perimeter_config`` — NOT ``perimeter`` — is the kind sx-vpcsc-claims emits.
-HAVE_VPCSC_DOMAIN = have_claim_kinds("perimeter_config")
-HAVE_PUBLIC_PRINCIPAL = have_claim_kinds("public_principal")
+# Each of these is the MEASUREMENT described in tests/agentic/capabilities.py:
+# the real gate decided a known-bad input on a kind this family owns, and left
+# the good near-twin alone. Deleting the module, emptying its check tuple,
+# renaming its verdict kind, dropping its claim kind or stamping every input
+# with the same answer all come out ``False`` here, with the measured report in
+# ``capabilities.probe(...).reason``.
+HAVE_TF_CLAIMS = capabilities.probe(capabilities.TF_CLAIMS).live
+HAVE_FIREWALL_DOMAIN = capabilities.probe(capabilities.FIREWALL).live
+HAVE_HIER_FIREWALL_DOMAIN = capabilities.probe(capabilities.HIER_FIREWALL).live
+HAVE_ARMOR_DOMAIN = capabilities.probe(capabilities.ARMOR).live
+HAVE_VPCSC_DOMAIN = capabilities.probe(capabilities.VPCSC).live
+HAVE_PUBLIC_PRINCIPAL = capabilities.probe(capabilities.PUBLIC_PRINCIPAL).live
 
-# The lone CONJUNCTION probe, and the comment says why: ``sx-claim-kinds`` adds
-# ``constraint_enforcement`` several tasks BEFORE ``sx-org-enforcement`` supplies
-# the ``org_checks`` checker. A kind-only probe would flip True while nothing can
-# yet block, turning sx-agentic-orgpolicy's A12 and A13 red for the wrong reason.
-# Requiring BOTH conjuncts keeps this False before sx-org-enforcement and True
-# after, at which point A12 and A13 really do block.
-HAVE_ORG_ENFORCEMENT = have_claim_kinds("constraint_enforcement") and _module_available(
-    "gcp_grounding.org_checks"
-)
+# Formerly the lone CONJUNCTION probe — ``have_claim_kinds`` AND a ``find_spec``
+# for ``gcp_grounding.org_checks`` — because the kind lands several tasks before
+# the checker that reads it, and a kind-only probe would flip True while nothing
+# could yet block. The conjunction was a workaround for a probe that measured
+# the wrong thing; the behavioural probe answers the real question directly, so
+# both conjuncts are gone.
+HAVE_ORG_ENFORCEMENT = capabilities.probe(capabilities.ORG_ENFORCEMENT).live
 
-# ``from_dict`` rejects unknown top-level keys today, so this stays False until
-# the domain knowledge work teaches it the new categories.
+# Whether ``from_dict`` accepts the overlay's domain categories (it rejects
+# unknown top-level keys today).
+#
+# NOT A DOMAIN GATE, and never again a conjunct on one. A snapshot category a
+# case needs belongs in that capability's OWN bad-input fixture — see
+# ``capabilities.estate_snapshot`` — so that a family whose fixture cannot be
+# built skips under its own name with its own measured reason, instead of under
+# a shared flag no reader can attribute to a family. Removing it from the gates
+# that still AND it in belongs to those families' tasks.
 try:
     from gcp_grounding.knowledge import GcpSnapshot as _GcpSnapshot
 

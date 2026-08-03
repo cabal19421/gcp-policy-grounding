@@ -11,7 +11,7 @@ import sys
 import pytest
 
 from gcp_grounding.knowledge import GcpSnapshot
-from tests.agentic import env
+from tests.agentic import capabilities, env
 from tests.agentic.budget import SubprocessBudget
 
 # Set the sec-llm env vars at *import* time (i.e. during collection). The
@@ -86,16 +86,54 @@ def test_capability_probes_are_plain_bools():
 
 
 def test_tf_claims_probe_reflects_this_checkout():
-    # tf_claims.py is part of this checkout, so the probe is True.
+    # Not "tf_claims.py is on disk" — the extractor really turned a planned
+    # google_project_iam_binding into a role claim the reasoner then found
+    # ungrounded, and left the good near-twin alone.
     assert env.HAVE_TF_CLAIMS is True
 
 
-def test_domain_probes_false_before_domains_land():
+def test_domain_probes_are_behavioural_not_kind_lookups():
+    """The domain probes MEASURE; they no longer look a name up in a tuple.
+
+    What this replaced was ``env.HAVE_X is ("kind" in KINDS)`` with ``HAVE_X``
+    DEFINED as that same membership test — ``X is X``, which cannot fail.
+    Measured: deleting the kind from the vocabulary left this module at 20
+    passed while every firewall family silently skipped. So the vocabulary fact
+    is restored as an assertion in its own right, and the probes are asserted
+    against what :func:`tests.agentic.capabilities.probe` measured through a
+    real ``ground_policy`` run, which does not consult the vocabulary at all.
+
+    ``is True`` for the two dead families is the merged world's value, not this
+    checkout's: no firewall or perimeter checker exists here, so the honest
+    measurement is ``False`` *with the report that produced it*. The ``is True``
+    anchors are the two capabilities this checkout really does decide — without
+    them "every probe is False" would satisfy every assertion below.
+    """
+    from gcp_grounding.claims import KINDS
+
+    # Restored: the vocabulary conjunct the probes no longer carry. Independent
+    # of the probes now, so removing a kind from KINDS goes red HERE.
     assert env.have_claim_kinds("firewall_rule") is False
-    assert env.HAVE_FIREWALL_DOMAIN is False
-    assert env.HAVE_VPCSC_DOMAIN is False
-    # The conjunction probe: neither the kind nor org_checks exists yet.
-    assert env.HAVE_ORG_ENFORCEMENT is False
+    assert "firewall_rule" not in KINDS
+    assert "perimeter_config" not in KINDS
+    assert "constraint_enforcement" not in KINDS
+
+    # Measured: nothing in this checkout decides a firewall or a perimeter, and
+    # each probe says so in the words of the report it actually got.
+    for name, cap in (("HAVE_FIREWALL_DOMAIN", capabilities.FIREWALL),
+                      ("HAVE_VPCSC_DOMAIN", capabilities.VPCSC),
+                      ("HAVE_ORG_ENFORCEMENT", capabilities.ORG_ENFORCEMENT)):
+        measured = capabilities.probe(cap)
+        assert getattr(env, name) is False, name
+        assert measured.live is False, name
+        assert cap.family in measured.reason, name
+        assert cap.name in measured.reason, name
+
+    # The probe machinery is not stuck at False: the same call on capabilities
+    # this checkout DOES decide measures live.
+    assert capabilities.probe(capabilities.IAM_EXISTENCE).live is True
+    assert capabilities.probe(capabilities.ORG_CONSTRAINT_VALUE).live is True
+
     assert env.HAVE_ESTATE_CATEGORY is False
 
 
