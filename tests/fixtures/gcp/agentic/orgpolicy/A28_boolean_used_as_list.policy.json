@@ -1,0 +1,15 @@
+{
+  "etag": "CNy0oO0GEPigxb8B",
+  "name": "projects/acme-prod/policies/iam.disableServiceAccountKeyCreation",
+  "spec": {
+    "rules": [
+      {
+        "values": {
+          "allowedValues": [
+            "ALLOW"
+          ]
+        }
+      }
+    ]
+  }
+}

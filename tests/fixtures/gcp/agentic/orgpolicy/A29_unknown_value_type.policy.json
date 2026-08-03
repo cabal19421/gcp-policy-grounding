@@ -1,0 +1,11 @@
+{
+  "etag": "CNy0oO0GEIjbxL8B",
+  "name": "projects/acme-prod/policies/compute.restrictProtocolForwardingCreationForTypes",
+  "spec": {
+    "rules": [
+      {
+        "enforce": true
+      }
+    ]
+  }
+}
