@@ -153,7 +153,11 @@ def test_no_providers_is_byte_identical(snap, name, expected):
     # its own google-provider resource types, but none of them matches the
     # iam / org resource types these fixtures use, so the registry contributes
     # nothing to *their* reports and the output stays byte-identical.
-    assert registry.document_checks() == ()
+    # hfw_checks likewise registers one whole-document check; it returns no
+    # verdicts for a document that makes no hierarchical-firewall claim, which
+    # is exactly what the byte-identical assertion below then proves.
+    assert {fn.__name__ for fn in registry.document_checks()} <= {
+        "check_hierarchical_order"}
     assert registry.claim_checks("role") == ()
     fixture_types = {"google_project_iam_binding", "google_project_iam_member",
                      "google_project_iam_policy", "google_project_iam_custom_role",
