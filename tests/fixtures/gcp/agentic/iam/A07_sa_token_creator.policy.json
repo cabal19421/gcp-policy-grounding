@@ -1,0 +1,12 @@
+{
+  "bindings": [
+    {
+      "members": [
+        "serviceAccount:ci-deployer@acme-prod.iam.gserviceaccount.com"
+      ],
+      "role": "roles/iam.serviceAccountTokenCreator"
+    }
+  ],
+  "etag": "BwYCa07TokenCr=",
+  "version": 1
+}

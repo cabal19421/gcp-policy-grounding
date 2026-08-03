@@ -1,0 +1,29 @@
+{
+  "format_version": "1.2",
+  "resource_changes": [
+    {
+      "address": "google_project_iam_custom_role.report_reader",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "after": {
+          "permissions": [
+            "bigquery.tables.get",
+            "bigquery.tables.list",
+            "logging.logEntries.list"
+          ],
+          "project": "acme-prod",
+          "role_id": "reportReader",
+          "title": "Report Reader"
+        },
+        "before": null
+      },
+      "mode": "managed",
+      "name": "report_reader",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "type": "google_project_iam_custom_role"
+    }
+  ],
+  "terraform_version": "1.9.5"
+}
