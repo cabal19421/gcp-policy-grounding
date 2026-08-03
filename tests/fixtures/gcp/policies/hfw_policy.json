@@ -1,0 +1,36 @@
+{
+  "kind": "compute#firewallPolicy",
+  "name": "organizations/1/locations/global/firewallPolicies/pol-hfw",
+  "shortName": "pol-hfw",
+  "parent": "organizations/1",
+  "rules": [
+    {
+      "priority": 100,
+      "action": "deny",
+      "direction": "INGRESS",
+      "disabled": false,
+      "match": {
+        "srcIpRanges": ["0.0.0.0/0"],
+        "destIpRanges": [],
+        "layer4Configs": [{"ipProtocol": "tcp", "ports": ["3389"]}]
+      },
+      "targetResources": ["vpc-main"],
+      "targetServiceAccounts": [],
+      "targetSecureTags": []
+    },
+    {
+      "priority": 500,
+      "action": "goto_next",
+      "direction": "INGRESS",
+      "disabled": false,
+      "match": {
+        "srcIpRanges": ["10.0.0.0/8"],
+        "destIpRanges": [],
+        "layer4Configs": []
+      },
+      "targetResources": [],
+      "targetServiceAccounts": [],
+      "targetSecureTags": []
+    }
+  ]
+}

@@ -149,11 +149,16 @@ def _tf_full_expected():
     ("tf_plan_full", _tf_full_expected()),
 ])
 def test_no_providers_is_byte_identical(snap, name, expected):
-    # Nothing in the default PROVIDER_MODULES is part of this checkout, so the
-    # registry must contribute nothing at all.
+    # A landed domain module (here hfw_claims) may register tf extractors for
+    # its own google-provider resource types, but none of them matches the
+    # iam / org resource types these fixtures use, so the registry contributes
+    # nothing to *their* reports and the output stays byte-identical.
     assert registry.document_checks() == ()
-    assert registry.tf_extractors() == {}
     assert registry.claim_checks("role") == ()
+    fixture_types = {"google_project_iam_binding", "google_project_iam_member",
+                     "google_project_iam_policy", "google_project_iam_custom_role",
+                     "google_org_policy_policy"}
+    assert fixture_types.isdisjoint(registry.tf_extractors())
     report = ground_policy(POLICIES / f"{name}.json", snap)
     got = sorted((v.status, v.kind, v.target) for v in report.verdicts)
     assert got == sorted(expected)
