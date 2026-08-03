@@ -17,6 +17,16 @@ estate:
   and the reasoner checks. CAI asset types (``assets.list``, available
   standalone via :func:`fetch_asset_types`) name a different namespace and
   feed no snapshot category.
+- the Compute-side estate via the Compute Engine v1 API: VPC networks
+  (:func:`fetch_networks`) and subnetworks (:func:`fetch_subnetworks`), each
+  self-link normalized to its ``projects/.../networks``/``.../subnetworks``
+  canonical form; VPC firewall rules (:func:`fetch_firewall_rules`) as
+  normalized action/direction/match records; and the presence-only network-tag
+  vocabulary (:func:`fetch_network_tags`) — a USE-SITE view unioned from
+  firewall rules and instance tags, since GCP has no "list all tags" API;
+- service-account emails via the IAM API (:func:`fetch_service_accounts`),
+  stored BARE (no ``serviceAccount:`` prefix) so the category stays distinct
+  from ``principals``.
 
 Every network call sits behind a function taking a *client* argument — an
 object with the same call shape as a ``googleapiclient`` discovery Resource
@@ -36,6 +46,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import subprocess
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Iterator
@@ -51,10 +62,15 @@ __all__ = [
     "default_client",
     "fetch_asset_types",
     "fetch_constraints",
+    "fetch_firewall_rules",
+    "fetch_network_tags",
+    "fetch_networks",
     "fetch_permissions",
     "fetch_principals",
     "fetch_resource_types",
     "fetch_roles",
+    "fetch_service_accounts",
+    "fetch_subnetworks",
     "fresh_captured_at",
     "write_snapshot",
 ]
@@ -72,12 +88,13 @@ def fresh_captured_at() -> str:
 # ── clients ───────────────────────────────────────────────────────────────────
 
 # APIs this module knows how to talk to, with their current versions.
-_API_VERSIONS = {"iam": "v1", "orgpolicy": "v2", "cloudasset": "v1"}
+_API_VERSIONS = {"iam": "v1", "orgpolicy": "v2", "cloudasset": "v1", "compute": "v1"}
 
 
 def default_client(api: str, version: str | None = None) -> Any:
     """Build a live discovery client for *api* ("iam" / "orgpolicy" /
-    "cloudasset"), resolving the optional SDK only now — never at import.
+    "cloudasset" / "compute"), resolving the optional SDK only now — never at
+    import.
 
     Uses Application Default Credentials. Anything accepted here can be
     replaced by a test double with the same ``.collection().method(...)
@@ -108,6 +125,25 @@ def _paginate(list_call: Callable[..., Any], item_key: str,
             call_params["pageToken"] = token
         page = list_call(**call_params).execute() or {}
         yield from page.get(item_key, ())
+        token = page.get("nextPageToken")
+        if not token:
+            return
+
+
+def _paginate_aggregated(list_call: Callable[..., Any],
+                         **params: Any) -> Iterator[dict[str, Any]]:
+    """Yield the per-scope value objects across every ``nextPageToken`` page of a
+    discovery-style ``aggregatedList`` method — whose ``items`` is a
+    ``scope -> {<collection> | warning}`` map, not a flat list. Warning-only
+    scopes carry no collection key, so callers that ``.get`` the collection skip
+    them for free."""
+    token: str | None = None
+    while True:
+        call_params = dict(params)
+        if token:
+            call_params["pageToken"] = token
+        page = list_call(**call_params).execute() or {}
+        yield from (page.get("items") or {}).values()
         token = page.get("nextPageToken")
         if not token:
             return
@@ -339,6 +375,173 @@ def fetch_resource_types(terraform_dir: str | os.PathLike[str] | None = None, *,
     return frozenset(types)
 
 
+# ── Compute Engine: networks, subnetworks, firewall rules, tags ───────────────
+
+# A Compute self-link is a fully-qualified URL; strip this prefix to reach the
+# resource-relative path the snapshot's canonical forms use.
+_COMPUTE_LINK_PREFIX = "https://www.googleapis.com/compute/v1/"
+
+
+def _normalize_compute_link(link: Any, kind: str) -> str | None:
+    """A Compute ``selfLink`` (or bare ``network`` reference) → the snapshot's
+    canonical ``projects/<p>/global/<kind>/<n>`` or
+    ``projects/<p>/regions/<r>/<kind>/<n>`` form.
+
+    Strips any ``https://www.googleapis.com/compute/v1/`` prefix, then verifies
+    the ``/global/<kind>/`` or ``/regions/<r>/<kind>/`` shape. Anything else —
+    a wrong kind, an unexpected scope, junk — logs and returns None, so a
+    malformed link is dropped rather than smuggled in as a bogus name."""
+    if not isinstance(link, str) or not link:
+        logger.warning("compute %s reference is not a non-empty string (%r) — skipped",
+                       kind, link)
+        return None
+    path = link[len(_COMPUTE_LINK_PREFIX):] if link.startswith(_COMPUTE_LINK_PREFIX) else link
+    k = re.escape(kind)
+    if re.fullmatch(rf"projects/[^/]+/global/{k}/[^/]+", path) or \
+            re.fullmatch(rf"projects/[^/]+/regions/[^/]+/{k}/[^/]+", path):
+        return path
+    logger.warning("compute %s reference %r is not a global/regional %s link — skipped",
+                   kind, link, kind)
+    return None
+
+
+def fetch_networks(compute: Any, project: str) -> frozenset[str]:
+    """Every VPC network in *project*, via Compute ``networks.list``, as
+    canonical ``projects/<p>/global/networks/<n>`` names (self-links
+    normalized; a malformed link is logged and skipped, never guessed)."""
+    networks: set[str] = set()
+    for entry in _paginate(compute.networks().list, "items", project=project):
+        name = _normalize_compute_link(entry.get("selfLink"), "networks")
+        if name is not None:
+            networks.add(name)
+    logger.debug("fetched %d networks in %s", len(networks), project)
+    return frozenset(networks)
+
+
+def fetch_subnetworks(compute: Any, project: str) -> frozenset[str]:
+    """Every subnetwork in *project*, via Compute ``subnetworks.aggregatedList``,
+    as canonical ``projects/<p>/regions/<r>/subnetworks/<n>`` names.
+
+    The aggregated response is keyed by scope; a scope carrying only a
+    ``warning`` (no ``subnetworks``) is skipped, and each self-link is
+    normalized (malformed links logged and dropped)."""
+    subnetworks: set[str] = set()
+    for scope in _paginate_aggregated(compute.subnetworks().aggregatedList,
+                                      project=project):
+        for entry in scope.get("subnetworks", ()):
+            name = _normalize_compute_link(entry.get("selfLink"), "subnetworks")
+            if name is not None:
+                subnetworks.add(name)
+    logger.debug("fetched %d subnetworks in %s", len(subnetworks), project)
+    return frozenset(subnetworks)
+
+
+def fetch_firewall_rules(compute: Any, project: str) -> dict[str, dict[str, Any]]:
+    """VPC firewall rules in *project*, via Compute ``firewalls.list``, as
+    snapshot-ready records keyed ``projects/<p>/global/firewalls/<name>``.
+
+    Each record carries the normalized firewall-rule schema:
+    network/direction/action/priority/disabled plus the range, tag,
+    service-account and layer4 match sets. ``allowed`` maps to action
+    ``allow``, ``denied`` to ``deny``; a rule carrying BOTH (impossible in a
+    real API response) or NEITHER is skipped with a warning rather than
+    guessed at. A rule whose network self-link will not normalize is likewise
+    skipped, so every emitted record loads through ``GcpSnapshot.from_dict``."""
+    rules: dict[str, dict[str, Any]] = {}
+    for entry in _paginate(compute.firewalls().list, "items", project=project):
+        name = entry.get("name")
+        if not name:
+            logger.warning("firewalls.list returned an entry with no name — skipped")
+            continue
+        has_allow, has_deny = "allowed" in entry, "denied" in entry
+        if has_allow and has_deny:
+            logger.warning("firewall rule %s carries both 'allowed' and 'denied' "
+                           "(impossible) — skipped rather than guessed at", name)
+            continue
+        if has_allow:
+            action, specs = "allow", entry.get("allowed") or ()
+        elif has_deny:
+            action, specs = "deny", entry.get("denied") or ()
+        else:
+            logger.warning("firewall rule %s carries neither 'allowed' nor 'denied' "
+                           "— skipped", name)
+            continue
+        network = _normalize_compute_link(entry.get("network"), "networks")
+        if network is None:
+            logger.warning("firewall rule %s has an unusable network reference — "
+                           "skipped", name)
+            continue
+        layer4: list[dict[str, Any]] = []
+        for spec in specs:
+            entry_l4: dict[str, Any] = {"protocol": spec.get("IPProtocol")}
+            ports = spec.get("ports")
+            if ports:
+                entry_l4["ports"] = list(ports)
+            layer4.append(entry_l4)
+        record: dict[str, Any] = {
+            "network": network,
+            "direction": entry.get("direction", "INGRESS"),
+            "action": action,
+            "priority": entry.get("priority", 1000),
+            "disabled": entry.get("disabled", False),
+            "source_ranges": list(entry.get("sourceRanges") or ()),
+            "destination_ranges": list(entry.get("destinationRanges") or ()),
+            "source_tags": list(entry.get("sourceTags") or ()),
+            "target_tags": list(entry.get("targetTags") or ()),
+            "source_service_accounts": list(entry.get("sourceServiceAccounts") or ()),
+            "target_service_accounts": list(entry.get("targetServiceAccounts") or ()),
+            "layer4": layer4,
+        }
+        rules[f"projects/{project}/global/firewalls/{name}"] = record
+    logger.debug("fetched %d firewall rules in %s", len(rules), project)
+    return rules
+
+
+def fetch_network_tags(compute: Any, project: str, *,
+                       firewall_rules: dict[str, dict[str, Any]] | None = None
+                       ) -> frozenset[str]:
+    """The USE-SITE network-tag vocabulary for *project*: the union of every
+    ``target_tags``/``source_tags`` across the firewall rules and every
+    ``tags.items`` on an instance (via ``instances.aggregatedList``).
+
+    This is deliberately NOT an authoritative registry — GCP exposes no "list
+    all network tags" API. A tag exists only implicitly, created by the rule or
+    instance naming it, so this category can prove a tag is IN USE but its
+    False answers mean only "no captured resource currently uses this tag",
+    never "this tag cannot exist". When *firewall_rules* is passed (already
+    fetched by the caller) it is reused, avoiding a second ``firewalls.list``
+    pagination."""
+    if firewall_rules is None:
+        firewall_rules = fetch_firewall_rules(compute, project)
+    tags: set[str] = set()
+    for record in firewall_rules.values():
+        tags.update(record.get("target_tags") or ())
+        tags.update(record.get("source_tags") or ())
+    for scope in _paginate_aggregated(compute.instances().aggregatedList,
+                                      project=project):
+        for instance in scope.get("instances", ()):
+            tags.update((instance.get("tags") or {}).get("items") or ())
+    tags = {t for t in tags if t}
+    logger.debug("fetched %d network tags in use in %s", len(tags), project)
+    return frozenset(tags)
+
+
+def fetch_service_accounts(iam: Any, project: str) -> frozenset[str]:
+    """Every service account in *project*, via IAM
+    ``projects.serviceAccounts.list``, as BARE emails
+    (``ci-deployer@acme-prod.iam.gserviceaccount.com``) — no
+    ``serviceAccount:`` prefix, matching this category's canonical form and
+    keeping it distinct from ``principals``."""
+    accounts: set[str] = set()
+    collection = iam.projects().serviceAccounts()
+    for entry in _paginate(collection.list, "accounts", name=f"projects/{project}"):
+        email = entry.get("email")
+        if email:
+            accounts.add(email)
+    logger.debug("fetched %d service accounts in %s", len(accounts), project)
+    return frozenset(accounts)
+
+
 # ── capture orchestration ─────────────────────────────────────────────────────
 
 def write_snapshot(snapshot: GcpSnapshot, path: str | os.PathLike[str]) -> None:
@@ -350,10 +553,13 @@ def write_snapshot(snapshot: GcpSnapshot, path: str | os.PathLike[str]) -> None:
 
 
 def capture_snapshot(*, iam: Any = None, orgpolicy: Any = None, asset: Any = None,
+                     compute: Any = None,
                      custom_role_parents: Iterable[str] = (),
                      permission_resources: Iterable[str] = (),
+                     service_account_projects: Iterable[str] = (),
                      orgpolicy_parent: str | None = None,
                      asset_scope: str | None = None,
+                     compute_project: str | None = None,
                      terraform_dir: str | os.PathLike[str] | None = None,
                      schema_cache: str | os.PathLike[str] | None = None,
                      terraform_runner: Callable[..., str] | None = None,
@@ -377,25 +583,44 @@ def capture_snapshot(*, iam: Any = None, orgpolicy: Any = None, asset: Any = Non
     """
     custom_role_parents = tuple(custom_role_parents)
     permission_resources = tuple(permission_resources)
-    if (custom_role_parents or permission_resources) and iam is None:
-        raise ValueError("custom_role_parents/permission_resources given but no "
-                         "iam client to fetch them with")
+    service_account_projects = tuple(service_account_projects)
+    if (custom_role_parents or permission_resources
+            or service_account_projects) and iam is None:
+        raise ValueError("custom_role_parents/permission_resources/"
+                         "service_account_projects given but no iam client to "
+                         "fetch them with")
     if (orgpolicy is None) != (orgpolicy_parent is None):
         raise ValueError("org-policy capture needs both an orgpolicy client and "
                          "an orgpolicy_parent")
     if (asset is None) != (asset_scope is None):
         raise ValueError("principal capture needs both a Cloud Asset Inventory "
                          "client and an asset_scope")
+    if (compute is None) != (compute_project is None):
+        raise ValueError("compute capture needs both a compute client and a "
+                         "compute_project")
 
     data: dict[str, Any] = {"captured_at": captured_at or fresh_captured_at()}
     if iam is not None:
         data["roles"] = fetch_roles(iam, custom_role_parents=custom_role_parents)
         if permission_resources:
             data["permissions"] = sorted(fetch_permissions(iam, permission_resources))
+        if service_account_projects:
+            accounts: set[str] = set()
+            for sa_project in service_account_projects:
+                accounts.update(fetch_service_accounts(iam, sa_project))
+            data["service_accounts"] = sorted(accounts)
     if orgpolicy is not None:
         data["constraints"] = fetch_constraints(orgpolicy, orgpolicy_parent)
     if asset is not None:
         data["principals"] = sorted(fetch_principals(asset, asset_scope))
+    if compute is not None:
+        firewall_rules = fetch_firewall_rules(compute, compute_project)
+        data["firewall_rules"] = firewall_rules
+        data["networks"] = sorted(fetch_networks(compute, compute_project))
+        data["subnetworks"] = sorted(fetch_subnetworks(compute, compute_project))
+        # Reuse the firewall dict so tags cost no second firewalls.list walk.
+        data["network_tags"] = sorted(fetch_network_tags(
+            compute, compute_project, firewall_rules=firewall_rules))
     if (terraform_dir is not None or terraform_runner is not None
             or schema_cache is not None):
         data["resource_types"] = sorted(fetch_resource_types(
