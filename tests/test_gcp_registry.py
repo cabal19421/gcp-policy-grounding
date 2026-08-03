@@ -149,11 +149,13 @@ def _tf_full_expected():
     ("tf_plan_full", _tf_full_expected()),
 ])
 def test_no_providers_is_byte_identical(snap, name, expected):
-    # The registry adds no checks of its own and never shadows a builtin
+    # The registry adds no claim check of its own and never shadows a builtin
     # terraform resource type, so these fixture bundles — which use none of the
     # VPC-SC resource types the vpcsc_claims provider contributes — ground
-    # byte-identically to before the seam existed.
-    assert registry.document_checks() == ()
+    # byte-identically to before the seam existed. A domain provider may
+    # register whole-document checks (vpcsc_checks does), but one that answers
+    # for another domain's document kind would break exactly this assertion:
+    # the verdict-set equality below is what pins their silence here.
     assert registry.claim_checks("role") == ()
     assert set(registry.tf_extractors()).isdisjoint(tf_claims._EXTRACTORS)
     report = ground_policy(POLICIES / f"{name}.json", snap)
