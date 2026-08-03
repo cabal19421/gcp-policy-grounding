@@ -1,0 +1,678 @@
+{
+  "captured_at": "2026-07-25T08:00:00Z",
+  "constraints": {
+    "constraints/compute.disableSerialPortAccess": {
+      "description": "Disable VM serial port access",
+      "value_type": "boolean"
+    },
+    "constraints/compute.requireShieldedVm": {
+      "description": "Shielded VMs",
+      "value_type": "boolean"
+    },
+    "constraints/compute.restrictProtocolForwardingCreationForTypes": {
+      "description": "Restrict protocol forwarding based on type of IP address",
+      "value_type": "unknown"
+    },
+    "constraints/compute.restrictVpcPeering": {
+      "description": "Restrict VPC peering usage",
+      "value_type": "list"
+    },
+    "constraints/compute.vmExternalIpAccess": {
+      "description": "Define allowed external IPs for VM instances",
+      "value_type": "list"
+    },
+    "constraints/iam.allowedPolicyMemberDomains": {
+      "description": "Domain restricted sharing",
+      "value_type": "list"
+    },
+    "constraints/iam.automaticIamGrantsForDefaultServiceAccounts": {
+      "description": "Disable automatic IAM grants for default service accounts",
+      "value_type": "boolean"
+    },
+    "constraints/iam.disableServiceAccountKeyCreation": {
+      "description": "Disable service account key creation",
+      "value_type": "boolean"
+    },
+    "constraints/iam.disableServiceAccountKeyUpload": {
+      "description": "Disable service account key upload",
+      "value_type": "boolean"
+    },
+    "constraints/sql.restrictPublicIp": {
+      "description": "Restrict public IP access on Cloud SQL instances",
+      "value_type": "boolean"
+    },
+    "constraints/storage.publicAccessPrevention": {
+      "description": "Enforce public access prevention",
+      "value_type": "boolean"
+    }
+  },
+  "permissions": [
+    "accesscontextmanager.accessLevels.get",
+    "accesscontextmanager.accessLevels.update",
+    "accesscontextmanager.policies.create",
+    "accesscontextmanager.policies.delete",
+    "accesscontextmanager.policies.update",
+    "accesscontextmanager.servicePerimeters.get",
+    "accesscontextmanager.servicePerimeters.update",
+    "bigquery.datasets.create",
+    "bigquery.datasets.delete",
+    "bigquery.datasets.get",
+    "bigquery.jobs.create",
+    "bigquery.tables.create",
+    "bigquery.tables.delete",
+    "bigquery.tables.get",
+    "bigquery.tables.getData",
+    "bigquery.tables.list",
+    "bigquery.tables.updateData",
+    "cloudkms.cryptoKeyVersions.useToDecrypt",
+    "cloudkms.cryptoKeyVersions.useToEncrypt",
+    "cloudkms.cryptoKeys.create",
+    "cloudkms.cryptoKeys.get",
+    "cloudkms.cryptoKeys.list",
+    "cloudkms.keyRings.create",
+    "cloudkms.keyRings.get",
+    "compute.backendServices.create",
+    "compute.backendServices.update",
+    "compute.firewalls.create",
+    "compute.firewalls.delete",
+    "compute.firewalls.get",
+    "compute.firewalls.list",
+    "compute.firewalls.update",
+    "compute.globalForwardingRules.create",
+    "compute.instances.create",
+    "compute.instances.delete",
+    "compute.instances.get",
+    "compute.instances.list",
+    "compute.instances.setMetadata",
+    "compute.networks.get",
+    "compute.networks.list",
+    "compute.networks.updatePolicy",
+    "compute.securityPolicies.create",
+    "compute.securityPolicies.get",
+    "compute.securityPolicies.list",
+    "compute.securityPolicies.update",
+    "compute.subnetworks.get",
+    "compute.subnetworks.list",
+    "compute.targetHttpsProxies.create",
+    "iam.roles.create",
+    "iam.roles.delete",
+    "iam.roles.get",
+    "iam.roles.list",
+    "iam.roles.update",
+    "iam.serviceAccountKeys.create",
+    "iam.serviceAccountKeys.delete",
+    "iam.serviceAccountKeys.get",
+    "iam.serviceAccountKeys.list",
+    "iam.serviceAccounts.actAs",
+    "iam.serviceAccounts.create",
+    "iam.serviceAccounts.delete",
+    "iam.serviceAccounts.get",
+    "iam.serviceAccounts.getAccessToken",
+    "iam.serviceAccounts.getOpenIdToken",
+    "iam.serviceAccounts.implicitDelegation",
+    "iam.serviceAccounts.list",
+    "iam.serviceAccounts.setIamPolicy",
+    "iam.serviceAccounts.signBlob",
+    "iam.serviceAccounts.signJwt",
+    "iam.serviceAccounts.update",
+    "logging.logEntries.list",
+    "logging.logServices.list",
+    "logging.logs.list",
+    "logging.privateLogEntries.list",
+    "monitoring.metricDescriptors.get",
+    "monitoring.metricDescriptors.list",
+    "monitoring.timeSeries.list",
+    "orgpolicy.constraints.list",
+    "orgpolicy.policies.list",
+    "orgpolicy.policies.update",
+    "orgpolicy.policy.set",
+    "pubsub.subscriptions.consume",
+    "pubsub.subscriptions.get",
+    "pubsub.topics.publish",
+    "resourcemanager.folders.create",
+    "resourcemanager.folders.get",
+    "resourcemanager.folders.setIamPolicy",
+    "resourcemanager.folders.update",
+    "resourcemanager.organizations.get",
+    "resourcemanager.organizations.getIamPolicy",
+    "resourcemanager.organizations.setIamPolicy",
+    "resourcemanager.projects.get",
+    "resourcemanager.projects.getIamPolicy",
+    "resourcemanager.projects.setIamPolicy",
+    "secretmanager.secrets.create",
+    "secretmanager.secrets.delete",
+    "secretmanager.secrets.get",
+    "secretmanager.secrets.list",
+    "secretmanager.versions.access",
+    "secretmanager.versions.add",
+    "serviceusage.services.disable",
+    "serviceusage.services.enable",
+    "serviceusage.services.get",
+    "serviceusage.services.list",
+    "storage.buckets.create",
+    "storage.buckets.delete",
+    "storage.buckets.get",
+    "storage.buckets.list",
+    "storage.buckets.setIamPolicy",
+    "storage.objects.create",
+    "storage.objects.delete",
+    "storage.objects.get",
+    "storage.objects.list"
+  ],
+  "principals": [
+    "domain:acme.example",
+    "group:data-eng@acme.example",
+    "group:platform-sre@acme.example",
+    "group:security@acme.example",
+    "serviceAccount:app-frontend@acme-prod.iam.gserviceaccount.com",
+    "serviceAccount:break-glass@acme-prod.iam.gserviceaccount.com",
+    "serviceAccount:ci-deployer@acme-prod.iam.gserviceaccount.com",
+    "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com",
+    "serviceAccount:terraform@acme-prod.iam.gserviceaccount.com",
+    "user:alice@acme.example",
+    "user:bob@acme.example",
+    "user:carol@acme.example"
+  ],
+  "resource_types": [
+    "google_access_context_manager_access_level",
+    "google_access_context_manager_access_policy",
+    "google_access_context_manager_service_perimeter",
+    "google_access_context_manager_service_perimeter_resource",
+    "google_bigquery_dataset",
+    "google_bigquery_dataset_iam_member",
+    "google_compute_backend_service",
+    "google_compute_firewall",
+    "google_compute_firewall_policy",
+    "google_compute_firewall_policy_association",
+    "google_compute_firewall_policy_rule",
+    "google_compute_global_forwarding_rule",
+    "google_compute_network",
+    "google_compute_network_firewall_policy",
+    "google_compute_network_firewall_policy_rule",
+    "google_compute_security_policy",
+    "google_compute_security_policy_rule",
+    "google_compute_subnetwork",
+    "google_compute_target_https_proxy",
+    "google_folder_iam_binding",
+    "google_folder_iam_member",
+    "google_org_policy_custom_constraint",
+    "google_org_policy_policy",
+    "google_organization_iam_binding",
+    "google_organization_iam_member",
+    "google_project_iam_binding",
+    "google_project_iam_custom_role",
+    "google_project_iam_member",
+    "google_project_iam_policy",
+    "google_service_account",
+    "google_service_account_iam_binding",
+    "google_service_account_iam_member",
+    "google_service_account_key",
+    "google_storage_bucket",
+    "google_storage_bucket_iam_binding",
+    "google_storage_bucket_iam_member"
+  ],
+  "roles": {
+    "organizations/123456789012/roles/breakGlassAuditor": {
+      "included_permissions": [
+        "iam.roles.get",
+        "logging.logEntries.list",
+        "logging.privateLogEntries.list",
+        "resourcemanager.projects.getIamPolicy"
+      ],
+      "stage": "GA",
+      "title": "Acme Break-Glass Auditor"
+    },
+    "projects/acme-prod/roles/ciDeployer": {
+      "included_permissions": [
+        "compute.instances.get",
+        "compute.instances.setMetadata",
+        "storage.objects.create",
+        "storage.objects.get"
+      ],
+      "stage": "GA",
+      "title": "Acme CI Deployer"
+    },
+    "projects/acme-prod/roles/dataPipelineRunner": {
+      "included_permissions": [
+        "bigquery.jobs.create",
+        "bigquery.tables.get",
+        "bigquery.tables.getData",
+        "pubsub.topics.publish",
+        "storage.objects.get"
+      ],
+      "stage": "GA",
+      "title": "Acme Data Pipeline Runner"
+    },
+    "roles/accesscontextmanager.policyAdmin": {
+      "included_permissions": [
+        "accesscontextmanager.accessLevels.update",
+        "accesscontextmanager.policies.create",
+        "accesscontextmanager.policies.delete",
+        "accesscontextmanager.policies.update",
+        "accesscontextmanager.servicePerimeters.update"
+      ],
+      "stage": "GA",
+      "title": "Access Context Manager Admin"
+    },
+    "roles/accesscontextmanager.policyEditor": {
+      "included_permissions": [
+        "accesscontextmanager.accessLevels.get",
+        "accesscontextmanager.accessLevels.update",
+        "accesscontextmanager.servicePerimeters.get",
+        "accesscontextmanager.servicePerimeters.update"
+      ],
+      "stage": "GA",
+      "title": "Access Context Manager Editor"
+    },
+    "roles/bigquery.admin": {
+      "included_permissions": [
+        "bigquery.datasets.create",
+        "bigquery.datasets.delete",
+        "bigquery.datasets.get",
+        "bigquery.jobs.create",
+        "bigquery.tables.create",
+        "bigquery.tables.delete",
+        "bigquery.tables.get",
+        "bigquery.tables.getData",
+        "bigquery.tables.list"
+      ],
+      "stage": "GA",
+      "title": "BigQuery Admin"
+    },
+    "roles/bigquery.dataEditor": {
+      "included_permissions": [
+        "bigquery.datasets.get",
+        "bigquery.tables.create",
+        "bigquery.tables.delete",
+        "bigquery.tables.get",
+        "bigquery.tables.getData",
+        "bigquery.tables.list",
+        "bigquery.tables.updateData"
+      ],
+      "stage": "GA",
+      "title": "BigQuery Data Editor"
+    },
+    "roles/bigquery.dataViewer": {
+      "included_permissions": [
+        "bigquery.datasets.get",
+        "bigquery.tables.get",
+        "bigquery.tables.getData",
+        "bigquery.tables.list"
+      ],
+      "stage": "GA",
+      "title": "BigQuery Data Viewer"
+    },
+    "roles/bigquery.jobUser": {
+      "included_permissions": [
+        "bigquery.jobs.create"
+      ],
+      "stage": "GA",
+      "title": "BigQuery Job User"
+    },
+    "roles/cloudkms.admin": {
+      "included_permissions": [
+        "cloudkms.cryptoKeys.create",
+        "cloudkms.cryptoKeys.get",
+        "cloudkms.cryptoKeys.list",
+        "cloudkms.keyRings.create",
+        "cloudkms.keyRings.get"
+      ],
+      "stage": "GA",
+      "title": "Cloud KMS Admin"
+    },
+    "roles/cloudkms.cryptoKeyEncrypterDecrypter": {
+      "included_permissions": [
+        "cloudkms.cryptoKeyVersions.useToDecrypt",
+        "cloudkms.cryptoKeyVersions.useToEncrypt"
+      ],
+      "stage": "GA",
+      "title": "Cloud KMS CryptoKey Encrypter/Decrypter"
+    },
+    "roles/compute.instanceAdmin.v1": {
+      "included_permissions": [
+        "compute.instances.create",
+        "compute.instances.delete",
+        "compute.instances.get",
+        "compute.instances.list",
+        "compute.instances.setMetadata"
+      ],
+      "stage": "GA",
+      "title": "Compute Instance Admin (v1)"
+    },
+    "roles/compute.loadBalancerAdmin": {
+      "included_permissions": [
+        "compute.backendServices.create",
+        "compute.backendServices.update",
+        "compute.globalForwardingRules.create",
+        "compute.securityPolicies.get",
+        "compute.targetHttpsProxies.create"
+      ],
+      "stage": "GA",
+      "title": "Compute Load Balancer Admin"
+    },
+    "roles/compute.networkAdmin": {
+      "included_permissions": [
+        "compute.firewalls.get",
+        "compute.firewalls.list",
+        "compute.networks.get",
+        "compute.networks.list",
+        "compute.networks.updatePolicy",
+        "compute.subnetworks.get"
+      ],
+      "stage": "GA",
+      "title": "Compute Network Admin"
+    },
+    "roles/compute.networkViewer": {
+      "included_permissions": [
+        "compute.firewalls.get",
+        "compute.firewalls.list",
+        "compute.networks.get",
+        "compute.networks.list",
+        "compute.subnetworks.get",
+        "compute.subnetworks.list"
+      ],
+      "stage": "GA",
+      "title": "Compute Network Viewer"
+    },
+    "roles/compute.orgFirewallPolicyAdmin": {
+      "included_permissions": [
+        "compute.firewalls.create",
+        "compute.firewalls.delete",
+        "compute.firewalls.update",
+        "compute.networks.updatePolicy"
+      ],
+      "stage": "GA",
+      "title": "Compute Org Firewall Policy Admin"
+    },
+    "roles/compute.orgSecurityPolicyAdmin": {
+      "included_permissions": [
+        "compute.securityPolicies.create",
+        "compute.securityPolicies.get",
+        "compute.securityPolicies.list",
+        "compute.securityPolicies.update"
+      ],
+      "stage": "GA",
+      "title": "Compute Org Security Policy Admin"
+    },
+    "roles/compute.securityAdmin": {
+      "included_permissions": [
+        "compute.firewalls.create",
+        "compute.firewalls.delete",
+        "compute.firewalls.get",
+        "compute.firewalls.list",
+        "compute.firewalls.update",
+        "compute.securityPolicies.create",
+        "compute.securityPolicies.update"
+      ],
+      "stage": "GA",
+      "title": "Compute Security Admin"
+    },
+    "roles/compute.viewer": {
+      "included_permissions": [
+        "compute.instances.get",
+        "compute.instances.list",
+        "compute.networks.get",
+        "compute.networks.list"
+      ],
+      "stage": "GA",
+      "title": "Compute Viewer"
+    },
+    "roles/editor": {
+      "included_permissions": [
+        "bigquery.tables.get",
+        "compute.instances.get",
+        "storage.objects.create",
+        "storage.objects.get"
+      ],
+      "stage": "GA",
+      "title": "Editor"
+    },
+    "roles/iam.organizationRoleAdmin": {
+      "included_permissions": [
+        "iam.roles.create",
+        "iam.roles.delete",
+        "iam.roles.get",
+        "iam.roles.list",
+        "iam.roles.update",
+        "resourcemanager.organizations.getIamPolicy"
+      ],
+      "stage": "GA",
+      "title": "Organization Role Administrator"
+    },
+    "roles/iam.roleAdmin": {
+      "included_permissions": [
+        "iam.roles.create",
+        "iam.roles.delete",
+        "iam.roles.get",
+        "iam.roles.list",
+        "iam.roles.update"
+      ],
+      "stage": "GA",
+      "title": "Role Administrator"
+    },
+    "roles/iam.securityAdmin": {
+      "included_permissions": [
+        "iam.roles.get",
+        "iam.roles.list",
+        "iam.roles.update",
+        "iam.serviceAccounts.setIamPolicy",
+        "resourcemanager.projects.setIamPolicy"
+      ],
+      "stage": "GA",
+      "title": "Security Admin"
+    },
+    "roles/iam.serviceAccountAdmin": {
+      "included_permissions": [
+        "iam.serviceAccounts.create",
+        "iam.serviceAccounts.delete",
+        "iam.serviceAccounts.get",
+        "iam.serviceAccounts.list",
+        "iam.serviceAccounts.setIamPolicy",
+        "iam.serviceAccounts.update"
+      ],
+      "stage": "GA",
+      "title": "Service Account Admin"
+    },
+    "roles/iam.serviceAccountKeyAdmin": {
+      "included_permissions": [
+        "iam.serviceAccountKeys.create",
+        "iam.serviceAccountKeys.delete",
+        "iam.serviceAccountKeys.get",
+        "iam.serviceAccountKeys.list"
+      ],
+      "stage": "GA",
+      "title": "Service Account Key Admin"
+    },
+    "roles/iam.serviceAccountTokenCreator": {
+      "included_permissions": [
+        "iam.serviceAccounts.get",
+        "iam.serviceAccounts.getAccessToken",
+        "iam.serviceAccounts.implicitDelegation",
+        "iam.serviceAccounts.signBlob",
+        "iam.serviceAccounts.signJwt"
+      ],
+      "stage": "GA",
+      "title": "Service Account Token Creator"
+    },
+    "roles/iam.serviceAccountUser": {
+      "included_permissions": [
+        "iam.serviceAccounts.actAs",
+        "iam.serviceAccounts.get",
+        "iam.serviceAccounts.list"
+      ],
+      "stage": "GA",
+      "title": "Service Account User"
+    },
+    "roles/iam.workloadIdentityUser": {
+      "included_permissions": [
+        "iam.serviceAccounts.getAccessToken",
+        "iam.serviceAccounts.getOpenIdToken",
+        "iam.serviceAccounts.implicitDelegation"
+      ],
+      "stage": "GA",
+      "title": "Workload Identity User"
+    },
+    "roles/logging.privateLogViewer": {
+      "included_permissions": [
+        "logging.logEntries.list",
+        "logging.logs.list",
+        "logging.privateLogEntries.list"
+      ],
+      "stage": "GA",
+      "title": "Private Logs Viewer"
+    },
+    "roles/logging.viewer": {
+      "included_permissions": [
+        "logging.logEntries.list",
+        "logging.logServices.list",
+        "logging.logs.list"
+      ],
+      "stage": "GA",
+      "title": "Logs Viewer"
+    },
+    "roles/monitoring.viewer": {
+      "included_permissions": [
+        "monitoring.metricDescriptors.get",
+        "monitoring.metricDescriptors.list",
+        "monitoring.timeSeries.list"
+      ],
+      "stage": "GA",
+      "title": "Monitoring Viewer"
+    },
+    "roles/orgpolicy.policyAdmin": {
+      "included_permissions": [
+        "orgpolicy.constraints.list",
+        "orgpolicy.policies.list",
+        "orgpolicy.policies.update",
+        "orgpolicy.policy.set"
+      ],
+      "stage": "GA",
+      "title": "Organization Policy Administrator"
+    },
+    "roles/owner": {
+      "included_permissions": [
+        "iam.roles.update",
+        "iam.serviceAccounts.actAs",
+        "resourcemanager.projects.get",
+        "resourcemanager.projects.setIamPolicy"
+      ],
+      "stage": "GA",
+      "title": "Owner"
+    },
+    "roles/pubsub.publisher": {
+      "included_permissions": [
+        "pubsub.topics.publish"
+      ],
+      "stage": "GA",
+      "title": "Pub/Sub Publisher"
+    },
+    "roles/pubsub.subscriber": {
+      "included_permissions": [
+        "pubsub.subscriptions.consume",
+        "pubsub.subscriptions.get"
+      ],
+      "stage": "GA",
+      "title": "Pub/Sub Subscriber"
+    },
+    "roles/resourcemanager.folderAdmin": {
+      "included_permissions": [
+        "resourcemanager.folders.create",
+        "resourcemanager.folders.get",
+        "resourcemanager.folders.setIamPolicy",
+        "resourcemanager.folders.update"
+      ],
+      "stage": "GA",
+      "title": "Folder Admin"
+    },
+    "roles/resourcemanager.organizationAdmin": {
+      "included_permissions": [
+        "resourcemanager.folders.setIamPolicy",
+        "resourcemanager.organizations.get",
+        "resourcemanager.organizations.setIamPolicy",
+        "resourcemanager.projects.setIamPolicy"
+      ],
+      "stage": "GA",
+      "title": "Organization Administrator"
+    },
+    "roles/resourcemanager.projectIamAdmin": {
+      "included_permissions": [
+        "resourcemanager.projects.get",
+        "resourcemanager.projects.getIamPolicy",
+        "resourcemanager.projects.setIamPolicy"
+      ],
+      "stage": "GA",
+      "title": "Project IAM Admin"
+    },
+    "roles/secretmanager.admin": {
+      "included_permissions": [
+        "secretmanager.secrets.create",
+        "secretmanager.secrets.delete",
+        "secretmanager.secrets.get",
+        "secretmanager.secrets.list",
+        "secretmanager.versions.access",
+        "secretmanager.versions.add"
+      ],
+      "stage": "GA",
+      "title": "Secret Manager Admin"
+    },
+    "roles/secretmanager.secretAccessor": {
+      "included_permissions": [
+        "secretmanager.versions.access"
+      ],
+      "stage": "GA",
+      "title": "Secret Manager Secret Accessor"
+    },
+    "roles/serviceusage.serviceUsageAdmin": {
+      "included_permissions": [
+        "serviceusage.services.disable",
+        "serviceusage.services.enable",
+        "serviceusage.services.get",
+        "serviceusage.services.list"
+      ],
+      "stage": "GA",
+      "title": "Service Usage Admin"
+    },
+    "roles/storage.admin": {
+      "included_permissions": [
+        "storage.buckets.create",
+        "storage.buckets.delete",
+        "storage.buckets.get",
+        "storage.buckets.list",
+        "storage.buckets.setIamPolicy",
+        "storage.objects.create",
+        "storage.objects.delete",
+        "storage.objects.get",
+        "storage.objects.list"
+      ],
+      "stage": "GA",
+      "title": "Storage Admin"
+    },
+    "roles/storage.objectAdmin": {
+      "included_permissions": [
+        "storage.objects.create",
+        "storage.objects.delete",
+        "storage.objects.get",
+        "storage.objects.list"
+      ],
+      "stage": "GA",
+      "title": "Storage Object Admin"
+    },
+    "roles/storage.objectViewer": {
+      "included_permissions": [
+        "storage.objects.get",
+        "storage.objects.list"
+      ],
+      "stage": "GA",
+      "title": "Storage Object Viewer"
+    },
+    "roles/viewer": {
+      "included_permissions": [
+        "compute.instances.get",
+        "resourcemanager.projects.get",
+        "storage.objects.get"
+      ],
+      "stage": "GA",
+      "title": "Viewer"
+    }
+  }
+}
