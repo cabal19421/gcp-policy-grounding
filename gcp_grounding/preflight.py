@@ -15,8 +15,9 @@ ungrounded/contradicted), so a document the gate cannot judge passes with
 its ignorance on the record rather than blocking or, worse, silently
 half-passing. That includes a recognized document whose content the
 conservative extractors skipped entirely: zero claims from a non-empty
-policy records an ``unverified`` verdict too (a legitimately empty IAM
-allow policy — no bindings — is the one shape where zero claims is honest).
+policy records an ``unverified`` verdict too (an IAM allow policy with an
+explicit ``bindings: []`` is the one shape where zero claims is honest; an
+absent ``bindings`` key is not — nothing was read there).
 
 The ``terraform`` claim extractor (:mod:`gcp_grounding.tf_claims`) is looked
 up dynamically: where the module is not present, a tf plan document yields a
@@ -145,11 +146,13 @@ def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
 
 
 def _legitimately_empty(doc: Any, kind: str) -> bool:
-    """Whether zero claims is the honest outcome for *doc*: an empty IAM
-    allow policy (no ``bindings``, or ``bindings: []``) asserts nothing, so
-    extracting nothing from it is not ignorance."""
+    """Whether zero claims is the honest outcome for *doc*: an IAM allow
+    policy carrying an explicit ``bindings: []`` asserts nothing, so
+    extracting nothing from it is not ignorance. The key must be PRESENT —
+    an absent ``bindings`` is a document whose grants were never read (a
+    mis-cased ``Bindings``, a wrapped body), not one that grants nothing."""
     return (kind == "iam_policy" and isinstance(doc, Mapping)
-            and doc.get("bindings", []) == [])
+            and "bindings" in doc and doc["bindings"] == [])
 
 
 # -- document loading ---------------------------------------------------------

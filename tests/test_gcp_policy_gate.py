@@ -196,11 +196,12 @@ def test_zero_claim_policy_document_is_low_risk_unverified(gate, tmp_path):
     empty.write_text(json.dumps({"etag": "BwX=", "version": 3}),
                      encoding="utf-8")
     result = gate.check([sneaky, empty])
-    # The recognized-but-unextractable content is on the record and raises
-    # risk; the legitimately empty policy stays clean — they must not be
-    # indistinguishable.
+    # Both are on the record as unverified: the second file's `bindings` key
+    # is absent, not an explicit empty array, so its grants were never read.
+    # A genuinely empty policy (`"bindings": []`) is the only one that stays
+    # clean — the two must not be indistinguishable.
     assert result.ok and result.risk == "low"
-    assert statuses(result) == ["unverified", "ok"]
+    assert statuses(result) == ["unverified", "unverified"]
     assert "nothing checkable" in "\n".join(result.findings())
 
 

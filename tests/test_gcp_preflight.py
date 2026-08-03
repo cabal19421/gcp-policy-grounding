@@ -234,13 +234,35 @@ def test_recognized_document_with_zero_extractable_claims_is_unverified(snap, do
     assert "nothing checkable" in v.message
 
 
+@pytest.mark.parametrize("doc", [
+    # A mis-cased 'Bindings' array: recognized as an IAM policy on etag +
+    # version, yet the grant it carries is invisible to the extractor. An
+    # absent `bindings` key is NOT an empty allow policy.
+    {"etag": "BwX=", "version": 3,
+     "Bindings": [{"role": "roles/owner", "members": ["allUsers"]}]},
+    # etag + version and no bindings key at all — the same absence, with
+    # nothing hiding behind it. Still "never looked", not "nothing to see".
+    {"etag": "BwX=", "version": 3},
+])
+def test_absent_bindings_key_is_unverified_not_legitimately_empty(snap, doc):
+    assert detect_kind(doc) == "iam_policy"
+    report = ground_policy(doc, snap)
+    assert report.ok  # unverified is honest ignorance, not a gate failure
+    [v] = report.verdicts
+    assert (v.status, v.kind) == ("unverified", "document")
+    assert "nothing checkable" in v.message
+
+
 def test_legitimately_empty_iam_policy_yields_no_verdicts(snap):
-    # An empty allow policy asserts nothing: zero claims is the honest
-    # outcome, not ignorance — no unverified verdict to record.
-    for doc in ({"etag": "BwX=", "version": 3},
-                {"etag": "BwX=", "version": 3, "bindings": []}):
-        report = ground_policy(doc, snap)
-        assert report.ok and report.verdicts == []
+    # Only an explicit `bindings: []` asserts nothing: zero claims is the
+    # honest outcome there, not ignorance — no unverified verdict to record.
+    report = ground_policy({"etag": "BwX=", "version": 3, "bindings": []}, snap)
+    assert report.ok and report.verdicts == []
+    # An absent key is a different shape and does not get that pass.
+    absent = ground_policy({"etag": "BwX=", "version": 3}, snap)
+    assert absent.ok
+    [v] = absent.verdicts
+    assert (v.status, v.kind) == ("unverified", "document")
 
 
 # -- baseline (new⊆old) opt-in ----------------------------------------------
