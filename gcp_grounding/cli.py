@@ -1,11 +1,21 @@
-"""Command-line interface: ``gcp-ground verify-policy``.
+"""Command-line interface: ``gcp-ground verify-policy`` / ``scan-command``.
 
-One subcommand over the preflight gate
-(:func:`~gcp_grounding.preflight.ground_policy`), exposed both as the
-``gcp-ground`` console script and as ``python -m gcp_grounding``::
+Two subcommands, exposed both as the ``gcp-ground`` console script and as
+``python -m gcp_grounding``::
 
     gcp-ground verify-policy FILE [--snapshot PATH] [--baseline PATH]
                              [--format text|json] [--explain] [--hook]
+                             [--bash-policy block|warn|off]
+    gcp-ground scan-command --command STR|- [--format text|json]
+
+``verify-policy`` runs the preflight gate
+(:func:`~gcp_grounding.preflight.ground_policy`) over one policy document;
+``scan-command`` runs the offline shell classifier
+(:func:`~gcp_grounding.bash_mutation.bash_mutation_verdicts`) over one command
+line and prints the same ``gcp-grounding-report/1`` document. ``verify-policy``
+deliberately does NOT grow a command-scanning mode: it grounds *documents*
+against a snapshot, and overloading it would blur two surfaces that answer
+different questions and have different exit-code contracts.
 
 Exit codes carry the gate's honesty contract:
 
@@ -31,6 +41,19 @@ events, missing paths, non-policy files, an unavailable snapshot — exits 0:
 a broken hook setup must never block an edit. A raw ``.tf`` file is not
 ``terraform show -json`` output, so it lands in ``unverified`` via the
 preflight fail-open contract and passes, honestly unjudged.
+
+``--hook`` also inspects ``tool_input.command`` — the largest bypass around a
+file-based guardrail is to stop writing files and run ``gcloud`` instead. The
+command is matched against a curated list of state-mutating ``gcloud``,
+``terraform``, ``gsutil``, ``bq``, ``kubectl`` and ``curl`` shapes: a known
+mutator BLOCKS by default (:data:`BASH_POLICY_ENV` / ``--bash-policy`` relax it
+to ``warn`` or ``off``), while an unknown ``gcloud`` verb abstains with the verb
+quoted, exactly as it does in :mod:`~gcp_grounding.bash_mutation`. That block is
+a POLICY decision and is deliberately kept separate from ``report.ok``: every
+bash verdict is ``unverified``, so no shell command is ever recorded as
+``ungrounded`` or ``contradicted`` — the gate did not refute it, it was unable
+to look. The same verdicts are printed by ``scan-command``, which is how a
+bypass attempt reaches a machine-readable record instead of only stderr.
 
 The hook is SCOPED, and the scope is the contract: it grounds events from
 any tool EXCEPT a curated read-only set (:data:`_READ_ONLY_TOOLS`), and it
@@ -92,6 +115,7 @@ from .constraints import (
     _z3_module,
 )
 from .core.log import get_logger
+from .core.report import GroundingReport, Verdict
 from .core.solver import get_solver
 from .knowledge import GcpSnapshot
 from .preflight import detect_kind, ground_policy
@@ -99,10 +123,36 @@ from .report import PolicyReport
 
 logger = get_logger(__name__)
 
-__all__ = ["SNAPSHOT_ENV", "build_parser", "main"]
+__all__ = ["BASH_POLICY_ENV", "SNAPSHOT_ENV", "build_parser", "main"]
 
 #: Environment variable consulted when ``--snapshot`` is not given.
 SNAPSHOT_ENV = "GCP_GROUNDING_SNAPSHOT"
+
+#: Environment variable consulted when ``--bash-policy`` is not given.
+BASH_POLICY_ENV = "GCP_GROUNDING_BASH_POLICY"
+
+#: How ``--hook`` treats a state-mutating shell command: ``block`` exits 2,
+#: ``warn`` reports it and exits 0, ``off`` does not scan at all.
+_BASH_POLICIES = ("block", "warn", "off")
+
+#: Fail-closed by default: an unscanned ``gcloud`` mutation is the bypass this
+#: arm exists to close, so silence is not an option the default may pick.
+_DEFAULT_BASH_POLICY = "block"
+
+#: The :mod:`~gcp_grounding.bash_mutation` verdict kind that a ``block`` policy
+#: acts on; ``bash-unrecognized`` findings are reported and NEVER block.
+_BASH_MUTATION_KIND = "bash-mutation"
+
+#: :class:`~gcp_grounding.report.PolicyReport` requires a freshness stamp, and a
+#: shell scan genuinely consults no snapshot — it reads the command text alone.
+#: Saying so is the honest stamp; an ISO timestamp here would imply the estate
+#: was looked at.
+_BASH_CAPTURED_AT = "not consulted"
+
+#: No constraint solver participates in a shell scan: the classifier is a pure
+#: text pass, so the report names no backend rather than the one z3 that
+#: happened to be importable.
+_BASH_BACKEND = "none"
 
 #: CLI ``--format`` values → :meth:`PolicyReport.render` formats.
 _FORMATS = {"text": "human", "json": "json"}
@@ -173,7 +223,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--hook", action="store_true",
         help="read a Claude-Code PostToolUse event JSON on stdin and ground "
              "the edited .tf/policy file; findings block via exit 2 + stderr")
+    verify.add_argument(
+        "--bash-policy", choices=_BASH_POLICIES, default=None,
+        help=f"how --hook treats a state-mutating gcloud/terraform command "
+             f"(default: {_DEFAULT_BASH_POLICY}, falling back to "
+             f"${BASH_POLICY_ENV}); block exits 2, warn reports and exits 0, "
+             f"off skips the scan")
     verify.set_defaults(handler=_cmd_verify_policy)
+    scan = sub.add_parser(
+        "scan-command",
+        help="classify one shell command for state-mutating GCP CLI "
+             "invocations; always exit 0",
+        description="Run the offline bash-mutation classifier over COMMAND and "
+                    "print the same gcp-grounding-report/1 document the hook "
+                    "renders. Exit 0 always: every finding is 'unverified', so "
+                    "the report stays ok — the BLOCK decision belongs to the "
+                    "hook's --bash-policy and to nothing else.")
+    scan.add_argument(
+        "--command", metavar="STR", required=True,
+        help="the shell command to classify ('-' reads it from stdin)")
+    scan.add_argument(
+        "--format", choices=tuple(_FORMATS), default="text",
+        help="report format on stdout (default: text)")
+    scan.set_defaults(handler=_cmd_scan_command)
     return parser
 
 
@@ -206,6 +278,12 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
             return _usage("FILE and --hook are mutually exclusive — the hook "
                           "event names the edited file", hook=True)
         return _run_hook(args)
+    if args.bash_policy is not None:
+        # Accepted and ignored, never a usage error: one wrapper script tends to
+        # invoke the gate both ways, and failing the normal-mode call over a
+        # flag that is merely irrelevant there would be gratuitous.
+        logger.debug("--bash-policy=%r is ignored outside --hook mode",
+                     args.bash_policy)
     if args.file is None:
         return _usage("FILE is required (only --hook mode reads the file from "
                       "a PostToolUse event instead)")
@@ -252,15 +330,25 @@ def _load_snapshot(flag: str | None) -> tuple[GcpSnapshot | None, str | None]:
 
 def _run_hook(args: argparse.Namespace) -> int:
     """Ground the file a PostToolUse event says was edited. Fail-open: only
-    a real ungrounded/contradicted finding exits nonzero.
+    a real ungrounded/contradicted finding — or a mutating shell command under
+    the default ``block`` policy — exits nonzero.
 
-    :func:`_hook_scope_skip` runs first and decides whether this event is in
+    :func:`_hook_bash` runs FIRST, before the scope skip, before the path and
+    suffix filter, and before the snapshot is resolved: a shell scan needs no
+    snapshot, so it must keep working when the snapshot is missing or broken —
+    otherwise the cheapest bypass (run ``gcloud``, write no file) would also be
+    the one an unconfigured hook waves through.
+
+    :func:`_hook_scope_skip` runs next and decides whether a file event is in
     scope at all — a read-only tool, or a ``PreToolUse`` file edit, never
     reaches the grounding pass.
     """
     event = _read_hook_event(sys.stdin)
     if event is None:
         return EXIT_OK
+    bash = _hook_bash(event, args)
+    if bash is not None:
+        return bash
     skip = _hook_scope_skip(event)
     if skip is not None:
         if skip:
@@ -339,6 +427,177 @@ def _hook_file_path(event: Mapping[str, Any] | None) -> str | None:
         return None
     path = tool_input.get("file_path")
     return path if isinstance(path, str) and path else None
+
+
+# -- --hook: the bash arm ------------------------------------------------------
+
+
+def _hook_bash(event: Mapping[str, Any],
+               args: argparse.Namespace) -> int | None:
+    """The exit code for a command-bearing event, or ``None`` when this event
+    carries no command and the file arm should handle it.
+
+    ENGAGEMENT RULE: engage whenever ``tool_input.command`` is a non-empty
+    string, whatever the ``tool_name`` says. That deliberately covers ``Bash``
+    and any mcp or shell-ish tool that carries a command, and it is safe
+    because a finding only ever arises for a recognized CLI basename at
+    ``argv[0]`` — a non-shell field that happens to be called ``command`` will
+    not have ``gcloud`` there.
+
+    A command-bearing event belongs to this arm alone: Claude-Code events carry
+    either a ``command`` or a ``file_path``, never both, so returning an exit
+    code here takes nothing away from the file arm.
+    """
+    command = _hook_command(event)
+    if command is None:
+        return None
+    policy = _bash_policy(args)
+    if policy == "off":
+        logger.debug("--hook: --bash-policy=off — the command was not scanned")
+        return EXIT_OK
+    source = str(event.get("tool_name") or "Bash")
+    try:
+        from .bash_mutation import bash_mutation_verdicts
+    except ImportError:
+        # Honest degradation, mirroring preflight's tf_claims arm: say that
+        # nothing was checked rather than passing as though it had been.
+        print("gcp-ground --hook: the bash-mutation classifier is not "
+              "available — the command was not checked (fail-open)",
+              file=sys.stderr)
+        return EXIT_OK
+    verdicts = bash_mutation_verdicts(command, source=source)
+    if not verdicts:
+        # Nothing in the command was recognized as GCP-mutating. Silence is the
+        # contract here: the hook's stderr is agent-visible.
+        logger.debug("--hook: no GCP mutation recognized in the command")
+        return EXIT_OK
+    mutating = [v for v in verdicts if v.kind == _BASH_MUTATION_KIND]
+    blocking = policy == "block" and bool(mutating)
+    print("\n".join(_bash_hook_lines(verdicts, event=event, policy=policy,
+                                     blocking=blocking, source=source)),
+          file=sys.stderr)
+    # Unrecognized-only findings NEVER block: that is the abstain-with-message
+    # contract, and `warn` always exits 0 by definition.
+    return EXIT_BLOCK if blocking else EXIT_OK
+
+
+def _hook_command(event: Mapping[str, Any]) -> str | None:
+    """The shell command this event carries, or ``None`` — see the engagement
+    rule in :func:`_hook_bash`."""
+    tool_input = event.get("tool_input")
+    if not isinstance(tool_input, Mapping):
+        return None
+    command = tool_input.get("command")
+    return command if isinstance(command, str) and command else None
+
+
+def _bash_policy(args: argparse.Namespace) -> str:
+    """The effective ``--bash-policy``: the flag, then the environment, then
+    :data:`_DEFAULT_BASH_POLICY`.
+
+    An unrecognized environment value prints ONE note and falls back to the
+    default. It is never a usage error: this whole arm exists because a
+    fail-closed argv hole is how the bypass stayed open, and turning a stale
+    exported variable into an exit-2 usage error would reopen it from the other
+    side — every tool call in the session failing until someone unsets it.
+    """
+    flag = getattr(args, "bash_policy", None)
+    if flag in _BASH_POLICIES:
+        return flag
+    raw = os.environ.get(BASH_POLICY_ENV)
+    if raw is None or not raw.strip():
+        return _DEFAULT_BASH_POLICY
+    value = raw.strip()
+    if value in _BASH_POLICIES:
+        return value
+    print(f"gcp-ground --hook: ${BASH_POLICY_ENV}={raw!r} is not one of "
+          f"{', '.join(_BASH_POLICIES)} — using --bash-policy="
+          f"{_DEFAULT_BASH_POLICY}", file=sys.stderr)
+    return _DEFAULT_BASH_POLICY
+
+
+def _bash_hook_lines(verdicts: list[Verdict], *, event: Mapping[str, Any],
+                     policy: str, blocking: bool, source: str) -> list[str]:
+    """The stderr block for a command-bearing event with findings."""
+    if any(v.kind == _BASH_MUTATION_KIND for v in verdicts):
+        decision = "BLOCKED" if policy == "block" else "WARNING"
+        headline = f"{decision} — unchecked GCP mutation in a shell command"
+    else:
+        headline = "NOT DECIDED — a shell command could not be classified"
+    lines = [f"gcp-ground --hook: {headline}"]
+    rendered = _bash_report(verdicts, source=source).render("human")
+    # The per-verdict lines come from the shared renderer so the hook and
+    # `scan-command` cannot drift; its summary header is dropped because it
+    # reads "PASSED … ungrounded=0 contradicted=0" — true of the *report*, and
+    # actively misleading directly under a BLOCKED headline.
+    lines.extend(rendered.splitlines()[1:])
+    lines.append(_bash_timing_line(event, blocking))
+    lines.append("  Express this change as a policy document or `terraform "
+                 "show -json` plan output so the gate can check it — or pass "
+                 "--bash-policy=warn if the command is intentional.")
+    return lines
+
+
+def _bash_timing_line(event: Mapping[str, Any], blocking: bool) -> str:
+    """What the operator can still do about it, which depends entirely on
+    whether the command has run yet.
+
+    ``PreToolUse`` is the correct registration point for ``Bash``: it is the one
+    place this hook can intervene *before* the estate changes, and unlike a file
+    edit there is no stale-disk problem, because the command text is in the
+    event itself.
+    """
+    if event.get("hook_event_name") == "PreToolUse":
+        if blocking:
+            return ("  The command was blocked before execution — the estate "
+                    "has not changed.")
+        return ("  The command has not run yet and was NOT blocked, so it is "
+                "about to execute — verify the estate afterwards and revert "
+                "the change if it was unintended.")
+    return ("  The command has already executed — verify the estate and revert "
+            "the change if it was unintended.")
+
+
+def _bash_report(verdicts: list[Verdict], *, source: str) -> PolicyReport:
+    """The bash findings as a :class:`~gcp_grounding.report.PolicyReport`.
+
+    Every bash verdict is ``unverified``, so ``report.ok`` stays True and the
+    document never claims the gate refuted anything — the block is a policy
+    decision made by the caller, not a verdict.
+    """
+    report = GroundingReport(backend=_BASH_BACKEND)
+    for verdict in verdicts:
+        report.add(verdict)
+    return PolicyReport(report, captured_at=_BASH_CAPTURED_AT, source=source)
+
+
+# -- scan-command --------------------------------------------------------------
+
+
+def _cmd_scan_command(args: argparse.Namespace) -> int:
+    """Classify one command and print the report. Exit 0, always.
+
+    THE AUDIT TRAIL. Without this surface a bypass attempt exists only as hook
+    stderr: nothing lands in ``PolicyReport.to_dict()``, in ``--format json`` or
+    in a CI artifact, so nobody can tell afterwards that anyone tried. The
+    findings here are the same ones the hook renders, keyed on the
+    ``bash-mutation`` kind and the message text, which is what lets a test (or a
+    CI job) assert on structure instead of on stderr substrings.
+    """
+    command = sys.stdin.read() if args.command == "-" else args.command
+    try:
+        from .bash_mutation import bash_mutation_verdicts
+    except ImportError:
+        # No report at all rather than an empty one: a zero-verdict document
+        # here would be indistinguishable from "this command is fine".
+        print("gcp-ground scan-command: the bash-mutation classifier is not "
+              "available — the command was not checked (fail-open)",
+              file=sys.stderr)
+        return EXIT_OK
+    verdicts = bash_mutation_verdicts(command, source="scan-command")
+    print(_bash_report(verdicts, source=command.strip()).render(
+        _FORMATS[args.format]))
+    return EXIT_OK
 
 
 # -- --explain: the z3 constraints generated this run --------------------------
