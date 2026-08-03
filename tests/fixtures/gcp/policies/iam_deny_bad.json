@@ -1,0 +1,21 @@
+{
+  "name": "policies/cloudresourcemanager.googleapis.com%2Fprojects%2Facme-prod/denypolicies/block-role-updates",
+  "displayName": "Block role updates",
+  "rules": [
+    {
+      "denyRule": {
+        "deniedPrincipals": [
+          "serviceAccount:ghost-runner@acme-prod.iam.gserviceaccount.com"
+        ],
+        "deniedPermissions": [
+          "iam.googleapis.com/roles.updat"
+        ],
+        "denialCondition": {
+          "title": "never-true",
+          "description": "Contradictory time window: after 2027 AND before 2026",
+          "expression": "request.time > timestamp(\"2027-01-01T00:00:00Z\") && request.time < timestamp(\"2026-01-01T00:00:00Z\")"
+        }
+      }
+    }
+  ]
+}

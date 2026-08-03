@@ -1,0 +1,28 @@
+{
+  "bindings": [
+    {
+      "condition": {
+        "description": "a tag lookup, resolvable only at request time",
+        "expression": "resource.matchTag('env','prod')",
+        "title": "prod-tagged only"
+      },
+      "members": [
+        "group:data-eng@acme.example"
+      ],
+      "role": "roles/bigquery.dataViewer"
+    },
+    {
+      "condition": {
+        "description": "a caller attribute, resolvable only at request time",
+        "expression": "request.auth.claims['tier'] == 'admin'",
+        "title": "admin tier only"
+      },
+      "members": [
+        "user:carol@acme.example"
+      ],
+      "role": "roles/storage.objectViewer"
+    }
+  ],
+  "etag": "BwYCa18OutsideSub=",
+  "version": 3
+}

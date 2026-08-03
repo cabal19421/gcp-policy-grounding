@@ -1,0 +1,17 @@
+{
+  "bindings": [
+    {
+      "condition": {
+        "description": "the ETL backfill window, bounded at both ends",
+        "expression": "request.time > timestamp(\"2026-07-01T00:00:00Z\") && request.time < timestamp(\"2026-10-01T00:00:00Z\")",
+        "title": "backfill window"
+      },
+      "members": [
+        "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com"
+      ],
+      "role": "roles/bigquery.jobUser"
+    }
+  ],
+  "etag": "BwYCb02SatWindow=",
+  "version": 3
+}

@@ -6,13 +6,22 @@ constraint is used list-typed") together with a json-path ``location`` into
 the source document, so a verdict can point back at the exact field.
 
 The extractor is deliberately conservative: a claim is emitted only when the
-field resolves unambiguously. Anything else — malformed fields, request-time
-constructs (tag-based conditions, IAM Conditions referencing runtime-only
-attributes), members that are not estate principals (``allUsers``,
-``deleted:…``) — is *skipped*, never guessed at: no claim means the reasoner
-stays silent rather than minting a false verdict. ``request.time`` conditions
-are NOT skipped — time-window satisfiability is exactly what the z3 layer
-decides offline.
+field resolves unambiguously. Malformed fields and request-time constructs
+(tag-based conditions, IAM Conditions referencing runtime-only attributes)
+are *skipped*, never guessed at: no claim means the reasoner stays silent
+rather than minting a false verdict. ``request.time`` conditions are NOT
+skipped — time-window satisfiability is exactly what the z3 layer decides
+offline.
+
+Binding members are the one place nothing is silently dropped. An estate
+principal (``user:``/``serviceAccount:``/``group:``/``domain:``) yields a
+``principal`` claim; the public principals ``allUsers`` and
+``allAuthenticatedUsers`` yield a ``public_principal`` claim carrying the
+grant polarity and the binding's role; every other member — ``deleted:…``,
+``principal://…``, ``principalSet://…``, a non-string — yields an
+``unmodelled_principal`` claim. A member the snapshot cannot enumerate is
+recorded (as unverified downstream), never omitted, so public exposure can
+no longer hide in a byte-identical clean report.
 
 Claim kinds:
 
@@ -32,6 +41,35 @@ Claim kinds:
   the type name; emitted by :mod:`~gcp_grounding.tf_claims` once per
   google-provider resource).
 
+The following existence kinds are grounded later by the Datalog pass, one per
+new snapshot category:
+
+- ``network_ref`` — the referenced VPC network should exist.
+- ``subnetwork_ref`` — the referenced subnetwork should exist.
+- ``network_tag_ref`` — the referenced network tag should exist.
+- ``service_account_ref`` — the referenced service account should exist.
+- ``access_level_ref`` — the referenced access level should exist.
+- ``restricted_service_ref`` — the referenced VPC-SC restricted service should exist.
+- ``perimeter_ref`` — the referenced service perimeter should exist.
+- ``firewall_policy_ref`` — the referenced hierarchical firewall policy should exist.
+- ``security_policy_ref`` — the referenced Cloud Armor security policy should exist.
+- ``hierarchy_node_ref`` — the referenced resource-hierarchy node should exist.
+
+The following structured kinds carry their data in the frozen ``payload``
+channel for the z3 checkers rather than in ``value`` alone:
+
+- ``firewall_rule`` — a VPC firewall rule, structured for the packet algebra.
+- ``firewall_policy_rule`` — a hierarchical firewall policy rule, structured.
+- ``security_policy_rule`` — a Cloud Armor security policy rule, structured.
+- ``perimeter_config`` — a VPC-SC service perimeter configuration, structured.
+- ``perimeter_ingress`` — a VPC-SC ingress policy, structured.
+- ``perimeter_egress`` — a VPC-SC egress policy, structured.
+- ``public_principal`` — a principal opening a resource to the public.
+- ``unmodelled_principal`` — a principal the snapshot cannot enumerate.
+- ``denied_principal`` — a principal named by an IAM deny rule.
+- ``denied_permission`` — a permission named by an IAM deny rule.
+- ``constraint_enforcement`` — an org-policy ``enforce`` flag / list values.
+
 Both Org Policy formats are parsed: legacy v1 (``constraint`` +
 ``booleanPolicy``/``listPolicy``) and v2 (``name`` ending in
 ``/policies/<id>`` + ``spec.rules[]`` with ``enforce`` vs
@@ -48,15 +86,36 @@ from .core.log import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ["KINDS", "Claim", "iam_policy_claims", "org_policy_claims"]
+__all__ = ["KINDS", "PUBLIC_PRINCIPALS", "Claim", "freeze", "unfreeze",
+           "iam_policy_claims", "org_policy_claims"]
 
-KINDS = ("role", "permission", "principal", "cel", "constraint", "constraint_value",
-         "resource_type_ref")
+KINDS = (
+    # -- the original seven, kept first and in order --------------------------
+    "role", "permission", "principal", "cel", "constraint", "constraint_value",
+    "resource_type_ref",
+    # -- existence kinds, grounded later by the Datalog pass ------------------
+    "network_ref", "subnetwork_ref", "network_tag_ref", "service_account_ref",
+    "access_level_ref", "restricted_service_ref", "perimeter_ref",
+    "firewall_policy_ref", "security_policy_ref", "hierarchy_node_ref",
+    # -- structured / checker kinds, carrying a frozen payload ----------------
+    "firewall_rule", "firewall_policy_rule", "security_policy_rule",
+    "perimeter_config", "perimeter_ingress", "perimeter_egress",
+    "public_principal", "unmodelled_principal", "denied_principal",
+    "denied_permission", "constraint_enforcement",
+)
 
 #: Member prefixes that name estate principals a snapshot can enumerate.
-#: Everything else (allUsers, allAuthenticatedUsers, deleted:…, principal://
-#: and principalSet:// federated identities) is skipped, not guessed at.
+#: A member matching one yields a ``principal`` claim; the public principals
+#: below yield ``public_principal``; anything else (deleted:…, principal://
+#: and principalSet:// federated identities, a non-string) yields
+#: ``unmodelled_principal`` — no member is silently dropped.
 _PRINCIPAL_PREFIXES = ("user:", "serviceAccount:", "group:", "domain:")
+
+#: The two members that open a resource to everyone. In an IAM *allow* policy
+#: each is a public-exposure hole (emitted with ``polarity="grant"``); the same
+#: member named by an IAM *deny* policy is a guardrail, which is why
+#: :mod:`~gcp_grounding.iam_deny` emits it with ``polarity="deny"`` instead.
+PUBLIC_PRINCIPALS = ("allUsers", "allAuthenticatedUsers")
 
 #: Substrings marking CEL constructs resolvable only at request time — tag
 #: lookups and caller/transport attributes. An expression mentioning any of
@@ -77,6 +136,45 @@ _V2_BOOLEAN_KEYS = ("enforce",)
 _V2_LIST_KEYS = ("values", "allowAll", "denyAll")
 
 
+def freeze(value: Any) -> Any:
+    """Turn a JSON-ish *value* into a deterministic, hashable form.
+
+    A ``Mapping`` becomes ``("__map__", <key-sorted pairs>)``; a list or tuple
+    becomes a tuple of frozen items; scalars (``str``/``int``/``float``/
+    ``bool``/``None``) pass through. Anything else raises :class:`ValueError`
+    naming the type — a firewall rule must not smuggle an unhashable object
+    into a :class:`Claim`. :func:`unfreeze` is the exact inverse.
+    """
+    if isinstance(value, Mapping):
+        return ("__map__", tuple(sorted((str(k), freeze(v)) for k, v in value.items())))
+    if isinstance(value, (list, tuple)):
+        return tuple(freeze(v) for v in value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise ValueError(f"cannot freeze value of type {type(value).__name__}")
+
+
+def unfreeze(value: Any) -> Any:
+    """Inverse of :func:`freeze`: ``("__map__", pairs)`` becomes a ``dict``,
+    every other tuple becomes a ``list``, scalars pass through."""
+    if isinstance(value, tuple):
+        if len(value) == 2 and value[0] == "__map__":
+            return {k: unfreeze(v) for k, v in value[1]}
+        return [unfreeze(v) for v in value]
+    return value
+
+
+def _is_frozen(value: Any) -> bool:
+    """Whether *value* is a frozen form :func:`freeze` could have produced: a
+    scalar, or a tuple whose every element is itself frozen (which subsumes the
+    ``("__map__", pairs)`` shape). Rejects raw lists, dicts and objects."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return True
+    if isinstance(value, tuple):
+        return all(_is_frozen(v) for v in value)
+    return False
+
+
 @dataclass(frozen=True)
 class Claim:
     """One checkable assertion, anchored to its source field."""
@@ -87,6 +185,10 @@ class Claim:
     location: str
     #: ``constraint_value`` claims only: list-typed (True) vs boolean (False).
     is_list: bool | None = None
+    #: Frozen structured channel for checker kinds: sorted ``(key, frozen)``
+    #: pairs, kept hashable so :class:`Claim` stays frozen and comparable.
+    #: Built via :meth:`of`; read back via :meth:`fields`.
+    payload: tuple[tuple[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
@@ -94,6 +196,33 @@ class Claim:
         if (self.kind == "constraint_value") != (self.is_list is not None):
             raise ValueError("is_list must be set on 'constraint_value' claims and only there "
                              f"(kind={self.kind!r}, is_list={self.is_list!r})")
+        if not isinstance(self.payload, tuple):
+            raise ValueError(f"payload must be a tuple, got {type(self.payload).__name__}")
+        prev: str | None = None
+        for entry in self.payload:
+            if not (isinstance(entry, tuple) and len(entry) == 2):
+                raise ValueError(f"payload entry {entry!r} is not a (key, value) 2-tuple")
+            key, val = entry
+            if not isinstance(key, str) or not key:
+                raise ValueError(f"payload key {key!r} must be a non-empty str")
+            if prev is not None and key == prev:
+                raise ValueError(f"payload key {key!r} is duplicated")
+            if prev is not None and key < prev:
+                raise ValueError(f"payload key {key!r} is out of ascending order")
+            if not _is_frozen(val):
+                raise ValueError(f"payload key {key!r} has a non-frozen value {val!r}")
+            prev = key
+
+    @classmethod
+    def of(cls, kind: str, value: str, location: str, *,
+           is_list: bool | None = None, **fields: Any) -> "Claim":
+        """Build a claim whose keyword *fields* become a frozen ``payload``."""
+        payload = tuple(sorted((k, freeze(v)) for k, v in fields.items()))
+        return cls(kind, value, location, is_list=is_list, payload=payload)
+
+    def fields(self) -> dict[str, Any]:
+        """The structured payload as a plain ``dict``, inverting :meth:`of`."""
+        return {k: unfreeze(v) for k, v in self.payload}
 
 
 # -- IAM allow/deny policy ----------------------------------------------------
@@ -121,11 +250,17 @@ def iam_policy_claims(policy: Mapping[str, Any]) -> list[Claim]:
         members = binding.get("members")
         if isinstance(members, list):
             for j, member in enumerate(members):
+                loc = f"bindings[{i}].members[{j}]"
                 if isinstance(member, str) and member.startswith(_PRINCIPAL_PREFIXES):
-                    claims.append(Claim("principal", member, f"bindings[{i}].members[{j}]"))
+                    claims.append(Claim("principal", member, loc))
+                elif member in PUBLIC_PRINCIPALS:
+                    claims.append(Claim.of("public_principal", member, loc,
+                                           polarity="grant",
+                                           role=role if isinstance(role, str) else ""))
                 else:
-                    logger.debug("bindings[%d].members[%d] (%r) is not an estate principal "
-                                 "— skipped", i, j, member)
+                    logger.debug("bindings[%d].members[%d] (%r) is not an estate "
+                                 "principal — recorded as unmodelled", i, j, member)
+                    claims.append(Claim("unmodelled_principal", str(member), loc))
         condition = binding.get("condition")
         if isinstance(condition, Mapping):
             expression = condition.get("expression")

@@ -1,0 +1,521 @@
+{
+  "access_levels": [
+    "accessPolicies/987/accessLevels/trusted_corp"
+  ],
+  "captured_at": "2026-07-18T09:30:00Z",
+  "cloud_armor_policies": {
+    "projects/acme-prod/global/securityPolicies/edge-waf": {
+      "rules": [
+        {
+          "action": "deny(403)",
+          "match": {
+            "expr": null,
+            "src_ip_ranges": [
+              "203.0.113.0/24"
+            ],
+            "versioned_expr": "SRC_IPS_V1"
+          },
+          "preview": false,
+          "priority": 1000
+        },
+        {
+          "action": "allow",
+          "match": {
+            "expr": null,
+            "src_ip_ranges": [
+              "*"
+            ],
+            "versioned_expr": "SRC_IPS_V1"
+          },
+          "preview": false,
+          "priority": 2147483647
+        }
+      ],
+      "type": "CLOUD_ARMOR"
+    }
+  },
+  "constraints": {
+    "constraints/compute.disableSerialPortAccess": {
+      "description": "Disable VM serial port access",
+      "value_type": "boolean"
+    },
+    "constraints/compute.vmExternalIpAccess": {
+      "description": "Define allowed external IPs for VM instances",
+      "value_type": "list"
+    },
+    "constraints/iam.allowedPolicyMemberDomains": {
+      "description": "Domain restricted sharing",
+      "value_type": "list"
+    },
+    "constraints/iam.disableServiceAccountKeyCreation": {
+      "description": "Disable service account key creation",
+      "value_type": "boolean"
+    }
+  },
+  "firewall_rules": {
+    "projects/acme-prod/global/firewalls/allow-health-checks": {
+      "action": "allow",
+      "destination_ranges": [],
+      "direction": "INGRESS",
+      "disabled": false,
+      "layer4": [],
+      "network": "projects/acme-prod/global/networks/vpc-main",
+      "priority": 1000,
+      "source_ranges": [
+        "35.191.0.0/16",
+        "130.211.0.0/22"
+      ],
+      "source_service_accounts": [],
+      "source_tags": [],
+      "target_service_accounts": [],
+      "target_tags": [
+        "web"
+      ]
+    },
+    "projects/acme-prod/global/firewalls/allow-iap-ssh": {
+      "action": "allow",
+      "destination_ranges": [],
+      "direction": "INGRESS",
+      "disabled": false,
+      "layer4": [
+        {
+          "ports": [
+            "22"
+          ],
+          "protocol": "tcp"
+        }
+      ],
+      "network": "projects/acme-prod/global/networks/vpc-main",
+      "priority": 800,
+      "source_ranges": [
+        "35.235.240.0/20"
+      ],
+      "source_service_accounts": [],
+      "source_tags": [],
+      "target_service_accounts": [],
+      "target_tags": []
+    },
+    "projects/acme-prod/global/firewalls/allow-internal": {
+      "action": "allow",
+      "destination_ranges": [],
+      "direction": "INGRESS",
+      "disabled": false,
+      "layer4": [
+        {
+          "ports": [
+            "0-65535"
+          ],
+          "protocol": "tcp"
+        }
+      ],
+      "network": "projects/acme-prod/global/networks/vpc-main",
+      "priority": 1000,
+      "source_ranges": [
+        "10.0.0.0/8"
+      ],
+      "source_service_accounts": [],
+      "source_tags": [],
+      "target_service_accounts": [],
+      "target_tags": []
+    },
+    "projects/acme-prod/global/firewalls/deny-ssh-external": {
+      "action": "deny",
+      "destination_ranges": [],
+      "direction": "INGRESS",
+      "disabled": false,
+      "layer4": [
+        {
+          "ports": [
+            "22"
+          ],
+          "protocol": "tcp"
+        }
+      ],
+      "network": "projects/acme-prod/global/networks/vpc-main",
+      "priority": 900,
+      "source_ranges": [
+        "0.0.0.0/0"
+      ],
+      "source_service_accounts": [],
+      "source_tags": [],
+      "target_service_accounts": [],
+      "target_tags": []
+    }
+  },
+  "hierarchical_firewall_policies": {
+    "organizations/1/locations/global/firewallPolicies/fp-baseline": {
+      "attachments": [
+        "organizations/1"
+      ],
+      "rules": [
+        {
+          "action": "deny",
+          "direction": "INGRESS",
+          "disabled": false,
+          "match": {
+            "dest_ip_ranges": [],
+            "layer4": [
+              {
+                "ports": [
+                  "3389"
+                ],
+                "protocol": "tcp"
+              }
+            ],
+            "src_ip_ranges": [
+              "0.0.0.0/0"
+            ]
+          },
+          "priority": 100,
+          "target_resources": [],
+          "target_secure_tags": [],
+          "target_service_accounts": []
+        },
+        {
+          "action": "goto_next",
+          "direction": "INGRESS",
+          "disabled": false,
+          "match": {
+            "dest_ip_ranges": [],
+            "layer4": [],
+            "src_ip_ranges": [
+              "0.0.0.0/0"
+            ]
+          },
+          "priority": 2000,
+          "target_resources": [],
+          "target_secure_tags": [],
+          "target_service_accounts": []
+        }
+      ]
+    }
+  },
+  "iam_bindings": {
+    "//cloudresourcemanager.googleapis.com/projects/acme-prod": {
+      "bindings": [
+        {
+          "condition": null,
+          "members": [
+            "user:alice@acme.example"
+          ],
+          "role": "roles/owner"
+        },
+        {
+          "condition": null,
+          "members": [
+            "serviceAccount:ci-deployer@acme-prod.iam.gserviceaccount.com"
+          ],
+          "role": "roles/iam.securityAdmin"
+        }
+      ]
+    }
+  },
+  "network_tags": [
+    "bastion",
+    "db",
+    "web"
+  ],
+  "networks": [
+    "projects/acme-prod/global/networks/vpc-dmz",
+    "projects/acme-prod/global/networks/vpc-main"
+  ],
+  "org_policies": {
+    "projects/acme-prod|constraints/compute.disableSerialPortAccess": {
+      "constraint": "constraints/compute.disableSerialPortAccess",
+      "inherit_from_parent": false,
+      "node": "projects/acme-prod",
+      "reset": false,
+      "rules": [
+        {
+          "allow_all": null,
+          "allowed_values": [],
+          "condition": null,
+          "denied_values": [],
+          "deny_all": null,
+          "enforce": true
+        }
+      ]
+    },
+    "projects/acme-prod|constraints/compute.vmExternalIpAccess": {
+      "constraint": "constraints/compute.vmExternalIpAccess",
+      "inherit_from_parent": false,
+      "node": "projects/acme-prod",
+      "reset": false,
+      "rules": [
+        {
+          "allow_all": null,
+          "allowed_values": [],
+          "condition": null,
+          "denied_values": [
+            "projects/acme-prod/zones/us-central1-a/instances/legacy-box"
+          ],
+          "deny_all": null,
+          "enforce": null
+        }
+      ]
+    },
+    "projects/acme-prod|constraints/iam.allowedPolicyMemberDomains": {
+      "constraint": "constraints/iam.allowedPolicyMemberDomains",
+      "inherit_from_parent": false,
+      "node": "projects/acme-prod",
+      "reset": false,
+      "rules": [
+        {
+          "allow_all": null,
+          "allowed_values": [
+            "C01abcdef"
+          ],
+          "condition": null,
+          "denied_values": [],
+          "deny_all": null,
+          "enforce": null
+        }
+      ]
+    }
+  },
+  "permissions": [
+    "bigquery.datasets.get",
+    "bigquery.jobs.create",
+    "bigquery.tables.get",
+    "bigquery.tables.getData",
+    "bigquery.tables.list",
+    "compute.instances.get",
+    "iam.roles.create",
+    "iam.roles.delete",
+    "iam.roles.get",
+    "iam.roles.list",
+    "iam.roles.update",
+    "iam.serviceAccountKeys.create",
+    "iam.serviceAccounts.actAs",
+    "iam.serviceAccounts.get",
+    "iam.serviceAccounts.getAccessToken",
+    "iam.serviceAccounts.getOpenIdToken",
+    "iam.serviceAccounts.implicitDelegation",
+    "iam.serviceAccounts.list",
+    "iam.serviceAccounts.signBlob",
+    "iam.serviceAccounts.signJwt",
+    "orgpolicy.constraints.list",
+    "orgpolicy.policy.get",
+    "orgpolicy.policy.set",
+    "resourcemanager.projects.get",
+    "resourcemanager.projects.getIamPolicy",
+    "resourcemanager.projects.setIamPolicy",
+    "storage.objects.create",
+    "storage.objects.get",
+    "storage.objects.list"
+  ],
+  "principals": [
+    "group:data-eng@acme.example",
+    "serviceAccount:ci-deployer@acme-prod.iam.gserviceaccount.com",
+    "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com",
+    "user:alice@acme.example"
+  ],
+  "resource_hierarchy": {
+    "folders/2": {
+      "display_name": "Prod",
+      "number": "2",
+      "parent": "organizations/1",
+      "type": "folder"
+    },
+    "organizations/1": {
+      "display_name": "Acme",
+      "number": "1",
+      "parent": null,
+      "type": "organization"
+    },
+    "projects/acme-prod": {
+      "display_name": "Acme Prod",
+      "number": "123456",
+      "parent": "folders/2",
+      "type": "project"
+    }
+  },
+  "resource_types": [
+    "bigquery.googleapis.com/Dataset",
+    "cloudresourcemanager.googleapis.com/Project",
+    "compute.googleapis.com/Instance",
+    "google_access_context_manager_access_level",
+    "google_access_context_manager_service_perimeter",
+    "google_access_context_manager_service_perimeter_egress_policy",
+    "google_access_context_manager_service_perimeter_ingress_policy",
+    "google_access_context_manager_service_perimeter_resource",
+    "google_compute_firewall",
+    "google_compute_firewall_policy",
+    "google_compute_firewall_policy_association",
+    "google_compute_firewall_policy_rule",
+    "google_compute_security_policy",
+    "google_compute_security_policy_rule",
+    "google_iam_deny_policy",
+    "google_org_policy_policy",
+    "google_project_iam_binding",
+    "google_project_iam_custom_role",
+    "google_project_iam_member",
+    "google_project_iam_policy",
+    "iam.googleapis.com/ServiceAccount",
+    "storage.googleapis.com/Bucket"
+  ],
+  "restricted_services": [
+    "bigquery.googleapis.com",
+    "pubsub.googleapis.com",
+    "storage.googleapis.com"
+  ],
+  "roles": {
+    "projects/acme-prod/roles/ciDeployer": {
+      "included_permissions": [
+        "storage.objects.create",
+        "storage.objects.get"
+      ],
+      "stage": "GA",
+      "title": "Acme CI deployer"
+    },
+    "roles/bigquery.dataViewer": {
+      "included_permissions": [
+        "bigquery.datasets.get",
+        "bigquery.tables.get",
+        "bigquery.tables.getData",
+        "bigquery.tables.list"
+      ],
+      "stage": "GA",
+      "title": "BigQuery Data Viewer"
+    },
+    "roles/bigquery.jobUser": {
+      "included_permissions": [
+        "bigquery.jobs.create"
+      ],
+      "stage": "GA",
+      "title": "BigQuery Job User"
+    },
+    "roles/editor": {
+      "included_permissions": [
+        "compute.instances.get",
+        "iam.serviceAccounts.actAs",
+        "storage.objects.create",
+        "storage.objects.get"
+      ],
+      "stage": "GA",
+      "title": "Editor"
+    },
+    "roles/iam.securityAdmin": {
+      "included_permissions": [
+        "iam.roles.create",
+        "iam.roles.delete",
+        "iam.roles.get",
+        "iam.roles.list",
+        "iam.roles.update",
+        "resourcemanager.projects.getIamPolicy",
+        "resourcemanager.projects.setIamPolicy"
+      ],
+      "stage": "GA",
+      "title": "Security Admin"
+    },
+    "roles/iam.serviceAccountTokenCreator": {
+      "included_permissions": [
+        "iam.serviceAccounts.getAccessToken",
+        "iam.serviceAccounts.getOpenIdToken",
+        "iam.serviceAccounts.implicitDelegation",
+        "iam.serviceAccounts.signBlob",
+        "iam.serviceAccounts.signJwt"
+      ],
+      "stage": "GA",
+      "title": "Service Account Token Creator"
+    },
+    "roles/iam.serviceAccountUser": {
+      "included_permissions": [
+        "iam.serviceAccounts.actAs",
+        "iam.serviceAccounts.get",
+        "iam.serviceAccounts.list"
+      ],
+      "stage": "GA",
+      "title": "Service Account User"
+    },
+    "roles/orgpolicy.policyAdmin": {
+      "included_permissions": [
+        "orgpolicy.constraints.list",
+        "orgpolicy.policy.get",
+        "orgpolicy.policy.set"
+      ],
+      "stage": "GA",
+      "title": "Organization Policy Administrator"
+    },
+    "roles/owner": {
+      "included_permissions": [
+        "iam.roles.update",
+        "iam.serviceAccounts.actAs",
+        "iam.serviceAccounts.getAccessToken",
+        "orgpolicy.policy.get",
+        "orgpolicy.policy.set",
+        "resourcemanager.projects.getIamPolicy",
+        "resourcemanager.projects.setIamPolicy"
+      ],
+      "stage": "GA",
+      "title": "Owner"
+    },
+    "roles/storage.objectViewer": {
+      "included_permissions": [
+        "storage.objects.get",
+        "storage.objects.list"
+      ],
+      "stage": "GA",
+      "title": "Storage Object Viewer"
+    },
+    "roles/viewer": {
+      "included_permissions": [
+        "resourcemanager.projects.get"
+      ],
+      "stage": "GA",
+      "title": "Viewer"
+    }
+  },
+  "service_accounts": [
+    "ci-deployer@acme-prod.iam.gserviceaccount.com",
+    "etl-runner@acme-prod.iam.gserviceaccount.com"
+  ],
+  "subnetworks": [
+    "projects/acme-prod/regions/us-central1/subnetworks/sn-app"
+  ],
+  "vpc_sc_perimeters": {
+    "accessPolicies/987/servicePerimeters/prod": {
+      "perimeter_type": "PERIMETER_TYPE_REGULAR",
+      "spec": null,
+      "status": {
+        "access_levels": [
+          "accessPolicies/987/accessLevels/trusted_corp"
+        ],
+        "egress_policies": [
+          {
+            "egress_from": {
+              "identities": [
+                "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com"
+              ],
+              "identity_type": null
+            },
+            "egress_to": {
+              "operations": [
+                {
+                  "method_selectors": [
+                    {
+                      "method": "*"
+                    }
+                  ],
+                  "service_name": "storage.googleapis.com"
+                }
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          }
+        ],
+        "ingress_policies": [],
+        "resources": [
+          "projects/123456"
+        ],
+        "restricted_services": [
+          "storage.googleapis.com",
+          "bigquery.googleapis.com"
+        ]
+      },
+      "use_explicit_dry_run_spec": false
+    }
+  }
+}
