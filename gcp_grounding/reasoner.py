@@ -1,8 +1,11 @@
 """Reasoner: Datalog existence grounding of policy claims against a snapshot.
 
 Instantiates the vendored :class:`~gcp_grounding.core.datalog.Datalog` engine
-with one rule triple per existence category (role, permission, principal,
-constraint, resource_type). Facts come from two sides: the claims a policy
+with one rule triple per existence category — the five vocabulary categories
+(role, permission, principal, constraint, resource_type) plus the ten estate
+categories (network, subnetwork, network_tag, service_account, access_level,
+restricted_service, perimeter, firewall_policy, security_policy,
+hierarchy_node). Facts come from two sides: the claims a policy
 document makes (``claims_<kind>(name, location)``) and the snapshot's
 enumerations (``<kind>(name)``, plus ``captured(<kind>)`` for every category
 the snapshot actually enumerated)::
@@ -47,11 +50,50 @@ logger = get_logger(__name__)
 __all__ = ["EXISTENCE_KINDS", "existence_program", "ground_existence", "suggest"]
 
 #: Claim kinds the Datalog pass decides; each maps to one snapshot category.
-EXISTENCE_KINDS = ("role", "permission", "principal", "constraint", "resource_type_ref")
+#: The five original kinds lead, in order; the ten estate kinds are appended.
+EXISTENCE_KINDS = (
+    "role", "permission", "principal", "constraint", "resource_type_ref",
+    "network_ref", "subnetwork_ref", "network_tag_ref", "service_account_ref",
+    "access_level_ref", "restricted_service_ref", "perimeter_ref",
+    "firewall_policy_ref", "security_policy_ref", "hierarchy_node_ref",
+)
 
 #: Claim kind → snapshot category, where the two differ. A ``resource_type_ref``
-#: claim asserts the existence of a ``resource_type``.
-_CLAIM_CATEGORIES = {"resource_type_ref": "resource_type"}
+#: claim asserts the existence of a ``resource_type``; every estate kind is
+#: likewise its category plus a ``_ref`` suffix. The category is simultaneously
+#: the Datalog relation suffix and the ``Verdict.kind``.
+_CLAIM_CATEGORIES = {
+    "resource_type_ref": "resource_type",
+    "network_ref": "network",
+    "subnetwork_ref": "subnetwork",
+    "network_tag_ref": "network_tag",
+    "service_account_ref": "service_account",
+    "access_level_ref": "access_level",
+    "restricted_service_ref": "restricted_service",
+    "perimeter_ref": "perimeter",
+    "firewall_policy_ref": "firewall_policy",
+    "security_policy_ref": "security_policy",
+    "hierarchy_node_ref": "hierarchy_node",
+}
+
+#: Categories answered by a flat snapshot vocabulary: category → attribute.
+_VOCAB_SOURCES = {
+    "network": "networks",
+    "subnetwork": "subnetworks",
+    "network_tag": "network_tags",
+    "service_account": "service_accounts",
+    "access_level": "access_levels",
+    "restricted_service": "restricted_services",
+}
+
+#: Categories answered by the keys of a snapshot record table: category →
+#: attribute. ``hierarchy_node`` is deliberately absent — its names come from
+#: :meth:`GcpSnapshot.hierarchy_names`, which adds the number aliases.
+_TABLE_SOURCES = {
+    "perimeter": "vpc_sc_perimeters",
+    "firewall_policy": "hierarchical_firewall_policies",
+    "security_policy": "cloud_armor_policies",
+}
 
 _MAX_SUGGESTIONS = 3
 
@@ -91,6 +133,29 @@ def _enumerated(snapshot: GcpSnapshot, kind: str) -> tuple[frozenset[str], bool]
         return frozenset(snapshot.constraints or ()), snapshot.constraints is not None
     if kind == "resource_type":
         return snapshot.resource_types or frozenset(), snapshot.resource_types is not None
+    if kind == "network_tag":
+        # Presence-only, the one asymmetric estate category, following the
+        # `permission` arm above: the members PROVE existence, but `captured`
+        # is reported False so every miss lands in `unverified`, never
+        # `ungrounded`. GCP has no tag registry — a tag is created implicitly
+        # by the rule that names it — so a captured `network_tags` set is
+        # necessarily a subset of reality, and grounding absence against it
+        # would block essentially every legitimate firewall change that
+        # introduces a tag.
+        return snapshot.network_tags or frozenset(), False
+    if kind in _VOCAB_SOURCES:
+        field = getattr(snapshot, _VOCAB_SOURCES[kind])
+        return (field or frozenset(), field is not None)
+    if kind in _TABLE_SOURCES:
+        table = getattr(snapshot, _TABLE_SOURCES[kind])
+        return (frozenset(table or ()), table is not None)
+    if kind == "hierarchy_node":
+        # hierarchy_names() folds in the `projects/<number>` aliases, so a
+        # VPC-SC reference by number counts as existing. It answers UNKNOWN
+        # when uncaptured, and UNKNOWN refuses truthiness — read `captured`
+        # off the table itself first, and never call it in that case.
+        captured = snapshot.resource_hierarchy is not None
+        return (snapshot.hierarchy_names() if captured else frozenset()), captured
     raise ValueError(f"unknown existence kind {kind!r}; expected one of {EXISTENCE_KINDS}")
 
 
