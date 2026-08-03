@@ -1,0 +1,60 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_compute_firewall.bastion_ssh",
+          "mode": "managed",
+          "type": "google_compute_firewall",
+          "name": "bastion_ssh",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "name": "allow-bastion-ssh",
+            "project": "acme-prod",
+            "network": "projects/acme-prod/global/networks/prod-vpc",
+            "direction": "INGRESS",
+            "priority": 1000,
+            "disabled": false,
+            "source_ranges": ["10.0.0.0/8"],
+            "destination_ranges": [],
+            "source_tags": [],
+            "target_tags": ["bastion"],
+            "source_service_accounts": [],
+            "target_service_accounts": [],
+            "allow": [{"protocol": "tcp", "ports": ["22"]}]
+          }
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "google_compute_firewall.bastion_ssh",
+      "mode": "managed",
+      "type": "google_compute_firewall",
+      "name": "bastion_ssh",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "allow-bastion-ssh",
+          "project": "acme-prod",
+          "network": "projects/acme-prod/global/networks/prod-vpc",
+          "direction": "INGRESS",
+          "priority": 1000,
+          "disabled": false,
+          "source_ranges": ["10.0.0.0/8"],
+          "destination_ranges": [],
+          "source_tags": [],
+          "target_tags": ["bastion"],
+          "source_service_accounts": [],
+          "target_service_accounts": [],
+          "allow": [{"protocol": "tcp", "ports": ["22"]}]
+        }
+      }
+    }
+  ]
+}

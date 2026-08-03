@@ -1,0 +1,98 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_compute_firewall_policy_rule.rdp_before_baseline_deny",
+          "mode": "managed",
+          "type": "google_compute_firewall_policy_rule",
+          "name": "rdp_before_baseline_deny",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "firewall_policy": "organizations/123456789012/locations/global/firewallPolicies/org-baseline",
+            "description": "vendor support needs RDP",
+            "action": "allow",
+            "direction": "INGRESS",
+            "priority": 100,
+            "disabled": false,
+            "enable_logging": false,
+            "target_resources": [],
+            "target_service_accounts": [],
+            "match": [
+              {
+                "src_ip_ranges": ["0.0.0.0/0"],
+                "dest_ip_ranges": [],
+                "layer4_configs": [{"ip_protocol": "tcp", "ports": ["3389"]}]
+              }
+            ]
+          }
+        },
+        {
+          "address": "google_compute_firewall_policy_association.org_baseline",
+          "mode": "managed",
+          "type": "google_compute_firewall_policy_association",
+          "name": "org_baseline",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "name": "org-baseline-association",
+            "firewall_policy": "organizations/123456789012/locations/global/firewallPolicies/org-baseline",
+            "attachment_target": "organizations/123456789012"
+          }
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "google_compute_firewall_policy_rule.rdp_before_baseline_deny",
+      "mode": "managed",
+      "type": "google_compute_firewall_policy_rule",
+      "name": "rdp_before_baseline_deny",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "firewall_policy": "organizations/123456789012/locations/global/firewallPolicies/org-baseline",
+          "description": "vendor support needs RDP",
+          "action": "allow",
+          "direction": "INGRESS",
+          "priority": 100,
+          "disabled": false,
+          "enable_logging": false,
+          "target_resources": [],
+          "target_service_accounts": [],
+          "match": [
+            {
+              "src_ip_ranges": ["0.0.0.0/0"],
+              "dest_ip_ranges": [],
+              "layer4_configs": [{"ip_protocol": "tcp", "ports": ["3389"]}]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "address": "google_compute_firewall_policy_association.org_baseline",
+      "mode": "managed",
+      "type": "google_compute_firewall_policy_association",
+      "name": "org_baseline",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["no-op"],
+        "before": {
+          "name": "org-baseline-association",
+          "firewall_policy": "organizations/123456789012/locations/global/firewallPolicies/org-baseline",
+          "attachment_target": "organizations/123456789012"
+        },
+        "after": {
+          "name": "org-baseline-association",
+          "firewall_policy": "organizations/123456789012/locations/global/firewallPolicies/org-baseline",
+          "attachment_target": "organizations/123456789012"
+        }
+      }
+    }
+  ]
+}

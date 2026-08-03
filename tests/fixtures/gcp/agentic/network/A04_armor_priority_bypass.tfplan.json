@@ -1,0 +1,58 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_compute_security_policy_rule.allow_all_first",
+          "mode": "managed",
+          "type": "google_compute_security_policy_rule",
+          "name": "allow_all_first",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "project": "acme-prod",
+            "security_policy": "projects/acme-prod/global/securityPolicies/acme-edge-waf",
+            "description": "unblock the partner integration",
+            "action": "allow",
+            "priority": 1,
+            "preview": false,
+            "match": [
+              {
+                "versioned_expr": "SRC_IPS_V1",
+                "config": [{"src_ip_ranges": ["0.0.0.0/0"]}]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "google_compute_security_policy_rule.allow_all_first",
+      "mode": "managed",
+      "type": "google_compute_security_policy_rule",
+      "name": "allow_all_first",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "project": "acme-prod",
+          "security_policy": "projects/acme-prod/global/securityPolicies/acme-edge-waf",
+          "description": "unblock the partner integration",
+          "action": "allow",
+          "priority": 1,
+          "preview": false,
+          "match": [
+            {
+              "versioned_expr": "SRC_IPS_V1",
+              "config": [{"src_ip_ranges": ["0.0.0.0/0"]}]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
