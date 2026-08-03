@@ -150,10 +150,40 @@ def test_file_is_required_without_hook(capsys):
 
 
 def test_file_and_hook_are_mutually_exclusive(capsys):
+    # Contract change (cli.py:27-28): a broken hook setup must NEVER block an
+    # edit, so a hook-mode usage error now fails open (exit 0 + fail-open on
+    # stderr) instead of the old exit 2. The diagnostic is unchanged.
     code, _, err = invoke(capsys, "verify-policy", str(GOOD), "--hook",
                           "--snapshot", str(SNAPSHOT))
-    assert code == 2
+    assert code == 0
     assert "mutually exclusive" in err
+    assert "fail-open" in err
+
+
+def test_hook_mode_argparse_error_fails_open(capsys):
+    # A typo in a hook command line must not block every tool call: an argparse
+    # failure with --hook present degrades to fail-open (exit 0), while the
+    # non-hook control keeps the SystemExit(2) usage error.
+    code, _, err = invoke(capsys, "verify-policy", "--hook", "--bogus")
+    assert code == 0
+    assert "fail-open" in err
+    with pytest.raises(SystemExit) as exc:
+        main(["verify-policy", "--bogus"])
+    assert exc.value.code == 2
+
+
+def test_normal_mode_usage_errors_still_exit_two(capsys, monkeypatch, tmp_path):
+    # Normal mode is unchanged: the three usage paths still exit 2.
+    code, _, err = invoke(capsys, "verify-policy")  # missing FILE
+    assert code == 2 and "FILE" in err
+    monkeypatch.delenv(SNAPSHOT_ENV, raising=False)
+    code, _, err = invoke(capsys, "verify-policy", str(GOOD))  # missing snapshot
+    assert code == 2 and SNAPSHOT_ENV in err
+    broken = tmp_path / "snapshot.json"
+    broken.write_text("{not json", encoding="utf-8")
+    code, _, err = invoke(capsys, "verify-policy", str(GOOD),  # unloadable snapshot
+                          "--snapshot", str(broken))
+    assert code == 2 and "snapshot" in err
 
 
 # -- --baseline (new⊆old) -----------------------------------------------------

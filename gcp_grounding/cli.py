@@ -12,10 +12,13 @@ Exit codes carry the gate's honesty contract:
 - ``0`` — the gate passed: every claim grounded *or* was honestly
   ``unverified`` (fail-open — ignorance never fails the gate);
 - ``1`` — something is ungrounded or contradicted;
-- ``2`` — the invocation itself is unusable (bad flags, no snapshot), or, in
-  ``--hook`` mode, the gate found ungrounded/contradicted claims — ``2`` is
-  the Claude-Code blocking exit code, and the findings go to stderr so the
-  hook runner feeds them back to the agent.
+- ``2`` — a usage error in NORMAL mode (bad flags, no snapshot), or a real
+  ungrounded/contradicted finding in ``--hook`` mode — ``2`` is the
+  Claude-Code blocking exit code, and the findings go to stderr so the hook
+  runner feeds them back to the agent. In hook mode there is no such thing as
+  a usage error: an unusable invocation reports itself on stderr and exits 0,
+  because a misconfigured hook must degrade to checking nothing, never to
+  blocking everything.
 
 ``--snapshot`` falls back to the :data:`SNAPSHOT_ENV` environment variable —
 a hook or CI job configures the estate snapshot once instead of per call.
@@ -51,7 +54,14 @@ from .claims import iam_policy_claims, org_policy_claims
 # Explain reuses the constraint layer's own encoders (private to the package,
 # not the world) — re-implementing the CEL translation here would let the
 # dumped formulas drift from the ones actually decided.
-from .constraints import UnsupportedCel, _CelToZ3, _grant_pairs, _Undecidable, _z3_module
+from .constraints import (
+    UnsupportedCel,
+    _CelToZ3,
+    _condition_formula,
+    _grant_pairs,
+    _Undecidable,
+    _z3_module,
+)
 from .core.log import get_logger
 from .core.solver import get_solver
 from .knowledge import GcpSnapshot
@@ -115,7 +125,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    try:
+        args = build_parser().parse_args(raw)
+    except SystemExit:
+        # argparse has already failed and exited, so there is no namespace to
+        # consult (no ``args.hook``) — the raw argv is all we have left. If it
+        # carries the literal ``--hook``, degrade to checking nothing (stderr +
+        # exit 0), because a misconfigured hook must fail open, never block
+        # every edit with a SystemExit(2). ``--help`` also exits 0 here, which
+        # is correct: argparse already printed the help text. Normal mode
+        # re-raises, keeping the usage-error exit 2.
+        if "--hook" in raw:
+            print("gcp-ground --hook: the hook command line is not usable — "
+                  "nothing was checked (fail-open)", file=sys.stderr)
+            return EXIT_OK
+        raise
     return args.handler(args)
 
 
@@ -126,7 +151,7 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
     if args.hook:
         if args.file is not None:
             return _usage("FILE and --hook are mutually exclusive — the hook "
-                          "event names the edited file")
+                          "event names the edited file", hook=True)
         return _run_hook(args)
     if args.file is None:
         return _usage("FILE is required (only --hook mode reads the file from "
@@ -143,7 +168,14 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
     return EXIT_OK if report.ok else EXIT_FAILED
 
 
-def _usage(problem: str) -> int:
+def _usage(problem: str, *, hook: bool = False) -> int:
+    if hook:
+        # Reuse the fail-open wording so operators see one phrase across the
+        # stdin, snapshot and argv arms — a hook usage error checks nothing and
+        # exits 0, never blocking the edit (see the exit-code docstring above).
+        print(f"gcp-ground --hook: {problem} — nothing was checked (fail-open)",
+              file=sys.stderr)
+        return EXIT_OK
     print(f"gcp-ground verify-policy: error: {problem}", file=sys.stderr)
     return EXIT_BLOCK
 
@@ -265,14 +297,19 @@ def _explain_subset(z3: Any, doc: Mapping[str, Any], baseline: str) -> str:
         return f"  [subset] no constraint — {exc}"
     role = z3.String("role")
     member = z3.String("member")
+    cond_cache: dict = {}
 
-    def granted(pairs):
-        if not pairs:
+    def granted(grants):
+        if not grants:
             return z3.BoolVal(False)
-        return z3.Or([z3.And(role == z3.StringVal(r), member == z3.StringVal(m))
-                      for r, m in sorted(pairs)])
+        return z3.Or([z3.And(role == z3.StringVal(r), member == z3.StringVal(m),
+                             _condition_formula(z3, c, cond_cache))
+                      for r, m, c in sorted(grants, key=lambda t: (t[0], t[1], t[2] or ""))])
 
-    assertion = z3.And(granted(new_grants), z3.Not(granted(old_grants)))
+    try:
+        assertion = z3.And(granted(new_grants), z3.Not(granted(old_grants)))
+    except (UnsupportedCel, RecursionError) as exc:
+        return f"  [subset] no constraint — a condition is CEL outside the supported subset ({exc})"
     return f"  [subset] iam-policy: {assertion.sexpr()}"
 
 
