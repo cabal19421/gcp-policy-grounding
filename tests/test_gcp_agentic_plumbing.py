@@ -90,11 +90,21 @@ def test_tf_claims_probe_reflects_this_checkout():
     assert env.HAVE_TF_CLAIMS is True
 
 
-def test_domain_probes_false_before_domains_land():
-    assert env.have_claim_kinds("firewall_rule") is False
-    assert env.HAVE_FIREWALL_DOMAIN is False
-    assert env.HAVE_VPCSC_DOMAIN is False
-    # The conjunction probe: neither the kind nor org_checks exists yet.
+def test_domain_probes_track_the_kinds_that_have_landed():
+    # This test was written when nothing had landed and asserted a flat False.
+    # ``sx-claim-kinds`` registers EVERY domain kind up front, several tasks
+    # before the checkers that read them, so on a merged seed the kind-only
+    # probes are already True while nothing can yet block. The contract each
+    # adversarial family keys its skips off is not "False", it is "agrees with
+    # claims.KINDS" — assert that, so this stays meaningful in both worlds.
+    from gcp_grounding.claims import KINDS
+
+    assert env.HAVE_FIREWALL_DOMAIN is ("firewall_rule" in KINDS)
+    assert env.HAVE_VPCSC_DOMAIN is ("perimeter_config" in KINDS)
+    # The conjunction probe is exactly the case that motivated it: the kind is
+    # registered and org_checks is not, so it stays False and A12/A13 keep
+    # skipping until a checker can really block.
+    assert "constraint_enforcement" in KINDS
     assert env.HAVE_ORG_ENFORCEMENT is False
     assert env.HAVE_ESTATE_CATEGORY is False
 
