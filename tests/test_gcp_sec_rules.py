@@ -9,8 +9,16 @@ real grounded/contradicted/refusal assertions when z3 is present.
 Promises are built in code (via minted or placeholder ``Promise`` objects) so the
 suite depends on no ``sx-sec-compile`` stage-1 code, plus ``tmp_path`` artifacts
 for the loader and anti-tamper pins.
+
+NAMED MUTATION MUST-KILLS PINNED HERE: MK-I14 through MK-I26 — the frozen
+``RuleContext``, the four ``lineno`` abstention paths, counter-model completion,
+the org-policy rule tier (name split, object guard, enforce default, entry
+guard), and the two artifact-integrity register flags. Each was measured to
+survive this suite as it stood and re-measured ALONE in an isolated copy before
+being pinned (house rule 7).
 """
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -487,3 +495,345 @@ def test_no_z3_tampered_artifact_registers_with_note(tmp_path):
     note = [v for v in verdicts if v.kind == "sec:artifact" and v.target == "nzp"]
     assert len(note) == 1 and note[0].status == "unverified"
     assert "integrity" in note[0].message
+
+
+# =============================================================================
+# the lineno invariant, and the named mutation must-kills (MK-I14 .. MK-I26)
+#
+# Every entry below is a mutation that was MEASURED to survive this suite as it
+# stood and re-measured ALONE in an isolated copy of the tree (house rule 7)
+# before being pinned. THE INVARIANT IS THE KILLER, NOT THE WHOLE TEST: each test
+# that carries the lineno invariant ALSO pins that path's IDENTITY — the
+# verdict's status and kind, its target, and the reason named in its message — so
+# no must-kill is ever discharged by an assertion about a number alone.
+# =============================================================================
+
+def assert_policy_documents_have_no_line_numbers(verdicts):
+    """A policy document has no line numbers, so EVERY verdict's ``lineno`` is 0
+    and the json-path location leads the message instead.
+
+    The REGISTERED predicate is ``all(v.lineno == 0 for v in`` — the one-line
+    invariant that kills every ``lineno`` mutant on an abstention path (MK-I15,
+    MK-I16, MK-I17, MK-I23, MK-I26), which is coverage of exactly the fail-open
+    branches the vacuity class lives on."""
+    verdicts = list(verdicts)
+    assert verdicts, "an invariant over no verdicts proves nothing"
+    assert all(v.lineno == 0 for v in verdicts), (
+        "policy documents have no line numbers: "
+        f"{[(v.target, v.lineno) for v in verdicts]}")
+
+
+@pytest.fixture()
+def open_formula_encoders():
+    """Two encoder overrides that leave a FREE CONSTANT in the ground formula.
+
+    ``sec_encode`` refuses the one built-in node that opens a formula (``cel``),
+    so an override is the only way to reach the validity fallback — which is
+    precisely why the closed-formula guard verifies the precondition instead of
+    trusting it. Restored afterwards: no test may leak an encoder."""
+    saved = dict(sec_encode.ENCODERS)
+
+    def valid(z3, node, resolver, env, depth):
+        flag = z3.Bool("gate_open")
+        return z3.Or(flag, z3.Not(flag))          # valid under every assignment
+
+    def refuted(z3, node, resolver, env, depth):
+        decided, spare = z3.Int("decided_port"), z3.Int("spare_port")
+        # `spare_port` is unconstrained: a counter-model need not assign it, and
+        # rendering it is exactly what model completion is for.
+        return z3.And(decided == 8080, z3.Or(spare > 0, spare <= 0))
+
+    sec_encode.register_encoder("probe_valid", valid)
+    sec_encode.register_encoder("probe_refuted", refuted)
+    yield
+    sec_encode.ENCODERS.clear()
+    sec_encode.ENCODERS.update(saved)
+
+
+def test_rule_context_is_frozen_and_hashable():
+    """MK-I14 (sec_rules.py:112, ``frozen=True`` -> ``frozen=False``).
+
+    RuleContext is described as everything the three tiers may consult in one
+    FROZEN record: the tiers read it, they never edit it, and the mutant makes it
+    both mutable and unhashable."""
+    fields = dict(snapshot=SNAP, document=None, document_kind="iam_policy",
+                  source="<policy object>")
+    context = sec_rules.RuleContext(**fields)
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        context.document_kind = "org_policy"
+    assert context.document_kind == "iam_policy"    # the scribble did not land
+
+    assert hash(context) == hash(sec_rules.RuleContext(**fields))
+    assert len({context, sec_rules.RuleContext(**fields)}) == 1
+
+
+def test_the_z3_absent_abstention_is_identified_and_carries_no_line_number():
+    """MK-I15 (sec_rules.py:219): the lineno of the solver-not-available
+    abstention — with that path's identity pinned in the same test."""
+    r = rule(placeholder_promise("nz-lineno", "refute", AST_OWNER))
+    v = r.evaluate(ctx(IAM_GOOD, "iam_policy", solver=get_solver("builtin")))
+
+    assert v.status == "unverified" and v.kind == "sec:iam"
+    assert v.target == "nz-lineno"
+    assert "z3 is not available" in v.message and "not decided" in v.message
+    assert_policy_documents_have_no_line_numbers([v])
+
+
+def test_a_violation_no_single_record_witnesses_is_identified_and_has_no_lineno():
+    """MK-I16 (sec_rules.py:264): the lineno of "the obligation is violated but
+    no single record witnesses it" — the honest refusal to fabricate a witness,
+    with its identity pinned in the same test.
+
+    Reached through an extractor that ATTESTS its emptiness: empty-exists is
+    False, and an empty collection has no record to blame."""
+    detail = "'bindings' is present and holds no bindings"
+    sec_rules.register_extractor(
+        "iam_bindings",
+        lambda c: evidence.observed_empty("the document under review", detail))
+    r = rule(placeholder_promise("no-witness", "assert_satisfiable",
+                                 AST_VIEWER_EXISTS))
+    v = r.evaluate(ctx({"bindings": []}, "iam_policy"))
+
+    if not HAVE_Z3:
+        assert v.status == "unverified" and "z3 is not available" in v.message
+        return
+    assert v.status == "contradicted" and v.kind == "sec:iam"
+    assert v.target == "no-witness"
+    assert "no single record witnesses it" in v.message
+    assert "not fabricating one" in v.message
+    assert sec_rules.last_witness("no-witness") is None
+    assert_policy_documents_have_no_line_numbers([v])
+
+
+def test_the_validity_fallback_grounds_with_an_identity_and_no_line_number(
+        open_formula_encoders):
+    """MK-I17 (sec_rules.py:279): the lineno of the open-formula grounded
+    verdict, with the identity of the validity fallback pinned beside it.
+
+    ``decide(obl) is True => grounded`` is sound only for a CLOSED formula, so an
+    encoder override that leaves a free constant must reach the validity test —
+    and say so in the message."""
+    r = rule(placeholder_promise("open-valid", "assert_satisfiable",
+                                 {"node": "probe_valid"}))
+    v = r.evaluate(ctx(IAM_GOOD, "iam_policy"))
+
+    if not HAVE_Z3:
+        assert v.status == "unverified" and "z3 is not available" in v.message
+        return
+    assert v.status == "grounded" and v.kind == "sec:iam"
+    assert v.target == "open-valid"
+    assert "the obligation is valid" in v.message
+    assert "decided by validity because the formula was not closed" in v.message
+    assert_policy_documents_have_no_line_numbers([v])
+
+
+def test_a_counter_model_renders_a_value_for_every_term(open_formula_encoders):
+    """MK-I18 (sec_rules.py:332): the ``model_completion=True`` of the
+    counter-model renderer.
+
+    With completion off, a term the model left unassigned renders as its own
+    symbol NAME, so a ``contradicted`` verdict's counter-model stops being
+    concrete evidence while still reading like one."""
+    r = rule(placeholder_promise("open-refuted", "assert_satisfiable",
+                                 {"node": "probe_refuted"}))
+    v = r.evaluate(ctx(IAM_GOOD, "iam_policy"))
+
+    if not HAVE_Z3:
+        assert v.status == "unverified" and "z3 is not available" in v.message
+        return
+    assert v.status == "contradicted" and v.kind == "sec:iam"
+    assert v.target == "open-refuted"
+    assert "refuted by counter-model" in v.message
+
+    witness = v.message.split("counter-model ", 1)[1].split(";", 1)[0].strip()
+    rendered = dict(part.split("=", 1) for part in witness.split())
+    assert set(rendered) == {"decided_port", "spare_port"}
+    # every term carries a VALUE, including the one the model left unassigned:
+    # a bare symbol name is not evidence of anything.
+    assert all(value.lstrip("-").isdigit() for value in rendered.values()), witness
+    assert all(name != value for name, value in rendered.items()), witness
+
+
+def test_the_constraint_id_is_the_whole_tail_after_the_first_marker():
+    """MK-I19 (sec_rules.py:474): the MAXSPLIT of the org-policy name split.
+
+    A name carrying a doubled ``/policies/`` marker must yield everything after
+    the FIRST one; splitting twice silently returns a different constraint id, so
+    the promise reasons about a constraint the document never named."""
+    doubled = ("organizations/1234/policies/"
+               "compute.disableSerialPortAccess/policies/inner")
+    assert sec_rules._org_constraint_name({"name": doubled}) == (
+        "compute.disableSerialPortAccess/policies/inner")
+
+    plain = "projects/acme-prod/policies/compute.vmExternalIpAccess"
+    assert sec_rules._org_constraint_name({"name": plain}) == (
+        "compute.vmExternalIpAccess")
+    # no marker at all: the raw name, never an empty id
+    assert sec_rules._org_constraint_name({"name": "bare-name"}) == "bare-name"
+    assert sec_rules._org_constraint_name({}) == ""
+
+
+#: A real Org Policy: one boolean rule and one list rule, the two record shapes
+#: ``org_policy_rules`` produces.
+ORG_POLICY = {
+    "name": "projects/acme-prod/policies/compute.vmExternalIpAccess",
+    "spec": {"rules": [{"enforce": True},
+                       {"values": {"deniedValues": [
+                           "projects/acme-prod/zones/us-central1-a/instances/vm-a"]}}]},
+}
+
+
+def test_a_real_org_policy_yields_records_and_no_reason():
+    """MK-I20 (sec_rules.py:487): ``not isinstance(policy, Mapping)``.
+
+    CATASTROPHIC AND FREE TODAY: with the guard inverted a VALID org policy
+    returns immediately with "the Org Policy is not a JSON object", so the
+    org-policy rule tier ALWAYS abstains. It survives because nothing else in the
+    suite drives that tier with a real org-policy document."""
+    records, missing = sec_rules.org_policy_rules(ctx(ORG_POLICY, "org_policy"))
+
+    assert missing is None
+    assert records == (
+        {"constraint": "compute.vmExternalIpAccess", "is_list": False,
+         "enforce": True, "value": ""},
+        {"constraint": "compute.vmExternalIpAccess", "is_list": True,
+         "enforce": False,
+         "value": "projects/acme-prod/zones/us-central1-a/instances/vm-a"},
+    )
+
+
+def test_an_absent_enforce_key_records_enforce_false():
+    """MK-I21 (sec_rules.py:507): the ``enforce`` default.
+
+    Recording an absent key as enforced is a silent inversion of the
+    decision-relevant axis of the whole org-policy tier."""
+    def one_rule(rule_body):
+        doc = {"name": ORG_POLICY["name"], "spec": {"rules": [rule_body]}}
+        records, missing = sec_rules.org_policy_rules(ctx(doc, "org_policy"))
+        assert missing is None
+        return [r["enforce"] for r in records]
+
+    assert one_rule({"values": {"allowedValues": ["a"]}}) == [False]
+    # the control: the key IS read when the document sets it
+    assert one_rule({"enforce": True, "values": {"allowedValues": ["a"]}}) == [True]
+    assert one_rule({"enforce": False, "values": {"allowedValues": ["a"]}}) == [False]
+
+
+def test_a_list_of_strings_is_accepted_and_a_non_string_entry_refuses():
+    """MK-I22 (sec_rules.py:521): the surprise guard on a list value's entries.
+
+    Inverted, string entries refuse and non-string entries are appended into the
+    records — the same extract-faithfully-or-refuse discipline, run backwards."""
+    good = {"name": ORG_POLICY["name"],
+            "spec": {"rules": [{"values": {"allowedValues": ["a", "b"]}}]}}
+    records, missing = sec_rules.org_policy_rules(ctx(good, "org_policy"))
+    assert missing is None
+    assert [r["value"] for r in records] == ["a", "b"]
+
+    bad = {"name": ORG_POLICY["name"],
+           "spec": {"rules": [{"values": {"deniedValues": ["a", 7]}}]}}
+    records, missing = sec_rules.org_policy_rules(ctx(bad, "org_policy"))
+    assert records == ()
+    assert "rules[0].values.deniedValues" in missing
+    assert "non-string entry" in missing
+
+
+def test_a_carry_verdict_names_the_requirement_and_has_no_line_number(tmp_path):
+    """MK-I23 (sec_rules.py:567): the lineno of the not-run verdict a
+    non-compiled promise re-emits, with both carry paths' identity pinned.
+
+    The carry verdict exists so a promise that did not run never reads as
+    coverage; its location is the requirement's own ``file:line``, and the
+    verdict's own lineno stays 0 because the POLICY has no line numbers."""
+    _write(tmp_path, "b.promises.json",
+           _doc([_rejected("carry-rej")], source_doc="b.json"))
+    _write(tmp_path, "c.promises.json",
+           _doc([_unverified("carry-unv")], source_doc="c.json"))
+
+    rules, verdicts = sec_rules.load_directory(str(tmp_path))
+    assert rules == ()
+    carried = {v.target: v for v in verdicts}
+    assert set(carried) == {"carry-rej", "carry-unv"}
+
+    rejected, unverified = carried["carry-rej"], carried["carry-unv"]
+    assert rejected.status == "unverified" and rejected.kind == "sec:iam"
+    assert "rejected at compile time" in rejected.message
+    assert "ast failed to encode" in rejected.message and "did not run" in rejected.message
+    assert unverified.status == "unverified" and unverified.kind == "sec:iam"
+    assert "vocabulary did not ground" in unverified.message
+    # the requirement's location leads the message, not the verdict's lineno
+    assert unverified.message.startswith("req.md:7:")
+    assert_policy_documents_have_no_line_numbers(verdicts)
+
+
+#: The one built-in node that opens a formula, which ``sec_encode`` refuses: a
+#: stored ast carrying it cannot be re-encoded at load time.
+CEL_AST = {"node": "cel", "expr": "resource.type == 'compute.googleapis.com/Disk'"}
+
+
+def test_an_unsupported_term_registers_the_rule_its_message_says_it_registered():
+    """MK-I24 (sec_rules.py:595): the REGISTER flag of the unsupported-term path.
+
+    The message on that path says the rule WAS registered. The mutant makes the
+    message lie and silently unregisters a rule whose stored ast cannot be
+    re-encoded — so the promise vanishes while the report still reads as though
+    it were carried."""
+    doc = _doc([placeholder_promise("cel-rule", "refute", CEL_AST)],
+               source_doc="cel.json")
+    rules, verdicts = sec_rules.load_rules([doc], solver=_SOLVER)
+
+    art = [v for v in verdicts if v.kind == "sec:artifact"]
+    assert len(art) == 1 and art[0].status == "unverified"
+    assert art[0].target == "cel-rule"
+    assert "the rule was registered" in art[0].message
+    if HAVE_Z3:
+        assert "could not be re-encoded" in art[0].message
+        assert "cel cannot be decided by this encoder" in art[0].message
+    # and the message does not lie: it IS registered
+    assert {r.promise.id for r in rules} == {"cel-rule"}
+    assert "cel-rule" in sec_rules.RULES
+
+
+def test_one_undecidable_witness_is_reported_and_the_rule_still_registers(
+        monkeypatch):
+    """MK-I25 (sec_rules.py:616): the integrity check's ``or``.
+
+    Under the mutant ONE undecidable pinned witness stops reporting "a pinned
+    witness could not be re-classified" and integrity reads as fully verified —
+    an abstention silently converted into a positive at the artifact tier."""
+    if not HAVE_Z3:
+        return
+    monkeypatch.setattr(sec_probes, "reclassify", lambda z3, promise: (True, None))
+    doc = _doc([minted_promise("half-pinned", "refute", AST_OWNER)],
+               source_doc="half.json")
+
+    rules, verdicts = sec_rules.load_rules([doc], solver=_SOLVER)
+
+    art = [v for v in verdicts if v.kind == "sec:artifact"]
+    assert len(art) == 1 and art[0].status == "unverified"
+    assert art[0].target == "half-pinned"
+    assert "a pinned witness could not be re-classified" in art[0].message
+    assert "integrity was not fully verified" in art[0].message
+    # abstaining on integrity never drops the rule
+    assert {r.promise.id for r in rules} == {"half-pinned"}
+
+
+def test_a_duplicate_promise_id_is_identified_and_has_no_line_number():
+    """MK-I26 (sec_rules.py:664): the lineno of the duplicate-id verdict, with
+    that path's identity pinned beside it. Two artifacts claiming one id is a
+    detected inconsistency in committed files, so it refuses BOTH."""
+    d1 = _doc([placeholder_promise("dup-lineno", "refute", AST_OWNER)],
+              source_doc="fileA.json")
+    d2 = _doc([placeholder_promise("dup-lineno", "refute", AST_OWNER)],
+              source_doc="fileB.json")
+
+    rules, verdicts = sec_rules.load_rules([d1, d2])
+
+    [dup] = [v for v in verdicts if v.target == "dup-lineno"]
+    assert dup.status == "contradicted" and dup.kind == "sec:artifact"
+    assert "duplicate promise id" in dup.message
+    assert "fileA.json" in dup.message and "fileB.json" in dup.message
+    assert "neither was registered" in dup.message
+    assert rules == () and "dup-lineno" not in sec_rules.RULES
+    assert_policy_documents_have_no_line_numbers([dup])

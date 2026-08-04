@@ -19,6 +19,10 @@ that silently produces zero claims is NOT downgraded here. That tier is carried
 by the AST lint and by the per-site tasks; this file pins only what the two
 invokers own, and :func:`test_the_funnel_does_not_cover_claim_extraction` states
 the residual risk so the floor is never mistaken for total coverage.
+
+NAMED MUTATION MUST-KILLS PINNED HERE: MK-I27, MK-I28 and MK-I29 — the whole of
+this task's own diff in the measured sample, already killed by the tests below
+and named so they stay killed.
 """
 
 from pathlib import Path
@@ -395,3 +399,65 @@ def test_sec_domains_guarded_routes_not_evaluated_through_missing_reason():
 
     _records, own = sec_domains._guarded("hier_firewall_rules", raises_own)(None)
     assert own == "snapshot did not capture x"
+
+
+# =============================================================================
+# the lineno invariant, and this task's own three named must-kills
+#
+# MK-I27 (registry.py:220, ``and`` -> ``or`` on the downgrade predicate) and
+# MK-I28 (registry.py:220, the REGISTERED ``rows_examined == 0``) are killed by
+# test_a_decision_over_an_empty_collection_is_downgraded and
+# test_a_check_that_reads_nothing_is_not_downgraded above; MK-I29
+# (sec_rules.py:248, the ``+`` that appends the observed-empty reason) is killed
+# by test_an_observed_empty_extraction_grounds_and_says_how_it_knows. All three
+# are named here so they stay killed, and all three were re-measured ALONE in an
+# isolated copy of the tree (house rule 7).
+# =============================================================================
+
+def assert_policy_documents_have_no_line_numbers(verdicts):
+    """A policy document has no line numbers, so EVERY verdict's ``lineno`` is 0
+    and the json-path location leads the message instead.
+
+    The REGISTERED predicate is ``all(v.lineno == 0 for v in`` — asserting it per
+    abstention path is coverage of exactly the fail-open branches the vacuity
+    class lives on. THE INVARIANT IS THE KILLER, NOT THE WHOLE TEST: its caller
+    also pins each path's IDENTITY — status, kind, target and the reason named in
+    the message."""
+    verdicts = list(verdicts)
+    assert verdicts, "an invariant over no verdicts proves nothing"
+    assert all(v.lineno == 0 for v in verdicts), (
+        "policy documents have no line numbers: "
+        f"{[(v.target, v.lineno) for v in verdicts]}")
+
+
+def test_the_floors_own_abstentions_are_identified_and_carry_no_line_number():
+    """The three verdicts ``_invoke`` can author — the downgrade, the typed
+    abstain and the broad crash arm — each pinned by status, kind, target and
+    reason, and all three carrying the documented lineno invariant."""
+    @provider
+    def crashes(check_ctx):
+        raise RuntimeError("kaboom")
+
+    @provider
+    def abstains(check_ctx):
+        raise evidence.NotEvaluated("hierarchical firewall policy 'fp-baseline'",
+                                    "has no readable 'rules' list, got dict")
+
+    empty = ctx(document=EMPTY_DOC)
+    [downgraded] = registry._invoke(_decides("grounded"), empty, empty)
+    [abstained] = registry._invoke(abstains, empty, empty, kind="firewall_policy")
+    [crashed] = registry._invoke(crashes, empty, empty)
+
+    assert downgraded.status == "unverified" and downgraded.kind == "firewall_policy"
+    assert downgraded.target == "fp-baseline"
+    assert "'rules' is present and holds no records" in downgraded.message
+
+    assert abstained.status == "unverified" and abstained.kind == "firewall_policy"
+    assert abstained.target == "<policy object>"
+    assert "got dict" in abstained.message
+
+    assert crashed.status == "unverified" and crashed.kind == "document"
+    assert crashed.target == "<policy object>"
+    assert "raised RuntimeError: kaboom" in crashed.message
+
+    assert_policy_documents_have_no_line_numbers([downgraded, abstained, crashed])
