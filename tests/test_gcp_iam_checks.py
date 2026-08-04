@@ -655,3 +655,124 @@ def test_a_real_binding_address_still_pairs_with_its_members(backend, snapshot,
         verdicts = check_escalation(ctx)
     assert [v.status for v in verdicts] == ["contradicted"]
     assert "anyone can escalate" in verdicts[0].message
+
+
+# -- the named must-kill pins (MK-E01 .. MK-E06) ------------------------------
+#
+# AMENDMENT 3 replaced this task's `(mutation: 0.8)` ratio with named pins, so
+# each owned survivor gets a STABLE, UNPARAMETRIZED handle of its own: a
+# bracketed node id moves when a case is added to a parametrize list, and a
+# SKIPPED param never satisfies a `must_fail`.
+#
+# Four of them mutate the LINENO positional of a `Verdict`. Per the
+# admissibility ruling, each is phrased against the SERIALIZED report payload —
+# the surface a consumer actually reads, one step further from the mutated
+# literal than the constructor call — and each also pins the IDENTITY of the
+# path it stands on: status, kind, target, and the reason named in the message.
+# Three of the four sit on abstention paths this task created, so asserting that
+# identity per path is coverage of exactly those fail-open branches.
+
+
+def _payload_verdicts(report, kind: str) -> list[dict]:
+    """The serialized ``to_dict()`` verdicts of one kind — a consumer's view."""
+    return [v for v in report.to_dict()["verdicts"] if v["kind"] == kind]
+
+
+def test_deny_polarity_public_principal_reports_no_source_line(snapshot):
+    # MK-E01, gcp_grounding/iam_checks.py `def check_public_principal`.
+    # A deny policy is a JSON document, so there is no source line to point a
+    # consumer at; the json-path location leads the message instead.
+    public = _payload_verdicts(ground_policy(DENY_GOOD, snapshot), "iam_public")
+    assert len(public) == 1
+    assert public[0]["lineno"] == 0
+    assert public[0]["status"] == "grounded"
+    assert public[0]["kind"] == "iam_public"
+    assert public[0]["target"] == "allUsers"
+    assert "guardrail, not an exposure" in public[0]["message"]
+
+
+def test_bindings_without_a_role_claim_abstain_with_no_source_line(snapshot):
+    # MK-E02, gcp_grounding/iam_checks.py `def _no_role_claims`.
+    # The abstention was derived from the DOCUMENT — one binding present, no
+    # role extracted from it — and not from any line of it.
+    report = ground_policy({"bindings": [{"members": ["user:alice@acme.example"]}]},
+                           snapshot)
+    abstained = _payload_verdicts(report, "iam_escalation")
+    assert len(abstained) == 1
+    assert abstained[0]["lineno"] == 0
+    assert abstained[0]["status"] == "unverified"
+    assert abstained[0]["kind"] == "iam_escalation"
+    assert abstained[0]["target"] == "<policy object>"
+    assert "1 binding(s) were present but no role claim was extracted" \
+        in abstained[0]["message"]
+
+
+def test_an_unmodelled_member_abstention_reports_no_source_line(snapshot):
+    # MK-E03, gcp_grounding/iam_checks.py `def _no_usable_members`.
+    # Item (3)'s unmodelled-principal abstention: the member exists in the
+    # document but the extractor refused it, and no line is quotable for it.
+    report = ground_policy(binding("roles/owner", WORKLOAD_WILDCARD), snapshot)
+    escalation = _payload_verdicts(report, "iam_escalation")
+    assert len(escalation) == 1
+    assert escalation[0]["lineno"] == 0
+    assert escalation[0]["status"] == "unverified"
+    assert escalation[0]["kind"] == "iam_escalation"
+    assert escalation[0]["target"] == "roles/owner"
+    assert "could not be modelled as principals" in escalation[0]["message"]
+    assert WORKLOAD_WILDCARD in escalation[0]["message"]
+    assert UNDECIDED_GRANTEE in escalation[0]["message"]
+
+
+def test_a_binding_index_at_the_boundary_abstains_and_does_not_raise(snapshot):
+    # MK-E04, gcp_grounding/iam_checks.py `def _binding_members`. NOT a lineno:
+    # `index >= len(bindings)` is the boundary that keeps a claim key of the
+    # form bindings[N], against a document holding exactly N bindings, from
+    # indexing off the end. Off by one, `bindings[2]` on a two-binding document
+    # raises IndexError out of the helper; the caller's `try` catches only
+    # evidence.NotEvaluated, so it would ESCAPE the check entirely rather than
+    # resolve as "not a document index" and abstain. Nothing may propagate.
+    document = {"bindings": [
+        {"role": "roles/owner", "members": ["user:alice@acme.example"]},
+        {"role": "roles/viewer", "members": ["user:alice@acme.example"]}]}
+    ctx = role_ctx(snapshot, get_solver(),
+                   Claim("role", "roles/owner", "bindings[2].role"),
+                   document=document)
+    with evidence.ledger():
+        verdicts = check_escalation(ctx)
+    assert len(verdicts) == 1
+    assert verdicts[0].status == "unverified"
+    assert verdicts[0].kind == "iam_escalation"
+    assert verdicts[0].target == "roles/owner"
+    assert verdicts[0].message.startswith("bindings[2].role: ")
+    assert "members could not be located in the document" in verdicts[0].message
+    assert UNDECIDED_GRANTEE in verdicts[0].message
+
+
+def test_four_members_render_the_plus_one_more_marker(snapshot):
+    # MK-E05, gcp_grounding/iam_checks.py `def _capped`. The render boundary at
+    # exactly _RENDER_CAP + 1: with four members the tail marker must appear, or
+    # the verdict UNDERSTATES how wide the binding is and drops the fourth
+    # member with nothing saying anything was omitted. Three or five members
+    # both leave that unsaid, so the case count is part of the pin.
+    members = [f"principalSet://iam.googleapis.com/pool-{i}/*" for i in range(4)]
+    escalation = kinds(ground_policy(binding("roles/owner", *members), snapshot),
+                       "iam_escalation")
+    assert len(escalation) == 1
+    assert escalation[0].status == "unverified"
+    assert f"{', '.join(members[:3])} +1 more" in escalation[0].message
+    assert members[3] not in escalation[0].message
+
+
+def test_the_nullified_guardrail_verdict_reports_no_source_line(snapshot):
+    # MK-E06, gcp_grounding/iam_checks.py `def check_denied_permission`.
+    # Item (1)'s nullified guardrail — the deny rule whose exception list exempts
+    # everyone — is read out of the rule's sibling claims, not off a line.
+    report = ground_policy(DENY_EXEMPTING_EVERYONE, snapshot)
+    named = [v for v in _payload_verdicts(report, "iam_escalation")
+             if v["target"] == "iam.serviceAccountKeys.create"]
+    assert len(named) == 1
+    assert named[0]["lineno"] == 0
+    assert named[0]["status"] == "contradicted"
+    assert named[0]["kind"] == "iam_escalation"
+    assert "allUsers" in named[0]["message"]
+    assert BLOCKS not in named[0]["message"]

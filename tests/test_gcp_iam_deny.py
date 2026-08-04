@@ -209,6 +209,23 @@ def test_terraform_spelling_produces_identical_claims():
     assert iam_deny_policy_claims(rest) == iam_deny_policy_claims(tf)
 
 
+def test_a_single_element_block_unwraps_and_a_two_element_block_does_not():
+    # MK-E07, gcp_grounding/iam_deny.py `def _as_mapping` — an unparametrized
+    # handle carrying BOTH sides of the repeated-block unwrap, because a test
+    # carrying only one side leaves the boundary free to move.
+    #
+    # Terraform plan JSON encodes a repeated block as a one-item array, so
+    # `[{...}]` must unwrap to that mapping or a plan-encoded deny rule produces
+    # no claims AT ALL. A TWO-item array is ambiguous and must yield None rather
+    # than silently taking element 0 and dropping the second rule unrecorded.
+    rule = {"denied_principals": ["group:data-eng@acme.example"],
+            "denied_permissions": ["iam.googleapis.com/serviceAccountKeys.create"]}
+    bare = iam_deny_policy_claims({"rules": [{"deny_rule": rule}]})
+    assert bare != []
+    assert iam_deny_policy_claims({"rules": [{"deny_rule": [rule]}]}) == bare
+    assert iam_deny_policy_claims({"rules": [{"deny_rule": [rule, rule]}]}) == []
+
+
 def test_document_name_yields_no_claim():
     # The deny policy is being created; its own name asserts nothing.
     claims = iam_deny_policy_claims(_load(GOOD))
