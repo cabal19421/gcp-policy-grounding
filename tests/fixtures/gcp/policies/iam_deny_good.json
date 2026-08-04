@@ -5,7 +5,8 @@
     {
       "denyRule": {
         "deniedPrincipals": [
-          "group:data-eng@acme.example"
+          "group:data-eng@acme.example",
+          "allUsers"
         ],
         "exceptionPrincipals": [
           "serviceAccount:ci-deployer@acme-prod.iam.gserviceaccount.com"

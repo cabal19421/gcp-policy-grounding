@@ -60,6 +60,10 @@ else:
 DOCUMENT_CHECK_OWNERS = {
     "gcp_grounding.org_checks": {"check_org_estate"},
     "gcp_grounding.hfw_checks": {"check_hierarchical_order"},
+    # Escalation needs both halves of a binding, so it cannot hang off a single
+    # claim; it stays silent unless a role hits the curated escalation table,
+    # which none of these fixtures' roles does.
+    "gcp_grounding.iam_checks": {"check_escalation"},
 }
 
 STUB = "gcp_grounding_stub_provider"

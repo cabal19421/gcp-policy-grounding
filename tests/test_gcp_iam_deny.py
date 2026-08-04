@@ -6,17 +6,17 @@ document kind that ``sx-detect-kind`` learned to recognize: ``README.md`` and
 emitted zero claims — a silent pass on a real artifact. This suite pins the
 extractor end-to-end through :func:`~gcp_grounding.preflight.ground_policy`.
 
-MERGE-ORDER CONTRACT with ``sx-iam-escalation``: this task ships the EXTRACTOR
-only. The offline check for ``denied_permission`` lives in ``iam_checks.py``,
-which ``sx-iam-escalation`` creates and which does NOT exist at this task's
-merge point. So every ``denied_permission`` claim hits the registry catch-all
-and records an honest "no offline check is wired" ``unverified``. "Grounds
-fully" therefore means zero ``ungrounded``, zero ``contradicted``, ``report.ok``
-True — WITH exactly one catch-all ``unverified`` per ``denied_permission``
-claim, asserted by count so the number is on the record. It is deliberately NOT
-"zero unverified": that would break the moment ``sx-iam-escalation`` lands and
-would be satisfiable by silently dropping the claims — the exact honesty hole
-this task closes.
+MERGE-ORDER CONTRACT with ``sx-iam-escalation``, now RESOLVED: this task shipped
+the EXTRACTOR only, and while the offline check for ``denied_permission`` did
+not exist every such claim hit the registry catch-all and recorded an honest
+"no offline check is wired" ``unverified``. ``sx-iam-escalation`` has since
+landed :mod:`gcp_grounding.iam_checks`, so those claims are now DECIDED — the
+catch-all count is pinned at zero and the real verdict is asserted in its place.
+"Grounds fully" still means zero ``ungrounded``, zero ``contradicted``,
+``report.ok`` True, and it is still deliberately NOT "zero unverified":
+``denied_principal`` has no checker yet, and a "zero unverified" assertion would
+be satisfiable by silently dropping the claims — the exact honesty hole this
+task closes.
 
 The z3-dependent CEL assertions (a satisfiable / dead denial window) are gated
 on the z3 solver backend, mirroring ``tests/test_gcp_constraints.py``; without
@@ -84,12 +84,20 @@ def test_good_fixture_grounds_fully(snapshot):
     assert counts["ungrounded"] == 0
     assert counts["contradicted"] == 0
     assert report.ok is True
-    # One catch-all unverified per denied_permission claim — asserted by count,
-    # not tolerated. The good fixture denies exactly one permission.
+    # MERGE-ORDER, RESOLVED: `sx-iam-escalation` has landed, so
+    # `gcp_grounding.iam_checks` now owns `denied_permission` and the catch-all
+    # this suite used to count is gone — replaced by a real verdict naming the
+    # escalation class the deny rule blocks. Still asserted by count, and still
+    # deliberately NOT "zero unverified": `denied_principal` has no checker yet.
     catchall = [v for v in report.verdicts
                 if v.kind == "denied_permission" and v.status == "unverified"
                 and "no offline check is wired" in v.message]
-    assert len(catchall) == 1
+    assert catchall == []
+    decided = [v for v in report.verdicts
+               if v.target == "iam.serviceAccountKeys.create"
+               and "escalation path" in v.message]
+    assert len(decided) == 1
+    assert decided[0].status == "grounded"
 
 
 def test_good_fixture_grounds_principals_and_normalized_permission(snapshot):
