@@ -51,7 +51,14 @@ from .claims import iam_policy_claims, org_policy_claims
 # Explain reuses the constraint layer's own encoders (private to the package,
 # not the world) — re-implementing the CEL translation here would let the
 # dumped formulas drift from the ones actually decided.
-from .constraints import UnsupportedCel, _CelToZ3, _grant_pairs, _Undecidable, _z3_module
+from .constraints import (
+    UnsupportedCel,
+    _CelToZ3,
+    _condition_formula,
+    _grant_pairs,
+    _Undecidable,
+    _z3_module,
+)
 from .core.log import get_logger
 from .core.solver import get_solver
 from .knowledge import GcpSnapshot
@@ -265,14 +272,19 @@ def _explain_subset(z3: Any, doc: Mapping[str, Any], baseline: str) -> str:
         return f"  [subset] no constraint — {exc}"
     role = z3.String("role")
     member = z3.String("member")
+    cond_cache: dict = {}
 
-    def granted(pairs):
-        if not pairs:
+    def granted(grants):
+        if not grants:
             return z3.BoolVal(False)
-        return z3.Or([z3.And(role == z3.StringVal(r), member == z3.StringVal(m))
-                      for r, m in sorted(pairs)])
+        return z3.Or([z3.And(role == z3.StringVal(r), member == z3.StringVal(m),
+                             _condition_formula(z3, c, cond_cache))
+                      for r, m, c in sorted(grants, key=lambda t: (t[0], t[1], t[2] or ""))])
 
-    assertion = z3.And(granted(new_grants), z3.Not(granted(old_grants)))
+    try:
+        assertion = z3.And(granted(new_grants), z3.Not(granted(old_grants)))
+    except (UnsupportedCel, RecursionError) as exc:
+        return f"  [subset] no constraint — a condition is CEL outside the supported subset ({exc})"
     return f"  [subset] iam-policy: {assertion.sexpr()}"
 
 
