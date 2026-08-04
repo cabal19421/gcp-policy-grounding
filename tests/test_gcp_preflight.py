@@ -18,10 +18,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from gcp_grounding import preflight
+from gcp_grounding import preflight, registry
 from gcp_grounding.core.solver import get_solver
 from gcp_grounding.knowledge import GcpSnapshot
 from gcp_grounding.preflight import DOCUMENT_KINDS, detect_kind, ground_policy
+from gcp_grounding.reasoner import EXISTENCE_KINDS
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gcp"
 POLICIES = FIXTURES / "policies"
@@ -365,22 +366,26 @@ def test_unrecognized_baseline_shape_is_unverified_not_contradicted(snap):
 
 
 def test_claim_kind_no_layer_decides_is_unverified_naming_the_kind(snap, monkeypatch):
-    # Defensive-only in this checkout: no extractor emits a kind outside the
-    # existence kinds plus 'cel'/'constraint_value'. The module promises every
-    # extracted claim receives exactly one verdict, so a stub claim (the layers
-    # duck-type them: kind/value/location) is the honest way to reach it.
-    stub = SimpleNamespace(kind="network_tag_ref", value="web-tier",
-                           location="bindings[0].condition.expression")
+    # `public_principal` is a registered kind whose checker has not landed in
+    # this checkout: no existence pass, no 'cel'/'constraint_value' arm and no
+    # registry provider answers it. (`network_tag_ref`, which this stub used
+    # before the estate kinds landed, is now decided by the Datalog pass.) The
+    # module promises every extracted claim receives exactly one verdict, so a
+    # stub claim (the layers duck-type them: kind/value/location) reaches it.
+    assert "public_principal" not in EXISTENCE_KINDS
+    assert registry.claim_checks("public_principal") == ()
+    stub = SimpleNamespace(kind="public_principal", value="allUsers",
+                           location="bindings[0].members[0]")
     monkeypatch.setattr(preflight, "iam_policy_claims", lambda doc: [stub])
     report = ground_policy({"bindings": [{"role": "roles/viewer",
                                           "members": ["user:alice@acme.example"]}]},
                            snap)
     assert report.ok  # an undecided kind is ignorance, not a gate failure
     [v] = report.verdicts
-    assert (v.status, v.kind, v.target) == ("unverified", "network_tag_ref",
-                                            "web-tier")
+    assert (v.status, v.kind, v.target) == ("unverified", "public_principal",
+                                            "allUsers")
     assert "no offline check is wired" in v.message
-    assert "network_tag_ref" in v.message and stub.location in v.message
+    assert "public_principal" in v.message and stub.location in v.message
     assert_no_line_numbers(report)
 
 

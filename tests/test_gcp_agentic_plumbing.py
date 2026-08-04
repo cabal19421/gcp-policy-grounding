@@ -4,6 +4,7 @@ budget, and the degraded-world import blocker driven through a real child
 process boundary.
 """
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -101,12 +102,23 @@ def test_domain_probes_track_the_kinds_that_have_landed():
 
     assert env.HAVE_FIREWALL_DOMAIN is ("firewall_rule" in KINDS)
     assert env.HAVE_VPCSC_DOMAIN is ("perimeter_config" in KINDS)
-    # The conjunction probe is exactly the case that motivated it: the kind is
-    # registered and org_checks is not, so it stays False and A12/A13 keep
-    # skipping until a checker can really block.
+    # The conjunction probe is exactly the case that motivated it: the kind
+    # lands tasks before its checker, so the probe tracks BOTH conjuncts —
+    # False while org_checks is absent, True once it lands and A12/A13 can
+    # really block. Assert the conjunction, never either world's answer.
     assert "constraint_enforcement" in KINDS
-    assert env.HAVE_ORG_ENFORCEMENT is False
-    assert env.HAVE_ESTATE_CATEGORY is False
+    assert env.HAVE_ORG_ENFORCEMENT is (
+        "constraint_enforcement" in KINDS
+        and importlib.util.find_spec("gcp_grounding.org_checks") is not None)
+    # Same shape for the estate probe: it is True exactly when ``from_dict``
+    # accepts the overlay's categories, which the domain knowledge work has
+    # now taught it. Re-derive it rather than pin the pre-landing answer.
+    accepts = True
+    try:
+        GcpSnapshot.from_dict(env.merged_estate_document())
+    except Exception:
+        accepts = False
+    assert env.HAVE_ESTATE_CATEGORY is accepts
 
 
 def test_have_claim_kinds_matches_current_kinds():
@@ -152,18 +164,18 @@ def test_snapshot_variant_drops_a_category(snapshot_variant):
         assert other in categories
 
 
-def test_snapshot_variant_captured_at_round_trips(snapshot_variant):
+def test_snapshot_variant_captured_at_round_trips(snapshot_variant, estate_snapshot):
     stale = "2019-01-01T00:00:00Z"
     path = snapshot_variant(captured_at=stale)
     snap = GcpSnapshot.load(path)
     assert snap.captured_at == stale
-    assert set(snap.captured_categories()) == {
-        "roles",
-        "permissions",
-        "principals",
-        "constraints",
-        "resource_types",
-    }
+    # Rewriting captured_at touches no category: the variant carries exactly
+    # what the base snapshot captured. Pinning the base's own set keeps this
+    # exact as the estate categories land, rather than pinning the five the
+    # snapshot happened to carry when this was written.
+    assert set(snap.captured_categories()) == set(estate_snapshot.captured_categories())
+    assert {"roles", "permissions", "principals", "constraints",
+            "resource_types"} <= set(snap.captured_categories())
 
 
 def test_snapshot_variant_name_is_stable(snapshot_variant):
