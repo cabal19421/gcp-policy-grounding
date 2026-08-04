@@ -104,7 +104,7 @@ __all__ = [
 #: gate. A module registers its types at import time by calling :func:`register`.
 MAP_MODULES = (
     "gcp_grounding.tfsource.map_network",
-    "gcp_grounding.tfsource.map_iam",
+    "gcp_grounding.tfsource.map_policy",
 )
 
 #: Terraform resource types this design does NOT model, and why. A type here
