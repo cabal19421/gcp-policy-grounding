@@ -37,7 +37,7 @@ __all__ = [
     "CollectionSpec", "COLLECTIONS", "tier_rank", "register_collection",
     "reset_domain_cache",
     "UnknownCollection", "InvalidAst",
-    "validate", "sort_of", "canonical", "dumps",
+    "validate", "sort_of", "canonical", "dumps", "render_sexpr",
     "collections_used", "derived_tier", "free_consts",
     "has_existential", "is_forall_rooted", "depth",
 ]
@@ -542,6 +542,64 @@ def dumps(node) -> str:
     Mirrors ``fetch.write_snapshot`` (fetch.py:344-349).
     """
     return json.dumps(canonical(node), indent=2, sort_keys=True, ensure_ascii=False)
+
+
+# -- s-expression rendering ---------------------------------------------------
+#
+# THE ONE FORM. An artifact's ``sexpr`` has exactly one rendering, and this is
+# it: derived purely from the (already canonical) AST, never from ``str(formula)``
+# or ``formula.sexpr()``, so the committed bytes are z3-INDEPENDENT and survive a
+# solver upgrade — the same reason witnesses are re-classified rather than
+# re-minted. It lives in this leaf, which both the compiler (stage 1, which
+# WRITES the field) and the rule loader (stage 2, which RE-CHECKS it) already
+# import, so neither stage has to reach across for the other's renderer.
+
+def _render_term(term) -> str:
+    if term.get("node") == "field":
+        return f"{term['var']}.{term['field']}"
+    sort, value = term.get("sort"), term.get("value")
+    if sort == "Str":
+        return _quote(value)
+    if sort == "Bool":
+        return "true" if value else "false"
+    return str(value)
+
+
+def _quote(text: str) -> str:
+    return '"' + str(text).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def render_sexpr(node) -> str:
+    """*node* rendered as the artifact's committed s-expression string."""
+    kind = node["node"]
+    if kind in ("true", "false"):
+        return kind
+    if kind == "not":
+        return f"(not {render_sexpr(node['arg'])})"
+    if kind in ("and", "or"):
+        return f"({kind} " + " ".join(render_sexpr(a) for a in node["args"]) + ")"
+    if kind == "implies":
+        return f"(=> {render_sexpr(node['if'])} {render_sexpr(node['then'])})"
+    if kind in ("atmost", "atleast"):
+        return (f"({kind} {node['k']} "
+                + " ".join(render_sexpr(a) for a in node["args"]) + ")")
+    if kind in ("forall", "exists"):
+        return (f"({kind} (({node['var']} {node['collection']})) "
+                f"{render_sexpr(node['body'])})")
+    if kind == "cmp":
+        return f"({node['op']} {_render_term(node['left'])} {_render_term(node['right'])})"
+    if kind == "in":
+        items = " ".join(_quote(x) for x in node["set"]["items"])
+        return f"(in {_render_term(node['term'])} (set {items}))"
+    if kind in ("prefix", "suffix", "contains"):
+        return f"({kind} {_render_term(node['term'])} {_quote(node['value'])})"
+    if kind == "cidr_contains":
+        return f"(cidr_contains {_render_term(node['cidr'])} {_render_term(node['addr'])})"
+    if kind == "port_in":
+        return f"(port_in {_render_term(node['term'])} {node['lo']} {node['hi']})"
+    if kind == "cel":
+        return f"(cel {_quote(node['expr'])})"
+    return f"({kind})"
 
 
 # -- analysis helpers ---------------------------------------------------------

@@ -65,7 +65,6 @@ Every solve in this module goes through :func:`gcp_grounding.solve.decide` /
 from __future__ import annotations
 
 import glob
-import importlib
 import os
 from collections import defaultdict
 from dataclasses import dataclass
@@ -524,44 +523,25 @@ def _carry_verdict(promise: sec_artifact.Promise, label: str) -> Verdict:
                    f"{where}: {src.text!r} — {promise.reason}")
 
 
-def _stage1_sexpr(ast) -> Optional[str]:
-    """*ast* rendered the way :mod:`~gcp_grounding.sec_compile` stores it, or
-    ``None`` when that renderer cannot be resolved.
-
-    Resolved with importlib rather than imported at module scope: stage 2 must
-    keep loading committed artifacts in a checkout where the compiler is absent.
-    """
-    try:
-        sec_compile = importlib.import_module("gcp_grounding.sec_compile")
-    except ImportError:  # pragma: no cover - the compiler ships with stage 2
-        return None
-    try:
-        return sec_compile._render_sexpr(ast)
-    except (KeyError, TypeError, RecursionError):
-        # A shape the AST renderer does not know is not a tamper signal; the z3
-        # rendering below is still authoritative.
-        logger.debug("the stage-1 renderer could not render the stored ast",
-                     exc_info=True)
-        return None
-
-
 def _admit(promise: sec_artifact.Promise, z3, label: str):
     """Integrity-check a compiled promise. Returns ``(verdicts, register)``.
 
     (1) SEXPR AGREEMENT: re-render the stored ast and compare to the stored
-    ``sexpr``. A mismatch is a detected inconsistency in a committed file, so it
-    is ``contradicted`` (refuse to register), not ``unverified``.
+    ``sexpr``, REFUSING TO REGISTER on mismatch. A disagreement is a detected
+    inconsistency in a committed file, so it is ``contradicted``, not
+    ``unverified``.
 
-    There are TWO faithful renderings of one ast and an artifact may carry
-    either. ``compile-requirements`` stores :func:`sec_compile._render_sexpr`'s
-    output — deliberately z3-INDEPENDENT, so a committed artifact survives a z3
-    upgrade — while this module historically recomputed
-    ``symbolic(z3, ast)[0].sexpr()``. The two never agree textually
+    There is exactly ONE accepted rendering — :func:`sec_ast.render_sexpr`, the
+    z3-INDEPENDENT form ``compile-requirements`` commits, so an artifact survives
+    a z3 upgrade — and the comparison against it is a strict inequality. The z3
+    encoding of the same ast is a DIFFERENT string
     (``(exists ((b iam_bindings)) (eq b.role "roles/owner"))`` versus
-    ``(= |iam_bindings#b.role| "roles/owner")``), so demanding the z3 form alone
-    refused EVERY artifact stage 1 wrote. Accepting either is not a weakening:
-    both are pure functions of the stored ast, so editing the ast changes both
-    and a stale ``sexpr`` still fails to match either one.
+    ``(= |iam_bindings#b.role| "roles/owner")``) and is refused like any other
+    stored value that is not the one form. The renderer lives in
+    :mod:`~gcp_grounding.sec_ast`, the leaf both stages already import, so
+    neither stage reaches across for the other's copy. The stored ast is still
+    re-encoded first: a shape that no longer encodes is an honest abstention, and
+    that check is what this comparison rests on.
     (2) WITNESS RE-CLASSIFICATION: ``sec_probes.reclassify``; a drifted witness is
     ``contradicted`` (refuse). An undecided witness or an absent z3 records an
     ``unverified sec:artifact`` note and registers the rule anyway — the rules
@@ -575,14 +555,17 @@ def _admit(promise: sec_artifact.Promise, z3, label: str):
                          "builtin backend")], True)
 
     try:
-        formula, _consts = sec_encode.symbolic(z3, promise.ast)
-        fresh = formula.sexpr()
-    except sec_encode.UnsupportedTerm as exc:
+        sec_encode.symbolic(z3, promise.ast)
+        one_form = sec_ast.render_sexpr(promise.ast)
+    except (sec_encode.UnsupportedTerm, KeyError, TypeError, RecursionError) as exc:
+        # A stored ast that will not re-encode or will not re-render cannot be
+        # integrity-checked at all. That is an abstention naming the reason, never
+        # a second accepted spelling of the one form.
         return ([Verdict("unverified", "sec:artifact", promise.id, 0,
                          f"{label}: the stored ast could not be re-encoded ({exc}) — "
                          "integrity was not verified; the rule was registered")], True)
 
-    if promise.sexpr not in (fresh, _stage1_sexpr(promise.ast)):
+    if promise.sexpr != one_form:
         return ([Verdict("contradicted", "sec:artifact", promise.id, 0,
                          f"{label}: the stored sexpr does not match a fresh encoding "
                          "of the stored ast — the artifact was edited by hand or the "
