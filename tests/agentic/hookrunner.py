@@ -37,7 +37,26 @@ flags, no cache written. What *is* enforced is the suite-wide ceiling: every
 spawn in this module, from every helper, calls
 :meth:`~tests.agentic.budget.SubprocessBudget.increment` on the session
 ``subprocess_budget`` fixture, so the ceiling lives at one place instead of
-being apportioned to per-module estimates that nobody rechecks.
+being apportioned to per-module estimates that nobody rechecks. The binding
+itself is NOT this module's to make — ``tests/conftest.py`` binds it in a
+session-scoped autouse fixture, so a module that imports :func:`run_hook` and
+nothing else is enrolled anyway, and :func:`current_budget` RAISES while
+nothing is bound rather than absorbing spawns into a counter nobody checks. The
+label is the calling module's, so the per-label breakdown names an offender.
+
+ONE SCRUB, DECLARED HERE. :data:`STDERR_ALLOWLIST` holds EXACT stderr lines
+this harness provokes from the product and removes from
+:attr:`HookOutcome.stderr`; :attr:`HookOutcome.stderr_raw` keeps the bytes as
+emitted and ``__str__`` renders those, so nothing is hidden from a failure
+report. It exists for one line: the degraded-world overlay leaves ``z3``
+importable-by-``find_spec`` but not loadable, which is exactly the shape
+``core/solver.py`` warns about, so a clean policy on a clean run writes 236
+bytes to stderr and no ``assert_passed`` in the suite could hold. Scrubbing
+changes THE MEASURING INSTRUMENT, NOT THE PRODUCT: on a machine whose solver is
+installed but not initialisable — a mismatched library, a wrong-arch wheel —
+the gate still writes that line to the hook's stderr once per tool call, where
+the agent and the operator read it. That half is not fixed here; see
+``ESC-HOOKRUNNER-NO-Z3-BANNER`` in :mod:`tests.escalations` for the product fix.
 """
 
 from __future__ import annotations
@@ -58,7 +77,9 @@ from tests.agentic.env import ESTATE_SNAPSHOT, REPO_ROOT
 __all__ = [
     "DEFAULT_TIMEOUT",
     "HookOutcome",
+    "NO_Z3_FALLBACK_BANNER",
     "SCRUBBED_ENV",
+    "STDERR_ALLOWLIST",
     "bind_budget",
     "bound_subprocess_budget",
     "child_env",
@@ -67,6 +88,7 @@ __all__ = [
     "run_hook",
     "run_hook_explain",
     "run_hook_raw",
+    "scrub_stderr",
 ]
 
 #: Wall-clock ceiling for one child. Generous on purpose: a *hang* is the
@@ -89,42 +111,119 @@ SCRUBBED_ENV = (
     "GCP_SEC_LLM_TIMEOUT",
 )
 
+#: ``core/solver.py:116-120``'s fallback warning, as the degraded-world overlay
+#: provokes it: ``sitecustomize`` returns a spec whose loader raises, so
+#: ``find_spec("z3")`` succeeds, ``Z3Solver()`` raises ``ImportError``, and
+#: ``get_solver`` logs at WARNING. No ``setup_logging`` call means logging's
+#: ``lastResort`` handler writes the bare message to stderr — one line, 236
+#: bytes with its newline, on every child in the no-z3 world.
+NO_Z3_FALLBACK_BANNER = (
+    "z3 package found but failed to initialize (ImportError: import of z3 is "
+    "blocked by GCP_TEST_BLOCK_IMPORTS (degraded-world test harness)) — "
+    "falling back to the builtin solver; arity answers are identical, only "
+    "--explain output differs"
+)
+
+#: EXACT stderr lines removed from :attr:`HookOutcome.stderr`. This tuple may
+#: only ever SHRINK — its length is pinned in
+#: ``tests/test_gcp_hookrunner.py``, every entry is checked there against a line
+#: a real child emits, and a test drives stderr bytes from outside it through
+#: ``assert_passed`` to prove they still fail. Whole lines, never substrings: a
+#: prefix match would swallow a real finding that happened to quote a banner.
+STDERR_ALLOWLIST = (NO_Z3_FALLBACK_BANNER,)
+
+_ALLOWED_LINES = frozenset(STDERR_ALLOWLIST)
+
+
+def scrub_stderr(text: str) -> str:
+    """*text* with every :data:`STDERR_ALLOWLIST` line removed, byte-exact.
+
+    Splitting on ``"\\n"`` rather than :meth:`str.splitlines` on purpose:
+    ``splitlines`` also breaks on form feeds and ``\\u2028``, which would let
+    the rejoin silently rewrite bytes the child really emitted.
+    """
+    if not text:
+        return text
+    return "\n".join(line for line in text.split("\n")
+                     if line not in _ALLOWED_LINES)
+
+
 #: Sentinel default for the ``snapshot`` parameter. ``snapshot=None`` means
 #: "spawn with NO ``--snapshot``", which is the fail-open arm; omitting the
 #: parameter means "the estate snapshot". Those two cases are different tests,
 #: so they cannot share ``None``.
 _DEFAULT = object()
 
-#: Budget label every spawn from this module is attributed to.
-BUDGET_LABEL = __name__
+#: This package's own dotted prefix. Frames from it are HELPER frames: a driver
+#: here must not mask the test module that drove it in the label breakdown.
+_PACKAGE = __name__.rpartition(".")[0]
 
-# Fallback counter used when no session fixture is bound (a helper called from
-# a plain script, or before ``bound_subprocess_budget`` is set up). It still
-# enforces the same ceiling; it just is not shared with the rest of the run.
-_budget = SubprocessBudget()
+# The counter spawns are recorded against, bound by tests/conftest.py's
+# session-scoped autouse fixture. There is deliberately NO module-level
+# fallback: one existed, nothing ever called its ``check()``, and its comment
+# claimed it "still enforces the same ceiling" — so a module that imported
+# run_hook without the opt-in fixture spawned children into a counter that
+# enforced nothing, silently.
+_budget: SubprocessBudget | None = None
 
 
 def current_budget() -> SubprocessBudget:
-    """The counter this module's spawns are recorded against."""
+    """The counter spawns are recorded against.
+
+    Raises ``RuntimeError`` while nothing is bound. Absorbing the spawn into a
+    private counter would be the same silent hole, one indirection further
+    down: unbound means the ceiling is not being enforced, and that has to be
+    loud.
+    """
+    if _budget is None:
+        raise RuntimeError(
+            "no subprocess budget is bound: tests/conftest.py binds the "
+            "session `subprocess_budget` in a session-scoped autouse fixture, "
+            "so a spawn reaching here unbound is running outside that session "
+            "and against no ceiling at all")
     return _budget
 
 
-def bind_budget(budget: SubprocessBudget) -> SubprocessBudget:
-    """Point this module's spawn counter at *budget*; return the previous one
-    so a caller can restore it."""
+def bind_budget(budget: SubprocessBudget | None) -> SubprocessBudget | None:
+    """Point the spawn counter at *budget* (``None`` unbinds); return the
+    previous one so a caller can restore it."""
     global _budget
     previous, _budget = _budget, budget
     return previous
 
 
+def _calling_label() -> str:
+    """The module that ASKED for this spawn.
+
+    Walks out through this package's own frames, so the breakdown names the
+    test module rather than ``tests.agentic.hookrunner`` — which is present in
+    every single spawn and can therefore never be the offender. A driver in
+    ``tests.agentic`` (a fake agent, an assertion wrapper) is skipped for the
+    same reason. The first frame outside this package, or failing that the
+    first frame outside this module, is the answer.
+    """
+    frame = sys._getframe(1)
+    outside_module = None
+    while frame is not None:
+        name = frame.f_globals.get("__name__") or ""
+        if name and name != __name__ and outside_module is None:
+            outside_module = name
+        if name and name != _PACKAGE and not name.startswith(_PACKAGE + "."):
+            return name
+        frame = frame.f_back
+    return outside_module or __name__
+
+
 @pytest.fixture(autouse=True)
 def bound_subprocess_budget(subprocess_budget):
-    """Bind this module's spawns to the session ``subprocess_budget``.
+    """Retained for the modules that import it; it no longer decides anything.
 
-    Import this name into a test module (``from tests.agentic.hookrunner
-    import bound_subprocess_budget  # noqa: F401``) and every spawn that
-    module makes is counted at the one suite-wide ceiling. It is autouse, so
-    no test has to remember to request it.
+    The binding moved to ``tests/conftest.py`` as a session-scoped autouse
+    fixture precisely because this one was OPT-IN — a module that imported
+    :func:`run_hook` and forgot this name spawned children the session ceiling
+    never saw. Re-binding the same object here is a no-op, kept so the existing
+    ``from tests.agentic.hookrunner import bound_subprocess_budget`` imports
+    keep working.
     """
     previous = bind_budget(subprocess_budget)
     try:
@@ -144,6 +243,8 @@ class HookOutcome:
 
     exit_code: int
     stdout: str
+    #: The child's stderr with the :data:`STDERR_ALLOWLIST` lines removed —
+    #: what every assertion reads.
     stderr: str
     argv: tuple[str, ...]
     #: The event as a mapping, or ``None`` for :func:`run_hook_raw` (whose
@@ -151,15 +252,28 @@ class HookOutcome:
     event: Mapping | None = None
     #: The exact bytes written to the child's stdin.
     stdin_bytes: bytes = field(default=b"")
+    #: The child's stderr EXACTLY as emitted, scrub included. ``None`` on a
+    #: hand-built outcome, where there is no child and nothing to distinguish.
+    stderr_raw: str | None = None
 
     def __str__(self) -> str:
-        return "\n".join([
+        raw = self.stderr if self.stderr_raw is None else self.stderr_raw
+        lines = [
             f"argv: {' '.join(self.argv)}",
             f"exit code: {self.exit_code}",
             f"stdin: {len(self.stdin_bytes)} bytes",
             f"stdout:\n{self.stdout or '  (empty)'}",
-            f"stderr:\n{self.stderr or '  (empty)'}",
-        ])
+            f"stderr:\n{raw or '  (empty)'}",
+        ]
+        if raw != self.stderr:
+            # Say which lines the assertions did not see, and why they exist.
+            filtered = [line for line in raw.split("\n")
+                        if line in _ALLOWED_LINES]
+            lines.append(
+                f"(stderr above is RAW; {len(filtered)} allowlisted harness "
+                f"line(s) were filtered before the assertions read it: "
+                f"{filtered})")
+        return "\n".join(lines)
 
 
 def child_env(overrides: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -187,7 +301,7 @@ def _spawn(argv, payload: bytes, *, event=None, env=None,
     is a finding, not something to fold into an exit code.
     """
     argv = tuple(str(part) for part in argv)
-    current_budget().increment(BUDGET_LABEL)
+    current_budget().increment(_calling_label())
     proc = subprocess.run(
         list(argv),
         input=payload,
@@ -197,13 +311,15 @@ def _spawn(argv, payload: bytes, *, event=None, env=None,
         timeout=timeout,
         text=False,
     )
+    raw_stderr = proc.stderr.decode("utf-8", errors="replace")
     return HookOutcome(
         exit_code=proc.returncode,
         stdout=proc.stdout.decode("utf-8", errors="replace"),
-        stderr=proc.stderr.decode("utf-8", errors="replace"),
+        stderr=scrub_stderr(raw_stderr),
         argv=argv,
         event=event,
         stdin_bytes=payload,
+        stderr_raw=raw_stderr,
     )
 
 

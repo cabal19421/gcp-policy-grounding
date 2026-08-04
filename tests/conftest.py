@@ -2,10 +2,13 @@
 
 Fixtures only. Plain constants, probes and helpers live in
 :mod:`tests.agentic.env` (importable at decorator time, where fixtures cannot
-reach); the subprocess counter lives in :mod:`tests.agentic.budget`. This module
-deliberately imports nothing from ``tests.agentic.hookrunner`` or
-``tests.agentic.fake_agent`` — those land in later tasks, and importing them
-here would break collection until then.
+reach); the subprocess counter lives in :mod:`tests.agentic.budget`.
+
+It imports :mod:`tests.agentic.hookrunner` for exactly one reason: the spawn
+budget has to be bound where no test module can opt out, and this is the only
+file every test in the suite loads. Nothing else may be pulled in from the
+agentic helpers here — ``tests.agentic.fake_agent`` in particular lands in a
+later task, and importing it would break collection until then.
 
 The repo-root ``conftest.py`` (whose sole job is inserting the repo root onto
 ``sys.path``) is loaded before this one, so ``from tests.agentic import env``
@@ -21,7 +24,7 @@ import re
 import pytest
 
 from gcp_grounding.knowledge import GcpSnapshot
-from tests.agentic import env
+from tests.agentic import env, hookrunner
 from tests.agentic.budget import SubprocessBudget
 
 
@@ -207,3 +210,22 @@ def subprocess_budget():
     budget = SubprocessBudget()
     yield budget
     budget.check()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _bind_subprocess_budget(subprocess_budget):
+    """Bind ``hookrunner``'s spawn counter to the session budget, for the whole
+    session, whether or not a module asks.
+
+    The binding used to live in ``hookrunner`` itself as an autouse fixture a
+    test module had to IMPORT to activate — which made it opt-in, and a module
+    importing only ``run_hook`` spawned children the ceiling never saw. Here it
+    is unconditional: ``tests/conftest.py`` is loaded for every test in the
+    suite, so there is no module that can opt out and no spawn that lands
+    outside the breakdown ``budget.check()`` prints.
+    """
+    previous = hookrunner.bind_budget(subprocess_budget)
+    try:
+        yield subprocess_budget
+    finally:
+        hookrunner.bind_budget(previous)
