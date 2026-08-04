@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from gcp_grounding import preflight, registry
+from gcp_grounding import preflight, registry, tf_claims
 from gcp_grounding.claims import Claim, iam_policy_claims
 from gcp_grounding.core.report import Verdict
 from gcp_grounding.core.solver import get_solver
@@ -164,13 +164,17 @@ def _tf_full_expected():
 def test_no_providers_is_byte_identical(snap, name, expected):
     # The registry must not contribute anything that changes these baseline
     # (non-firewall/non-armor/…) fixtures' grounding. As domain modules land in
-    # this checkout (fw_claims, …) they add NEW google resource types, never
-    # shadowing a built-in and never touching these fixtures — so the invariant
-    # relaxes from "registry is empty" to "registry never shadows a built-in tf
-    # type", which keeps the gate byte-identical to before the seam existed.
-    assert registry.document_checks() == ()
+    # this checkout (fw_claims, vpcsc_claims, …) they add NEW google resource
+    # types, never shadowing a built-in and never touching these fixtures — so
+    # the invariant relaxes from "registry is empty" to "registry never shadows
+    # a built-in tf type", which keeps the gate byte-identical to before the
+    # seam existed. A domain provider may register whole-document checks
+    # (vpcsc_checks does), but one that answered for another domain's document
+    # kind would break exactly this test: the verdict-set equality below is
+    # what pins their silence here.
     assert set(registry.tf_extractors()).isdisjoint(_BUILTIN_TF_TYPES)
     assert registry.claim_checks("role") == ()
+    assert set(registry.tf_extractors()).isdisjoint(tf_claims._EXTRACTORS)
     report = ground_policy(POLICIES / f"{name}.json", snap)
     got = sorted((v.status, v.kind, v.target) for v in report.verdicts)
     assert got == sorted(expected)

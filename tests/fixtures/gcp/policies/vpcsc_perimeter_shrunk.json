@@ -1,0 +1,31 @@
+{
+  "name": "accessPolicies/987/servicePerimeters/prod",
+  "title": "prod perimeter",
+  "perimeterType": "PERIMETER_TYPE_REGULAR",
+  "status": {
+    "resources": [],
+    "restrictedServices": ["storage.googleapis.com"],
+    "accessLevels": ["accessPolicies/987/accessLevels/trusted"],
+    "egressPolicies": [
+      {
+        "egressFrom": {
+          "identityType": "ANY_IDENTITY"
+        },
+        "egressTo": {
+          "externalResources": ["*"],
+          "operations": [
+            {
+              "serviceName": "storage.googleapis.com",
+              "methodSelectors": [{"method": "google.storage.objects.get"}]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "spec": {
+    "resources": [],
+    "restrictedServices": ["storage.googleapis.com"]
+  },
+  "useExplicitDryRunSpec": false
+}
