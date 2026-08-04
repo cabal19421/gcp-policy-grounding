@@ -32,6 +32,18 @@ the Datalog pass, not left unverified).
 The optional *baseline* enables the z3 new⊆old policy comparison
 (:func:`~gcp_grounding.constraints.check_policy_subset`); it is defined for
 IAM policies only, and any other pairing is recorded as ``unverified``.
+
+The optional *rules* — compiled requirement rules from
+:mod:`gcp_grounding.sec_rules`, stage 2 of the ``sec_requirements/`` compiler —
+run alongside the built-in checks and render through the same Verdict channel.
+Passing ``None`` (the default) or an empty sequence preserves today's behaviour
+exactly. A rule that has nothing to say about this document *kind* adds nothing;
+a rule whose state tier the caller does not satisfy — a pair-tier rule with no
+baseline, an estate-tier rule whose snapshot category was not captured — records
+``unverified`` naming the missing input, never a silent skip. Like
+:mod:`~gcp_grounding.tf_claims`, :mod:`~gcp_grounding.sec_rules` is resolved
+dynamically: in a checkout without it, supplied rules record one honest
+``unverified`` instead of an import error.
 """
 
 from __future__ import annotations
@@ -212,13 +224,16 @@ def detect_kind(doc: Any) -> str | None:
 
 
 def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
-                  baseline: Any = None) -> GroundingReport:
+                  baseline: Any = None, rules: Any = None) -> GroundingReport:
     """Ground one policy document end-to-end against *snapshot*.
 
     *path_or_obj* is a JSON file path (``str``/``os.PathLike``) or an
     already-parsed document. *baseline* (same forms) opts into the new⊆old
-    IAM-policy comparison. Never raises on bad input — see the module
-    docstring's fail-open contract.
+    IAM-policy comparison. *rules* is a
+    ``Sequence[sec_rules.CompiledRule] | None`` of compiled requirement rules to
+    run alongside the built-in checks; ``None`` (the default) or an empty
+    sequence is exactly today's behaviour. Never raises on bad input — see the
+    module docstring's fail-open contract.
     """
     report = GroundingReport()
     solver = get_solver()
@@ -297,9 +312,42 @@ def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
             for v in _subset_verdict(doc, kind, solver, ctx, baseline_source):
                 report.add(v)
 
+    if rules:
+        module = _sec_rules_module()
+        if module is None:
+            report.add(Verdict("unverified", "sec:compile", source, 0,
+                               f"{source}: {len(rules)} compiled requirement(s) were "
+                               f"supplied, but gcp_grounding.sec_rules is not "
+                               f"available — they were not run"))
+        else:
+            # THIRD consumer of the baseline parsed once above (after
+            # _subset_verdict and the registry's pair checks): re-loading the
+            # path here would parse the same file twice and — worse — let the
+            # two parses disagree about whether it was readable. An unreadable
+            # baseline is None, so a pair-tier rule emits `unverified` naming
+            # the missing input rather than being judged against nothing.
+            old_doc = baseline_doc
+            # `estate` is a tolerated override: GcpSnapshot has no estate field
+            # today (this document's domain work puts the new categories at the
+            # TOP LEVEL of the snapshot, which estate-tier rules read through
+            # the extractors sec_domains registers), so this normally yields
+            # None — and picks one up automatically if the field is ever added.
+            rule_ctx = module.RuleContext(snapshot=snapshot, document=doc,
+                                          document_kind=kind, source=source,
+                                          baseline=old_doc,
+                                          estate=getattr(snapshot, "estate", None),
+                                          solver=solver)
+            for rule in rules:
+                # None means "not applicable to this document kind" — adding
+                # nothing is the abstain-flood fix; a rule that should have
+                # decided and could not returns an `unverified` Verdict instead.
+                v = rule.evaluate(rule_ctx)
+                if v is not None:
+                    report.add(v)
+
     counts = report.counts()
-    logger.debug("ground_policy(%s): kind=%s claims=%d verdicts=%s ok=%s",
-                 source, kind, len(claims), counts, report.ok)
+    logger.debug("ground_policy(%s): kind=%s claims=%d rules=%d verdicts=%s ok=%s",
+                 source, kind, len(claims), len(rules or ()), counts, report.ok)
     return report
 
 
@@ -392,6 +440,17 @@ def _tf_plan_extractor():
     except ImportError:
         return None
     return module.terraform_plan_claims
+
+
+def _sec_rules_module():
+    """:mod:`gcp_grounding.sec_rules` — or None where the module is not part of
+    this checkout. Resolved dynamically exactly like :func:`_tf_plan_extractor`,
+    so supplied rules degrade to an honest ``unverified`` instead of an import
+    error."""
+    try:
+        return importlib.import_module("gcp_grounding.sec_rules")
+    except ImportError:
+        return None
 
 
 # -- baseline (new⊆old) comparison --------------------------------------------
