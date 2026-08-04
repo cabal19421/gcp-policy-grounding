@@ -1,4 +1,4 @@
-"""Changed-file gate: ground a diff's policy files against one snapshot.
+"""Changed-file gate: ground a diff's policy files against the three inputs.
 
 :class:`PolicyGroundingGate` is the framework-agnostic integration surface
 for CI and generator pipelines: configure it with a :class:`GcpSnapshot`
@@ -8,18 +8,32 @@ changed-file set (e.g. the paths from a diff), and get back a
 aggregate ok/risk signal, and human-readable findings suitable for feeding
 straight back into a generator's next prompt.
 
-Which changed files get grounded:
+THE THREE INPUTS, and what each changed file is judged against:
 
-- ``*.json`` (including ``*.policy.json`` and terraform-JSON ``*.tf.json``)
-  is grounded end-to-end via :func:`gcp_grounding.preflight.ground_policy`,
-  which auto-detects IAM policy / Org Policy / ``terraform show -json``
-  plan content. A plain ``.json`` whose content is none of those (say a
+- the PROPOSAL is the changed file itself. ``*.json`` (including
+  ``*.policy.json`` and terraform-JSON ``*.tf.json``) is read end-to-end,
+  auto-detecting IAM policy / Org Policy / ``terraform show -json`` plan
+  content; a plain ``.json`` whose content is none of those (say a
   ``package.json``) is recorded ``unverified`` as a non-policy file and
-  raises no risk.
-- ``*.tf`` (raw HCL) is policy-relevant but not parseable offline by this
-  gate; it is recorded ``unverified`` with a pointer at gating the
-  ``terraform show -json`` plan output instead.
-- Everything else is recorded ``unverified`` as a non-policy file.
+  raises no risk; ``*.tf`` (raw HCL) is policy-relevant but not parseable
+  offline by this gate and is recorded ``unverified`` with a pointer at
+  gating the ``terraform show -json`` plan output instead; everything else
+  is recorded ``unverified`` as a non-policy file.
+- the CURRENT state is the ``current`` constructor argument, the sources a
+  ``resolve_sources`` construction assembled, or — with ``discover_config``
+  — the state discovered PER EDITED FILE by walking up from that file. It
+  is what supplies each proposal's baseline, and therefore what makes the
+  pair checks reachable at all from the agentic path: a hook command line
+  is one fixed string and can pin exactly ONE baseline for a whole session,
+  while an agent editing three modules needs three different counterparts.
+- the RULES are the built-in claim/document/pair checks plus the compiled
+  ``sec_requirements`` promises named by the per-file discovered settings.
+
+With NO current-state configuration the gate behaves exactly as it always
+has: every candidate file is grounded with the plain snapshot and no
+baseline, the result dict is byte-identical key for key, and none of the
+machinery below is even imported. Every new behaviour is gated on a
+configured source.
 
 **Fail-open contract:** :meth:`~PolicyGroundingGate.check` never raises on
 its input. Unreadable files, invalid JSON, unrecognized shapes, and
@@ -31,27 +45,22 @@ The aggregate signal is two-part: ``GateResult.ok`` is the hard gate
 (False iff some file has ungrounded/contradicted verdicts — deterministic
 findings, likely hallucinations) and ``GateResult.risk`` grades the rest:
 ``"high"`` for hard findings, ``"low"`` when at least one policy-relevant
-file went unjudged, ``"none"`` when everything checked out. As everywhere
-in this package, ok means "these claims grounded against the snapshot",
-never "the policy is safe" — intent is out of scope by design.
-
-TODO(gcp-gate-wire): harness's pipeline would call this from its
-orchestrator as a review-time gate — after a generator turn touches policy
-files, run ``PolicyGroundingGate(snapshot).check(changed_files)`` over the
-turn's diff, block the merge while ``result.ok`` is False, and feed
-``result.findings()`` back into the generator's next prompt so a
-hallucinated ``roles/bigquery.reader`` is corrected to the suggested
-``roles/bigquery.dataViewer`` instead of shipping. The wire-up itself is
-out of scope here.
+file went unjudged or carries an :data:`ALWAYS_REPORT_KINDS` verdict,
+``"none"`` when everything checked out. As everywhere in this package, ok
+means "these claims grounded against the snapshot", never "the policy is
+safe" — intent is out of scope by design.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import importlib
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
+from . import preflight
 from .core.log import get_logger
 from .core.report import GroundingReport, Verdict
 from .core.solver import get_solver
@@ -61,8 +70,8 @@ from .report import PolicyReport
 
 logger = get_logger(__name__)
 
-__all__ = ["FILE_STATUSES", "RISK_LEVELS", "GATE_SCHEMA", "FileResult",
-           "GateResult", "PolicyGroundingGate"]
+__all__ = ["FILE_STATUSES", "RISK_LEVELS", "GATE_SCHEMA", "ALWAYS_REPORT_KINDS",
+           "FileResult", "GateResult", "PolicyGroundingGate"]
 
 #: Per-file outcome: "failed" = ungrounded/contradicted verdicts (fails the
 #: gate); "unverified" = the gate could not judge the file (never fails it);
@@ -70,15 +79,82 @@ __all__ = ["FILE_STATUSES", "RISK_LEVELS", "GATE_SCHEMA", "FileResult",
 FILE_STATUSES = ("ok", "unverified", "failed")
 
 #: Aggregate risk: "high" = deterministic findings in some file; "low" = no
-#: findings, but a policy-relevant file went unjudged; "none" = all clean.
+#: findings, but a policy-relevant file went unjudged or carries an
+#: always-reported verdict; "none" = all clean.
 RISK_LEVELS = ("none", "low", "high")
 
 #: Version tag of :meth:`GateResult.to_dict`; breaking key changes bump it.
+#: It is deliberately NOT bumped by the current-state input: the only key the
+#: document gains — ``state`` — appears exactly when a state source was
+#: CONFIGURED, so a consumer pinned to this string that configures nothing
+#: receives a byte-identical document, key set included.
 GATE_SCHEMA = "gcp-grounding-gate/1"
+
+#: Verdict kinds surfaced in :meth:`GateResult.findings` REGARDLESS of the
+#: file's own status. Without this, a file with one ``ok`` verdict and one
+#: drift verdict shows the agent nothing at all — the unverified pass only
+#: fires when the WHOLE file is unverified — and drift is invisible on
+#: exactly the path it matters on.
+#:
+#: THIS TUPLE AND :data:`gcp_grounding.drift.MAX_DRIFT_VERDICTS` ARE TWO
+#: HALVES OF ONE PROMISE and must be read together. A naive head-truncation
+#: of a capped drift list can drop the very verdict this tuple guarantees will
+#: always show, which is why ``drift.py`` fills its budget ROUND-ROBIN over
+#: ``drift.DRIFT_KINDS`` and never drops the first verdict of any kind. Assert
+#: the pair, never either half alone.
+#:
+#: Everything here is ``unverified``, so the overall ok flag is untouched and
+#: a drift never fails the gate by itself — but the agent and the operator
+#: both see it.
+ALWAYS_REPORT_KINDS = (
+    "drift",
+    "drift:material",
+    "drift:unmanaged",
+    "drift:unmergeable",
+    "drift:verdict",
+    "drift:key-mismatch",
+    "state:source",
+    "state:no-snapshot",
+    "baseline:target",
+    "baseline:unqueried",
+    "baseline:new",
+    "baseline:stale",
+    "baseline:opaque",
+    "baseline:ambiguous",
+    "baseline:key-mismatch",
+    "proposal:unresolved",
+    "estate:incomplete",
+    "engine:crashed",
+)
 
 #: Suffixes that make a file a policy candidate by name alone; other
 #: ``.json`` files qualify by content (their JSON sniffs as a policy kind).
 _CANDIDATE_SUFFIXES = (".policy.json", ".tf.json")
+
+#: The blocks of :func:`gcp_grounding.explain_state.state_document` carried
+#: onto a file result, in document order.
+_STATE_BLOCKS = ("sources", "settings", "targets", "drift")
+
+#: ``check(as_of=...)`` omitted — DISTINCT from an explicit ``None``, which is
+#: the documented way to say the run pins no clock.
+_OMITTED: Any = object()
+
+
+def _optional(name: str) -> Any:
+    """``gcp_grounding.<name>``, or ``None`` where it is not part of this
+    checkout.
+
+    The try-import-except-``ImportError`` idiom :mod:`gcp_grounding.preflight`
+    already uses for ``tf_claims`` and ``sec_rules``, applied to every module
+    the current-state input needs. A checkout without them keeps this gate
+    byte-identical, because nothing here is imported until a source is
+    configured.
+    """
+    try:
+        return importlib.import_module(f"{__package__}.{name}")
+    except ImportError:
+        logger.debug("gcp_grounding.%s is not part of this checkout", name)
+        return None
 
 
 @dataclass(frozen=True)
@@ -94,6 +170,12 @@ class FileResult:
     #: unverified; a changed README never does.
     policy_candidate: bool
     report: PolicyReport
+    #: This file's rows from :func:`gcp_grounding.explain_state.state_document`
+    #: — which sources were read, which settings chose them, what each changed
+    #: row was compared against and where they disagreed. Empty (the default,
+    #: so existing construction sites are unaffected) when no state source was
+    #: configured.
+    state: tuple[Mapping[str, Any], ...] = ()
 
     @property
     def verdicts(self) -> tuple[Verdict, ...]:
@@ -109,6 +191,13 @@ class GateResult:
     captured_at: str
     #: Constraint-solver backend actually used ("z3" or "builtin").
     backend: str = "builtin"
+    #: Whether a current-state source was CONFIGURED — configured, not loaded
+    #: successfully. It is what gates the ``state`` key of :meth:`to_dict`, so
+    #: a run that configured nothing produces today's document exactly.
+    state_configured: bool = False
+    #: The rendered state-used-this-run block, or empty when no source was
+    #: configured (a clean run stays byte-quiet).
+    state_render: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -117,11 +206,27 @@ class GateResult:
         return all(f.status != "failed" for f in self.files)
 
     @property
+    def state(self) -> tuple[Mapping[str, Any], ...]:
+        """Every file's state rows, in file order — the aggregate matching
+        :attr:`FileResult.state`."""
+        return tuple(row for f in self.files for row in f.state)
+
+    @property
     def risk(self) -> str:
-        """One of :data:`RISK_LEVELS` — see the module docstring."""
+        """One of :data:`RISK_LEVELS` — see the module docstring.
+
+        A file that is otherwise ``ok`` but carries an
+        :data:`ALWAYS_REPORT_KINDS` verdict — a drift, a baseline that could
+        not be resolved, a source that contributed nothing — raises the run's
+        risk to ``"low"``, NEVER to ``"high"``: the ok semantics are untouched
+        and none of those verdicts is a finding about the change itself.
+        """
         if any(f.status == "failed" for f in self.files):
             return "high"
         if any(f.policy_candidate and f.status == "unverified" for f in self.files):
+            return "low"
+        if any(v.status == "unverified" and v.kind in ALWAYS_REPORT_KINDS
+               for f in self.files for v in f.verdicts):
             return "low"
         return "none"
 
@@ -133,11 +238,14 @@ class GateResult:
     def findings(self) -> tuple[str, ...]:
         """Human-readable, path-prefixed findings for a generator's next
         prompt: every ungrounded/contradicted verdict (with did-you-mean
-        suggestions inline), plus the unverified notes of policy-relevant
-        files the gate could not judge at all — an unparseable
-        ``*.policy.json`` is feedback too."""
+        suggestions inline), the unverified notes of policy-relevant files the
+        gate could not judge at all — an unparseable ``*.policy.json`` is
+        feedback too — and every :data:`ALWAYS_REPORT_KINDS` verdict whatever
+        the file's status, deduplicated against that pass so a wholly
+        unverified file never prints a line twice."""
         lines: list[str] = []
         for f in self.files:
+            emitted: set[str] = set()
             for v in f.verdicts:
                 if v.status in ("ungrounded", "contradicted"):
                     tip = (f" (did you mean: {', '.join(v.suggestions)}?)"
@@ -145,12 +253,22 @@ class GateResult:
                     lines.append(f"{f.path}: {v.status} {v.kind} — {v.message}{tip}")
             if f.policy_candidate and f.status == "unverified":
                 for v in f.verdicts:
-                    lines.append(f"{f.path}: unverified — {v.message}")
+                    line = f"{f.path}: unverified — {v.message}"
+                    emitted.add(line)
+                    lines.append(line)
+            for v in f.verdicts:
+                if v.status != "unverified" or v.kind not in ALWAYS_REPORT_KINDS:
+                    continue
+                line = f"{f.path}: unverified — {v.message}"
+                if line not in emitted:
+                    emitted.add(line)
+                    lines.append(line)
         return tuple(lines)
 
     def render(self) -> str:
         """The whole gate result as human-readable text: one header line,
-        then each file's :class:`PolicyReport` render, indented."""
+        then each file's :class:`PolicyReport` render, indented, then — when a
+        state source was configured — the state-used-this-run block."""
         c = self.counts()
         lines = [
             f"GCP policy gate {'PASSED' if self.ok else 'FAILED'} "
@@ -163,11 +281,19 @@ class GateResult:
             lines.append("  (no changed files)")
         for f in self.files:
             lines.extend("  " + line for line in f.report.render("human").splitlines())
+        lines.extend(self.state_render)
         return "\n".join(lines)
 
     def to_dict(self) -> dict:
-        """The machine document for CI, versioned by :data:`GATE_SCHEMA`."""
-        return {
+        """The machine document for CI, versioned by :data:`GATE_SCHEMA`.
+
+        The ``state`` keys — one aggregate and one per file — appear exactly
+        when a state source was configured. That is what keeps the schema
+        string honest without bumping it: a consumer that configures nothing
+        receives today's document byte for byte, and a consumer that
+        configures a source opted into the extra key by configuring one.
+        """
+        document = {
             "schema": GATE_SCHEMA,
             "ok": self.ok,
             "risk": self.risk,
@@ -185,25 +311,150 @@ class GateResult:
             ],
             "findings": list(self.findings()),
         }
+        if self.state_configured:
+            for entry, f in zip(document["files"], self.files):
+                entry["state"] = [dict(row) for row in f.state]
+            document["state"] = [dict(row) for row in self.state]
+        return document
+
+
+@dataclass
+class _StateView:
+    """One resolved current-state view, cached by the directory it governs."""
+
+    current: Any = None
+    snapshot: Any = None
+    ledger: Any = None
+    settings: Any = None
+    notes: tuple[Verdict, ...] = ()
+    #: Whether this view's own notes have already been attached to a report.
+    attached: bool = False
+    #: The compiled rule set for these settings, built once per view.
+    rules: Any = None
 
 
 class PolicyGroundingGate:
     """The changed-file gate, configured once with the snapshot to ground
     against. Construction is strict (a broken snapshot is a setup error and
-    raises); :meth:`check` is fail-open (bad *input* never raises)."""
+    raises); :meth:`check` is fail-open (bad *input* never raises).
 
-    def __init__(self, snapshot: GcpSnapshot | str | os.PathLike[str]) -> None:
+    The first positional argument keeps its exact meaning: a
+    :class:`GcpSnapshot` or a path to one. Because
+    :class:`gcp_grounding.reconciled.ReconciledSnapshot` SUBCLASSES
+    ``GcpSnapshot``, handing one straight in already works and needs no flag —
+    ``resolve_sources`` is ignored for it and :attr:`source_notes` is empty,
+    since the caller already resolved.
+
+    The keyword arguments are the current-state input and are all off by
+    default:
+
+    ``current``
+        the assembled current state — a ``sources.CurrentState``, a
+        ``ReconciledSnapshot`` or a plain snapshot — used for every file.
+    ``settings``
+        a :class:`gcp_grounding.discovery.Settings` used for every file when
+        per-file discovery is off: its ``targets`` map supplies the baseline
+        target of a document that does not name its own resource, and its
+        ``requirements`` names the compiled promises.
+    ``options``
+        a :class:`gcp_grounding.sources.SourceOptions` acting as the CLI layer
+        of every settings resolution, and the base of a ``resolve_sources``
+        construction.
+    ``discover_config``
+        resolve the settings PER EDITED FILE by walking up from that file, so
+        an agent editing three modules gets three different, correct
+        counterparts. Loads are cached by resolved config directory, so a
+        ten-file diff in one repo does one load.
+    ``resolve_sources``
+        route construction through
+        :func:`gcp_grounding.sources.load_current` instead of
+        :meth:`GcpSnapshot.load`, so the primary snapshot is merged with every
+        other configured source. Construction stays STRICT: a primary that
+        will not load raises :class:`ValueError` exactly as today.
+    """
+
+    def __init__(self, snapshot: GcpSnapshot | str | os.PathLike[str], *,
+                 current: Any = None, settings: Any = None, options: Any = None,
+                 discover_config: bool = False,
+                 resolve_sources: bool = False) -> None:
+        self.settings = settings
+        self.options = options
+        self.discover_config = bool(discover_config)
+        #: The notes :func:`gcp_grounding.sources.load_current` returned for the
+        #: constructed view. ESTATE-WIDE, so they are attached ONCE per check
+        #: call; see :meth:`_attach_notes`.
+        self.source_notes: tuple[Verdict, ...] = ()
+        self.current = current
         if isinstance(snapshot, GcpSnapshot):
             self.snapshot = snapshot
+        elif resolve_sources:
+            self.snapshot, resolved = self._resolve_primary(snapshot)
+            if self.current is None:
+                self.current = resolved
+            self.source_notes = tuple(resolved.notes)
         else:
             self.snapshot = GcpSnapshot.load(snapshot)
+        self.state_configured = bool(self.current is not None or self.discover_config)
+        self._now: Any = None
+        self._states: dict[str, _StateView] = {}
+        self._notes_pending: list[Verdict] = []
+        self._state_render: tuple[str, ...] = ()
 
-    def check(self, changed_files: Iterable[str | os.PathLike[str]]) -> GateResult:
+    def _resolve_primary(self, path: Any) -> tuple[Any, Any]:
+        """The primary snapshot through the one current-state assembler.
+
+        STRICT, exactly as :meth:`GcpSnapshot.load` is: a source set that
+        produces no snapshot at all is a setup error and raises, because a
+        broken snapshot is not bad input.
+        """
+        sources = _optional("sources")
+        if sources is None:
+            raise ValueError("resolve_sources=True needs gcp_grounding.sources, "
+                             "which is not part of this checkout")
+        base = self.options
+        if base is None and self.settings is not None:
+            base = getattr(self.settings, "options", None)
+        if base is None:
+            base = sources.SourceOptions()
+        state = sources.load_current(dataclasses.replace(base,
+                                                         primary=os.fspath(path)))
+        if state.snapshot is None:
+            detail = (state.problem or "; ".join(v.message for v in state.notes)
+                      or "no source produced a snapshot")
+            raise ValueError(f"the current state could not be assembled from "
+                             f"{os.fspath(path)}: {detail}")
+        return state.snapshot, state
+
+    # -- the run -------------------------------------------------------------
+
+    def check(self, changed_files: Iterable[str | os.PathLike[str]], *,
+              as_of: Any = _OMITTED) -> GateResult:
         """Ground every policy-relevant file in *changed_files* (duplicates
         are processed once, order preserved) and aggregate the outcome.
         Callers should pass paths that exist — a deleted file surfaces as an
-        unreadable one, i.e. ``unverified``."""
+        unreadable one, i.e. ``unverified``.
+
+        *as_of* is THE clock boundary, resolved ONCE here through
+        :func:`gcp_grounding.freshness.resolve_now` and threaded everywhere:
+        into the source options every state load is built from, and into every
+        ``EvalOptions``. **Omitting it RESOLVES it rather than dropping it.**
+        The old reading — omitted means staleness is never evaluated — is a
+        fail-open hole on exactly the path this input exists to protect, since
+        the PostToolUse hook is invoked with one fixed command line and would
+        otherwise treat a six-month-old auto-discovered ``terraform.tfstate``
+        as current forever. ``resolve_now`` honours ``GCP_GROUNDING_NOW``, so a
+        suite stays deterministic; passing ``as_of=None`` explicitly is the
+        documented way to say the run pins no clock.
+        """
         backend = get_solver().backend
+        clock_notes: list[Verdict] = []
+        self._now = self._resolve_clock(as_of, clock_notes)
+        # The state cache and the attach-once flags are reset per call, so two
+        # successive checks each attach their notes exactly once and a clock
+        # threaded into this call never leaks into the next one.
+        self._states = {}
+        self._notes_pending = list(self.source_notes) + clock_notes
+        self._state_render = ()
         results: list[FileResult] = []
         seen: set[str] = set()
         for raw in changed_files:
@@ -212,12 +463,39 @@ class PolicyGroundingGate:
                 continue
             seen.add(path)
             results.append(self._check_one(path, backend))
+        if self._notes_pending:
+            logger.debug("gate: %d estate-wide source note(s) went unattached — no "
+                         "policy-candidate file was grounded in this run",
+                         len(self._notes_pending))
         result = GateResult(files=tuple(results),
                             captured_at=self.snapshot.captured_at,
-                            backend=backend)
+                            backend=backend,
+                            state_configured=self.state_configured,
+                            state_render=self._state_render)
         logger.debug("gate: %d file(s) → ok=%s risk=%s %s",
                      len(results), result.ok, result.risk, result.counts())
         return result
+
+    def _resolve_clock(self, as_of: Any, notes: list[Verdict]) -> Any:
+        """The instant this run measures ages against, or ``None``.
+
+        An unparseable pinned clock is a note rather than an exception: this is
+        on ``check``'s never-raises path, and a run that says which clock it
+        could not read is more useful than one that dies.
+        """
+        if as_of is None:
+            return None
+        freshness = _optional("freshness")
+        if freshness is None:
+            return None if as_of is _OMITTED else as_of
+        try:
+            return (freshness.resolve_now() if as_of is _OMITTED
+                    else freshness.resolve_now(as_of))
+        except ValueError as exc:
+            notes.append(Verdict("unverified", "state:source", "<clock>", 0,
+                                 f"the run's clock could not be resolved ({exc}) - "
+                                 f"no age was checked against it"))
+            return None
 
     # -- per-file ------------------------------------------------------------
 
@@ -231,8 +509,8 @@ class PolicyGroundingGate:
         if lower.endswith(".json"):
             if (lower.endswith(_CANDIDATE_SUFFIXES)
                     or self._sniffs_as_policy(path)):
-                return self._file_result(path, self._ground(path, backend),
-                                         candidate=True)
+                report, state = self._ground(path, backend)
+                return self._file_result(path, report, candidate=True, state=state)
             return self._unverified(
                 path, backend, candidate=False,
                 note=f"{path}: not recognized as an IAM policy, Org Policy or "
@@ -253,12 +531,27 @@ class PolicyGroundingGate:
             return False
         return detect_kind(doc) is not None
 
-    def _ground(self, path: str, backend: str) -> GroundingReport:
-        # ground_policy carries its own fail-open contract; the belt here is
-        # for anything that still escapes (e.g. undecodable bytes), so the
-        # gate's own never-crash promise doesn't ride on preflight's.
+    def _ground(self, path: str, backend: str
+                ) -> tuple[GroundingReport, tuple[Mapping[str, Any], ...]]:
+        # ground_policy carries its own fail-open contract, and so does
+        # engine.evaluate; the belt here is for anything that still escapes
+        # (e.g. undecodable bytes), so the gate's own never-crash promise
+        # doesn't ride on preflight's — or on the engine's.
         try:
-            return ground_policy(path, self.snapshot)
+            view = self._state_for(path)
+            if view is None:
+                report = ground_policy(path, self.snapshot)
+                if self.state_configured:
+                    # Never silence: a configured source that no module in this
+                    # checkout can read is a smaller coverage than was asked for.
+                    report.add(Verdict(
+                        "unverified", "state:source", path, 0,
+                        f"a current-state source was configured, but the discovery "
+                        f"modules are not part of this checkout - {path} was "
+                        f"grounded against the vocabulary alone and NOTHING was "
+                        f"compared against the estate"))
+                return report, ()
+            return self._ground_with_state(path, view, backend)
         except Exception as exc:
             logger.debug("fail-open: grounding crashed on %s", path, exc_info=True)
             report = GroundingReport()
@@ -267,7 +560,7 @@ class PolicyGroundingGate:
                 "unverified", "document", path, 0,
                 f"{path}: grounding crashed ({type(exc).__name__}: {exc}) "
                 f"— nothing was checked"))
-            return report
+            return report, ()
 
     def _unverified(self, path: str, backend: str, candidate: bool,
                     note: str) -> FileResult:
@@ -276,8 +569,8 @@ class PolicyGroundingGate:
         report.add(Verdict("unverified", "document", path, 0, note))
         return self._file_result(path, report, candidate)
 
-    def _file_result(self, path: str, report: GroundingReport,
-                     candidate: bool) -> FileResult:
+    def _file_result(self, path: str, report: GroundingReport, candidate: bool,
+                     state: tuple[Mapping[str, Any], ...] = ()) -> FileResult:
         if not report.ok:
             status = "failed"
         elif report.verdicts and all(v.status == "unverified"
@@ -288,4 +581,255 @@ class PolicyGroundingGate:
         policy_report = PolicyReport(report, self.snapshot.captured_at,
                                      source=path)
         return FileResult(path=path, status=status,
-                          policy_candidate=candidate, report=policy_report)
+                          policy_candidate=candidate, report=policy_report,
+                          state=state)
+
+    # -- the current-state input ---------------------------------------------
+
+    def _state_for(self, path: str) -> _StateView | None:
+        """The current state governing *path*, or ``None`` when none is
+        configured — in which case the caller does today's plain grounding.
+
+        An explicitly supplied ``current`` wins over discovery: the caller
+        already said which state this run compares against, and re-deriving one
+        per file would silently replace it.
+        """
+        if not self.state_configured:
+            return None
+        if self.current is not None:
+            view = self._states.get("")
+            if view is None:
+                snapshot, ledger = self._view_of(self.current)
+                # A supplied current state's own notes are estate-wide too, and
+                # go on exactly once — the constructor already carried them when
+                # `resolve_sources` produced this state, so they are taken from
+                # the view only when it did not.
+                notes = (() if self.source_notes
+                         else tuple(getattr(self.current, "notes", ()) or ()))
+                view = _StateView(current=self.current, snapshot=snapshot,
+                                  ledger=ledger, settings=self.settings,
+                                  notes=notes)
+                self._states[""] = view
+            return view
+        return self._discovered_state(path)
+
+    def _discovered_state(self, path: str) -> _StateView | None:
+        """The state discovered NEXT TO *path*, cached by config directory.
+
+        THIS IS THE FIX for a hook command line being able to pin exactly one
+        baseline for a whole session: the baseline is derived per file from the
+        state discovered beside that file. Caching by the RESOLVED CONFIG
+        DIRECTORY is what keeps a ten-file diff in one repo to one load, while
+        a second file under a different config still gets its own.
+        """
+        discovery = _optional("discovery")
+        sources = _optional("sources")
+        if discovery is None or sources is None:
+            return None
+        config, problems = discovery.discover(path)
+        auto = None
+        if config is None:
+            auto, detected = discovery.auto_detect(path)
+            problems = tuple(problems) + tuple(detected)
+        key = config.directory if config is not None else _start_directory(path)
+        view = self._states.get(key)
+        if view is not None:
+            return view
+        settings = discovery.resolve_settings(cli=self.options, config=config,
+                                              auto=auto)
+        state = sources.load_current(
+            discovery.to_source_options(settings, as_of=self._now))
+        notes = [Verdict("unverified", "state:source", key, 0, problem)
+                 for problem in problems]
+        if state.problem:
+            notes.append(Verdict("unverified", "state:source", key, 0,
+                                 f"{state.problem} - no current state was used for "
+                                 f"the files under {key}"))
+        notes.extend(state.notes)
+        snapshot, ledger = self._view_of(state)
+        view = _StateView(current=state, snapshot=snapshot, ledger=ledger,
+                          settings=settings, notes=tuple(notes))
+        self._states[key] = view
+        return view
+
+    @staticmethod
+    def _view_of(current: Any) -> tuple[Any, Any]:
+        """``(snapshot, ledger)`` through the ONE reader that knows the shapes,
+        or ``(None, None)`` where it is not part of this checkout."""
+        baseline = _optional("baseline")
+        if baseline is None:
+            return None, None
+        try:
+            return baseline.current_view(current)
+        except TypeError:
+            logger.debug("the configured current state has no readable snapshot",
+                         exc_info=True)
+            return None, None
+
+    # -- the three-input evaluation ------------------------------------------
+
+    def _ground_with_state(self, path: str, view: _StateView, backend: str
+                           ) -> tuple[GroundingReport, tuple[Mapping[str, Any], ...]]:
+        """One file through the three-input engine: proposal, current, rules."""
+        engine = _optional("engine")
+        if engine is None:
+            report = ground_policy(path, self.snapshot)
+            report.add(Verdict(
+                "unverified", "state:source", path, 0,
+                f"a current-state source was configured, but gcp_grounding.engine "
+                f"is not part of this checkout - {path} was grounded against the "
+                f"vocabulary alone and NOTHING was compared against the estate"))
+            self._attach_notes(report, view)
+            return report, ()
+
+        # The same fail-open document loading `ground_policy` does, reached
+        # through the one loader rather than re-spelled: two copies of the
+        # "not valid JSON" phrasing is two messages that can drift apart.
+        document, source, error = preflight._load_document(path)
+        if error is not None:
+            report = GroundingReport()
+            report.backend = backend
+            report.add(Verdict("unverified", "document", source, 0,
+                               f"{source}: {error} — nothing was checked"))
+            self._attach_notes(report, view)
+            return report, ()
+
+        kind = detect_kind(document)
+        proposal = engine.prepare_proposal(document, kind, source=source)
+        settings = {"as_of": self._now.isoformat() if self._now is not None else None,
+                    "drift": self._drift_mode(engine, view)}
+        hints = self._hints(path, view)
+        if hints is not None:
+            settings["hints"] = hints
+        options = engine.EvalOptions(**settings)
+        if view.rules is None:
+            # Compiled ONCE per view: the settings that name the requirements
+            # are per config directory, so re-compiling them per file would
+            # re-read and re-admit the same promises for every changed file.
+            view.rules = self._rule_set(engine, view)
+        result = engine.evaluate(proposal, view.current, view.rules,
+                                 options=options)
+        report = result.report
+
+        # The notes go on BEFORE the scrub, so a note that quotes a value the
+        # loading boundary withheld is scrubbed with everything else.
+        self._attach_notes(report, view)
+        drift = _optional("drift")
+        if drift is not None:
+            drift.postpass(report, view.snapshot)
+        redact = _optional("redact")
+        sources = _optional("sources")
+        if redact is not None and sources is not None:
+            redact.scrub_report(sources.vault(), report)
+
+        return report, self._state_rows(result, view)
+
+    def _rule_set(self, engine: Any, view: _StateView) -> Any:
+        """THE THIRD INPUT: the built-in checks plus the compiled promises the
+        per-file settings name.
+
+        ``engine.evaluate`` takes a :class:`~gcp_grounding.engine.RuleSet` and
+        nobody else on the gate path builds one, so without this the promise
+        input reaches the agentic path NOT AT ALL —
+        ``preflight.ground_policy``'s own ``rules=`` parameter is bypassed the
+        moment this helper routes through the engine, and this is the only
+        place it can come back.
+
+        Fails OPEN with exactly one note when the compiler is unavailable or a
+        requirements document will not load: never a raise, and never silence.
+        """
+        requirements = getattr(view.settings, "requirements", "") or ""
+        if not requirements:
+            return engine.RuleSet()
+        sec_rules = _optional("sec_rules")
+        if sec_rules is None:
+            return engine.RuleSet(carry_verdicts=(Verdict(
+                "unverified", engine.RULES_KIND, requirements, 0,
+                f"the requirements at '{requirements}' were configured, but "
+                f"gcp_grounding.sec_rules is not part of this checkout - no "
+                f"compiled promise was evaluated"),))
+        try:
+            # A LIST, never the bare string: `load_rules` iterates its argument,
+            # so a path handed over directly would be iterated into characters.
+            if os.path.isdir(requirements):
+                compiled, verdicts = sec_rules.load_directory(requirements)
+            else:
+                compiled, verdicts = sec_rules.load_rules([requirements])
+        except Exception as exc:            # noqa: BLE001 - fail OPEN, one note
+            logger.debug("fail-open: loading requirements %s raised", requirements,
+                         exc_info=True)
+            return engine.RuleSet(carry_verdicts=(Verdict(
+                "unverified", engine.RULES_KIND, requirements, 0,
+                f"the requirements at '{requirements}' could not be compiled "
+                f"({type(exc).__name__}: {exc}) - no promise was evaluated"),))
+        return engine.RuleSet(compiled=tuple(compiled),
+                              carry_verdicts=tuple(verdicts))
+
+    @staticmethod
+    def _drift_mode(engine: Any, view: _StateView) -> str:
+        """The configured drift policy in the engine's own two-value
+        vocabulary: only ``block`` blocks, everything else reports."""
+        options = getattr(view.settings, "options", None)
+        policy = getattr(options, "drift_policy", "") or ""
+        return "block" if policy == "block" else engine.DEFAULT_DRIFT_MODE
+
+    def _hints(self, path: str, view: _StateView) -> Any:
+        """The per-file baseline hints: the configured target for THIS file.
+
+        A document that does not name its own resource — an IAM allow or deny
+        policy — gets its target from the settings ``targets`` map keyed by the
+        edited path, and from nothing else. A target is never guessed from a
+        file name.
+        """
+        baseline = _optional("baseline")
+        if baseline is None:
+            return None
+        targets = getattr(view.settings, "targets", None) or {}
+        ref = targets.get(os.path.abspath(path)) or targets.get(path)
+        if ref is None:
+            return baseline.Hints(source=path)
+        return baseline.Hints(source=path,
+                              category=getattr(ref, "category", ""),
+                              targets={path: getattr(ref, "key", "")})
+
+    def _state_rows(self, result: Any, view: _StateView
+                    ) -> tuple[Mapping[str, Any], ...]:
+        """This file's rows of the state document, and — once per run — the
+        human block :meth:`GateResult.render` appends."""
+        explain_state = _optional("explain_state")
+        if explain_state is None:
+            return ()
+        document = explain_state.state_document(result, view.ledger, view.settings)
+        if not self._state_render:
+            self._state_render = tuple(
+                explain_state.state_lines(result, view.ledger, view.settings))
+        return tuple({"row": block, **row} for block in _STATE_BLOCKS
+                     for row in document.get(block, ()))
+
+    def _attach_notes(self, report: GroundingReport, view: _StateView) -> None:
+        """NOTE PLACEMENT, and why it is once.
+
+        Source notes are ESTATE-WIDE and not file-specific, so attaching a copy
+        to every file's report would multiply them by the changed-file count
+        and inflate every count that reads them. They go ONCE, onto the FIRST
+        policy-candidate file the gate actually grounds, in input order —
+        deterministic because the changed-file order is the caller's and the
+        flags are reset at the top of :meth:`check`, so two successive check
+        calls each attach exactly once. When no file is grounded nothing is
+        attached and the fact is logged at debug.
+        """
+        if self._notes_pending:
+            for note in self._notes_pending:
+                report.add(note)
+            self._notes_pending = []
+        if view.notes and not view.attached:
+            for note in view.notes:
+                report.add(note)
+            view.attached = True
+
+
+def _start_directory(path: str) -> str:
+    """The directory the walk for *path* starts in — the cache key when no
+    config file governs it."""
+    resolved = os.path.abspath(path)
+    return resolved if os.path.isdir(resolved) else os.path.dirname(resolved)
