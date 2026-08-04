@@ -54,8 +54,11 @@ logger = get_logger(__name__)
 
 __all__ = ["DOCUMENT_KINDS", "detect_kind", "ground_policy"]
 
-#: Document kinds :func:`detect_kind` can recognize.
-DOCUMENT_KINDS = ("iam_policy", "org_policy", "tf_plan")
+#: Document kinds :func:`detect_kind` can recognize. The two VPC Service
+#: Controls kinds are decided by :mod:`gcp_grounding.vpcsc_claims` through the
+#: registry once detected.
+DOCUMENT_KINDS = ("iam_policy", "org_policy", "tf_plan",
+                  "vpc_sc_perimeter", "access_level")
 
 #: Top-level keys marking ``terraform show -json`` plan output.
 _TF_PLAN_KEYS = ("format_version", "terraform_version", "planned_values",
@@ -68,18 +71,27 @@ _ORG_V1_KEYS = ("constraint", "booleanPolicy", "listPolicy")
 def detect_kind(doc: Any) -> str | None:
     """Which of :data:`DOCUMENT_KINDS` *doc* looks like — or None.
 
-    Checked most-distinctive first: tf plan markers, then Org Policy (v1
-    typed-policy keys, or a v2 ``…/policies/<id>`` name / ``spec`` block),
-    then an IAM policy's ``bindings`` (``etag`` + ``version`` alone also
-    count: an empty IAM policy carries only those).
+    Checked most-distinctive first: tf plan markers, then the VPC Service
+    Controls resource-named documents (which carry a ``spec`` block and would
+    otherwise be misread as an Org Policy v2), then Org Policy (v1 typed-policy
+    keys, or a v2 ``…/policies/<id>`` name / ``spec`` block), then an IAM
+    policy's ``bindings`` (``etag`` + ``version`` alone also count: an empty
+    IAM policy carries only those).
     """
     if not isinstance(doc, Mapping):
         return None
     if any(key in doc for key in _TF_PLAN_KEYS):
         return "tf_plan"
+    name = doc.get("name")
+    if isinstance(name, str):
+        # An Access Context Manager resource name pins the VPC-SC kind before
+        # the Org Policy `spec`-block sniff below claims it.
+        if "/servicePerimeters/" in name:
+            return "vpc_sc_perimeter"
+        if "/accessLevels/" in name:
+            return "access_level"
     if any(key in doc for key in _ORG_V1_KEYS):
         return "org_policy"
-    name = doc.get("name")
     if isinstance(name, str) and "/policies/" in name:
         return "org_policy"
     if isinstance(doc.get("spec"), Mapping):

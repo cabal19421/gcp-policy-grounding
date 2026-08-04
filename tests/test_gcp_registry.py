@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from gcp_grounding import preflight, registry
+from gcp_grounding import preflight, registry, tf_claims
 from gcp_grounding.claims import Claim, iam_policy_claims
 from gcp_grounding.core.report import Verdict
 from gcp_grounding.core.solver import get_solver
@@ -152,19 +152,21 @@ def _tf_full_expected():
     ("tf_plan_full", _tf_full_expected()),
 ])
 def test_no_providers_is_byte_identical(snap, name, expected):
-    # Two domain modules are landed here: org_checks contributes
-    # check_org_estate and hfw_checks contributes check_hierarchical_order.
-    # Neither returns verdicts for a document that makes no claim of its
-    # own, and hfw_claims' terraform extractors match no resource type
-    # these fixtures use, which is what the byte-identical assertion below
-    # then proves.
+    # Three domain modules are landed here: org_checks, hfw_checks and
+    # vpcsc_checks each contribute whole-document checks. None answers for
+    # another domain's document kind, none adds a claim check, and none
+    # shadows a builtin terraform resource type, so these fixture bundles
+    # ground byte-identically to before the seam existed -- which is what
+    # the verdict-set equality below then pins.
     assert {fn.__name__ for fn in registry.document_checks()} <= {
-        "check_org_estate", "check_hierarchical_order"}
+        "check_org_estate", "check_hierarchical_order",
+        "check_perimeter_estate", "check_perimeter_pair"}
     assert registry.claim_checks("role") == ()
     fixture_types = {"google_project_iam_binding", "google_project_iam_member",
                      "google_project_iam_policy", "google_project_iam_custom_role",
                      "google_org_policy_policy"}
     assert fixture_types.isdisjoint(registry.tf_extractors())
+    assert set(registry.tf_extractors()).isdisjoint(tf_claims._EXTRACTORS)
     report = ground_policy(POLICIES / f"{name}.json", snap)
     got = sorted((v.status, v.kind, v.target) for v in report.verdicts)
     assert got == sorted(expected)
