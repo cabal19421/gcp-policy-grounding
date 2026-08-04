@@ -103,31 +103,44 @@ def test_domain_probes_are_behavioural_not_kind_lookups():
     against what :func:`tests.agentic.capabilities.probe` measured through a
     real ``ground_policy`` run, which does not consult the vocabulary at all.
 
-    ``is True`` for the two dead families is the merged world's value, not this
-    checkout's: no firewall or perimeter checker exists here, so the honest
-    measurement is ``False`` *with the report that produced it*. The ``is True``
-    anchors are the two capabilities this checkout really does decide — without
-    them "every probe is False" would satisfy every assertion below.
+    This runs in the INTEGRATED tree, where the kind vocabulary
+    (:mod:`gcp_grounding.claims`) has landed for the firewall / perimeter /
+    org-enforcement families whether or not their checkers have. That split is
+    the very thing the tautology hid, so it is asserted in both directions
+    here: the vocabulary fact stands on its own (a kind vanishing from ``KINDS``
+    goes red below), and each family's flag is asserted equal to what ``probe``
+    MEASURED — which may be either value, because the vocabulary carrying a
+    kind does not make anything able to decide it. A dead family still has to
+    say so in the words of the report it actually got; a live one has to own its
+    claim kind. The ``is True`` anchors are the two capabilities this checkout
+    really does decide — without them "every probe is False" would satisfy every
+    assertion below.
     """
     from gcp_grounding.claims import KINDS
 
     # Restored: the vocabulary conjunct the probes no longer carry. Independent
-    # of the probes now, so removing a kind from KINDS goes red HERE.
-    assert env.have_claim_kinds("firewall_rule") is False
-    assert "firewall_rule" not in KINDS
-    assert "perimeter_config" not in KINDS
-    assert "constraint_enforcement" not in KINDS
+    # of the probes now, so a kind leaving KINDS goes red HERE.
+    for kind in ("firewall_rule", "perimeter_config", "constraint_enforcement"):
+        assert kind in KINDS, kind
+        assert env.have_claim_kinds(kind) is True, kind
 
-    # Measured: nothing in this checkout decides a firewall or a perimeter, and
-    # each probe says so in the words of the report it actually got.
-    for name, cap in (("HAVE_FIREWALL_DOMAIN", capabilities.FIREWALL),
-                      ("HAVE_VPCSC_DOMAIN", capabilities.VPCSC),
-                      ("HAVE_ORG_ENFORCEMENT", capabilities.ORG_ENFORCEMENT)):
+    # Measured: each family's flag is what a real ``ground_policy`` run
+    # measured, never a vocabulary lookup — the kinds above are all present
+    # while these capabilities may be dead or live independently of that.
+    for name, cap, kind in (
+            ("HAVE_FIREWALL_DOMAIN", capabilities.FIREWALL, "firewall_rule"),
+            ("HAVE_VPCSC_DOMAIN", capabilities.VPCSC, "perimeter_config"),
+            ("HAVE_ORG_ENFORCEMENT", capabilities.ORG_ENFORCEMENT,
+             "constraint_enforcement")):
         measured = capabilities.probe(cap)
-        assert getattr(env, name) is False, name
-        assert measured.live is False, name
-        assert cap.family in measured.reason, name
-        assert cap.name in measured.reason, name
+        assert getattr(env, name) is measured.live, name
+        if measured.live:
+            # A family that really decides must own its claim kind.
+            assert kind in KINDS, name
+        else:
+            # A dead family names itself and the report that killed it.
+            assert cap.family in measured.reason, name
+            assert cap.name in measured.reason, name
 
     # The probe machinery is not stuck at False: the same call on capabilities
     # this checkout DOES decide measures live.
