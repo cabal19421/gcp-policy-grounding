@@ -89,6 +89,7 @@ NAMED_MODULES = (
 EXPECTED_MODULES = frozenset({
     "gcp_grounding/claims.py",
     "gcp_grounding/fw_claims.py",
+    "gcp_grounding/iam_checks.py",
     "gcp_grounding/sec_domains.py",
     "gcp_grounding/tf_claims.py",
 })

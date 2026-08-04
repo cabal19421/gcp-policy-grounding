@@ -169,6 +169,21 @@ def test_public_principal_in_deniedPrincipals_carries_deny_polarity():
     assert any(c.kind == "denied_principal" and c.value == "allUsers" for c in claims)
 
 
+def test_public_principal_payload_distinguishes_denied_from_excepted():
+    # Both principal fields run through ONE branch, so polarity alone cannot say
+    # which of them a public member came from — and an `allUsers` EXCEPTION is a
+    # bypass, the exact opposite of the guardrail the deny polarity implies.
+    # The discriminator mirrors the `excepted` flag already set on permissions.
+    claims = iam_deny_policy_claims({"rules": [{"denyRule": {
+        "deniedPrincipals": ["allUsers"],
+        "exceptionPrincipals": ["allAuthenticatedUsers"]}}]})
+    by_value = {c.value: c for c in claims if c.kind == "public_principal"}
+    assert set(by_value) == {"allUsers", "allAuthenticatedUsers"}
+    assert by_value["allUsers"].fields() == {"excepted": False, "polarity": "deny"}
+    assert by_value["allAuthenticatedUsers"].fields() == {"excepted": True,
+                                                          "polarity": "deny"}
+
+
 def test_denied_principal_carries_rule_index():
     claims = iam_deny_policy_claims(
         {"rules": [{"denyRule": {"deniedPrincipals": ["group:data-eng@acme.example"]}}]})

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from gcp_grounding import preflight, registry
+from gcp_grounding import evidence, preflight, registry
 from gcp_grounding.claims import Claim
 from gcp_grounding.core.solver import get_solver
 from gcp_grounding.iam_checks import (CLAIM_CHECKS, DOCUMENT_CHECKS,
@@ -243,7 +243,10 @@ def test_terraform_anchored_binding_groups_by_resource_address(backend, snapshot
                 Claim.of("public_principal", "allUsers",
                          "google_project_iam_member.pub.member",
                          polarity="grant", role="roles/owner")))
-    verdicts = check_escalation(ctx)
+    # The check reads the role's permission set through the evidence channel,
+    # so it runs inside the one ledger its invoker (registry._invoke) opens.
+    with evidence.ledger():
+        verdicts = check_escalation(ctx)
     assert len(verdicts) == 1
     assert verdicts[0].status == "contradicted"
     assert "anyone can escalate" in verdicts[0].message
@@ -264,7 +267,8 @@ def test_policy_data_bindings_are_not_merged_across_indices(backend, snapshot):
                 Claim.of("public_principal", "allUsers",
                          f"{address}.bindings[1].members[0]",
                          polarity="grant", role="roles/iam.serviceAccountUser")))
-    by_role = {v.target: v.status for v in check_escalation(ctx)}
+    with evidence.ledger():
+        by_role = {v.target: v.status for v in check_escalation(ctx)}
     assert by_role == {"roles/owner": "grounded",
                        "roles/iam.serviceAccountUser": "contradicted"}
 
@@ -277,8 +281,14 @@ def test_binding_index_ten_does_not_borrow_binding_one_members(backend, snapshot
                 Claim("role", "roles/owner", "bindings[10].role"),
                 Claim.of("public_principal", "allUsers", "bindings[10].members[0]",
                          polarity="grant", role="roles/owner")))
-    statuses = [v.status for v in check_escalation(ctx)]
-    assert statuses == ["grounded", "contradicted"]
+    with evidence.ledger():
+        verdicts = check_escalation(ctx)
+    # bindings[1] has no member claim of its own AND no readable `members` in
+    # the (empty) document, so it abstains rather than borrowing binding 10's
+    # allUsers — which is what the pairing bug would have done — and rather than
+    # grounding over a members list nobody read.
+    assert [v.status for v in verdicts] == ["unverified", "contradicted"]
+    assert "anyone can escalate" not in verdicts[0].message
 
 
 def test_absent_role_leaves_escalation_to_the_existence_pass(backend, snapshot):
@@ -367,3 +377,281 @@ def test_verdicts_are_identical_on_both_backends(snapshot):
         rendered.append([(v.status, v.kind, v.target, v.message) for v in verdicts])
     assert rendered[0] == rendered[1]
     assert rendered[0]  # the deny fixture really does exercise both checks
+
+
+# =============================================================================
+# ESCALATION EVIDENCE — members, exceptions and uncaptured permissions
+#
+# Four positive verdicts used to be returned over things this module never
+# examined. Each section below names the thing that was not read; the closing
+# assertions of each pin the ordinary cases in BOTH directions, so the repairs
+# cannot be mistaken for "abstain on everything".
+# =============================================================================
+
+#: A federated wildcard: a real member that ``claims.iam_policy_claims``
+#: deliberately refuses to model, so it produces an ``unmodelled_principal``
+#: and NO ``principal``/``public_principal`` claim to pair with its role.
+WORKLOAD_WILDCARD = ("principalSet://iam.googleapis.com/projects/1234/locations/"
+                     "global/workloadIdentityPools/github/*")
+
+#: A deny rule that names an escalation permission and then exempts EVERYONE
+#: from the denial: a guardrail that applies to nobody.
+DENY_EXEMPTING_EVERYONE = {"rules": [{"denyRule": {
+    "deniedPrincipals": ["group:data-eng@acme.example"],
+    "exceptionPrincipals": ["allUsers"],
+    "deniedPermissions": ["iam.googleapis.com/serviceAccountKeys.create"]}}]}
+
+#: The same rule exempting a principal the gate cannot enumerate — the denial's
+#: real reach is unknown rather than nullified.
+DENY_EXEMPTING_A_WILDCARD = {"rules": [{"denyRule": {
+    "deniedPrincipals": ["group:data-eng@acme.example"],
+    "exceptionPrincipals": [WORKLOAD_WILDCARD],
+    "deniedPermissions": ["iam.googleapis.com/serviceAccountKeys.create"]}}]}
+
+BLOCKS = "blocks a known escalation path"
+UNDECIDED_GRANTEE = "whether the grantee is public was not decided"
+
+
+def escalation_of(report, target: str) -> list:
+    return [v for v in report.verdicts
+            if v.kind == "iam_escalation" and v.target == target]
+
+
+def role_ctx(snapshot, solver, *claims, document=None, kind="iam_policy"):
+    return CheckContext(snapshot=snapshot, solver=solver,
+                        document={} if document is None else document,
+                        document_kind=kind, source="<test>", claims=tuple(claims))
+
+
+# -- (1) a deny rule's exception principals are never read --------------------
+
+
+def test_deny_rule_exempting_everyone_is_not_a_working_guardrail(backend, snapshot):
+    # The rule denies iam.serviceAccountKeys.create and then excepts allUsers:
+    # the denial applies to NOBODY, so reporting it as a blocked escalation path
+    # is a positive standing on an exception list that was never examined.
+    report = ground_policy(DENY_EXEMPTING_EVERYONE, snapshot)
+    assert [v for v in report.verdicts if BLOCKS in v.message] == []
+    named = escalation_of(report, "iam.serviceAccountKeys.create")
+    assert len(named) == 1
+    assert named[0].status == "contradicted"
+    assert "allUsers" in named[0].message
+
+
+def test_deny_rule_exempting_an_unenumerable_principal_abstains(backend, snapshot):
+    # The exception cannot be classified, so the rule's reach is unknown: the
+    # abstention must NAME the member rather than assert a working guardrail.
+    report = ground_policy(DENY_EXEMPTING_A_WILDCARD, snapshot)
+    assert [v for v in report.verdicts if BLOCKS in v.message] == []
+    named = escalation_of(report, "iam.serviceAccountKeys.create")
+    assert len(named) == 1
+    assert named[0].status == "unverified"
+    assert WORKLOAD_WILDCARD in named[0].message
+
+
+def test_a_denied_permission_without_a_rule_index_cannot_correlate(backend, snapshot):
+    # The rule index is the documented discriminator for exactly this
+    # correlation; with none, the rule's exceptions are unexaminable and no
+    # positive asserting a working guardrail may be emitted for it.
+    from gcp_grounding.iam_checks import check_denied_permission
+
+    loc = "rules[0].denyRule.deniedPermissions[0]"
+    claim = Claim("denied_permission",
+                  "iam.googleapis.com/serviceAccountKeys.create", loc)
+    ctx = role_ctx(snapshot, backend, claim,
+                   Claim("permission", "iam.serviceAccountKeys.create", loc),
+                   kind="iam_deny_policy")
+    verdict = check_denied_permission(claim, ctx)
+    assert verdict.status == "unverified"
+    assert BLOCKS not in verdict.message
+    assert "rule index" in verdict.message
+
+
+def test_an_exception_the_gate_can_enumerate_leaves_the_positive_alone(backend,
+                                                                      snapshot):
+    # BOTH DIRECTIONS: the good fixture's exception is a named service account,
+    # which IS examined and IS non-public, so the guardrail verdict stands.
+    report = ground_policy(DENY_GOOD, snapshot)
+    named = escalation_of(report, "iam.serviceAccountKeys.create")
+    assert len(named) == 1
+    assert named[0].status == "grounded"
+    assert BLOCKS in named[0].message
+
+
+# -- (2) an excepted public principal is reported as a guardrail --------------
+
+
+def test_excepted_public_principal_is_a_bypass_not_a_guardrail(backend, snapshot):
+    report = ground_policy(DENY_EXEMPTING_EVERYONE, snapshot)
+    public = kinds(report, "iam_public")
+    assert len(public) == 1
+    assert public[0].target == "allUsers"
+    assert public[0].status == "contradicted"
+    assert "guardrail, not an exposure" not in public[0].message
+    assert "exempts" in public[0].message
+
+
+def test_a_deny_polarity_claim_without_the_discriminator_abstains():
+    # Until the payload distinguishes a DENIED principal from an EXCEPTED one,
+    # no positive whose text asserts a denial may be emitted.
+    claim = Claim.of("public_principal", "allUsers",
+                     "rules[0].denyRule.deniedPrincipals[0]", polarity="deny")
+    verdict = check_public_principal(claim, None)
+    assert verdict.status == "unverified"
+    assert "guardrail, not an exposure" not in verdict.message
+    assert "excepted" in verdict.message
+
+
+# -- (3) a binding with no usable members grounds -----------------------------
+
+
+def test_a_member_that_could_not_be_modelled_abstains_naming_it(backend, snapshot):
+    report = ground_policy(binding("roles/owner", WORKLOAD_WILDCARD), snapshot)
+    escalation = kinds(report, "iam_escalation")
+    assert len(escalation) == 1
+    assert escalation[0].status == "unverified"
+    assert escalation[0].target == "roles/owner"
+    assert WORKLOAD_WILDCARD in escalation[0].message
+    assert UNDECIDED_GRANTEE in escalation[0].message
+
+
+def test_an_absent_members_key_is_unreadable_not_empty(backend, snapshot):
+    # House rule 3 and the evidence contract: an absent key is UNREADABLE, so
+    # the read raises and the verdict names the binding it could not read.
+    report = ground_policy({"bindings": [{"role": "roles/owner"}]}, snapshot)
+    escalation = kinds(report, "iam_escalation")
+    assert len(escalation) == 1
+    assert escalation[0].status == "unverified"
+    assert escalation[0].target == "roles/owner"
+    assert "'members'" in escalation[0].message
+    assert UNDECIDED_GRANTEE in escalation[0].message
+
+
+def test_a_present_empty_members_list_says_it_was_observed_empty(backend, snapshot):
+    # The ONLY reading under which "nothing to grant to" is honest — and it must
+    # say the list was observed empty rather than imply members were reviewed.
+    report = ground_policy({"bindings": [{"role": "roles/owner", "members": []}]},
+                           snapshot)
+    escalation = kinds(report, "iam_escalation")
+    assert len(escalation) == 1
+    assert escalation[0].status == "grounded"
+    assert escalation[0].target == "roles/owner"
+    assert "observed empty" in escalation[0].message
+    assert report.ok is True
+
+
+# -- (4) an empty permission list is treated as captured-and-benign -----------
+
+
+#: A CUSTOM role — deliberately not one of ESCALATION_ROLES, so the verdict
+#: turns on the captured permissions and nothing else.
+KEY_MINTER = "projects/acme-prod/roles/keyMinter"
+
+
+def _snapshot_with(permissions):
+    # Built through from_dict, the path a real capture takes: `fetch.py` writes
+    # `included_permissions` for EVERY role and defaults it to [].
+    return GcpSnapshot.from_dict({
+        "captured_at": "2026-07-18T09:30:00Z",
+        "roles": {KEY_MINTER: {"title": "Key minter", "stage": "GA",
+                               "included_permissions": permissions}},
+        "principals": ["user:alice@acme.example"]})
+
+
+def test_a_role_whose_permissions_were_never_captured_abstains(backend):
+    # The fetch path always writes the key and defaults it to [], so a KEY
+    # PRESENCE test lets an uncaptured role intersect the escalation table
+    # emptily and produce NO verdict of any status — no reason, no record.
+    report = ground_policy(binding(KEY_MINTER, "user:alice@acme.example"),
+                           _snapshot_with([]))
+    escalation = kinds(report, "iam_escalation")
+    assert len(escalation) == 1
+    assert escalation[0].status == "unverified"
+    assert escalation[0].target == KEY_MINTER
+    assert "included_permissions" in escalation[0].message
+
+
+def test_the_same_role_with_permissions_captured_still_warns(backend):
+    # BOTH DIRECTIONS: the abstention above is about the CAPTURE, not the role.
+    report = ground_policy(
+        binding(KEY_MINTER, "user:alice@acme.example"),
+        _snapshot_with(["iam.serviceAccountKeys.create", "iam.serviceAccounts.get"]))
+    escalation = kinds(report, "iam_escalation")
+    assert len(escalation) == 1
+    assert escalation[0].status == "grounded"
+    assert "iam.serviceAccountKeys.create (impersonation)" in escalation[0].message
+
+
+# -- the complement to the Gate 0 fix -----------------------------------------
+
+
+def test_an_iam_policy_with_no_role_claim_abstains_on_the_escalation_channel(
+        backend, snapshot):
+    # Bindings were present and carried content, but not one role name was
+    # extracted from them: silence here reads as "no escalation was found".
+    report = ground_policy({"bindings": [{"members": ["user:alice@acme.example"]}]},
+                           snapshot)
+    escalation = kinds(report, "iam_escalation")
+    assert len(escalation) == 1
+    assert escalation[0].status == "unverified"
+    assert "no role" in escalation[0].message
+    assert report.ok is True
+
+
+def test_an_empty_allow_policy_stays_silent_on_the_escalation_channel(backend,
+                                                                     snapshot):
+    # BOTH DIRECTIONS: `bindings: []` was READ and observed empty, which is a
+    # fact about the document rather than a hole in it.
+    report = ground_policy({"bindings": []}, snapshot)
+    assert kinds(report, "iam_escalation") == []
+
+
+def test_a_deny_policy_gets_no_missing_role_abstention(backend, snapshot):
+    # Channel discipline in the other direction: a deny policy carries no
+    # bindings by construction, so "no role claim" says nothing about it.
+    report = ground_policy(DENY_GOOD, snapshot)
+    assert [v for v in kinds(report, "iam_escalation") if "no role" in v.message] == []
+
+
+# -- the shape gate, exercised ------------------------------------------------
+
+
+@pytest.mark.parametrize("location", [
+    "spec.somewhere.weird.role",
+    "notgoogle_project_iam_member.pub.role",
+    "policy_data.bindings[0].role",
+    "bindings[x].role",
+])
+def test_a_location_that_is_not_a_binding_address_abstains_for_that_reason(
+        backend, snapshot, location):
+    # Relaxing the binding-address patterns to match anything survived the whole
+    # suite, because the only ungroupable location exercised did not even end in
+    # `.role` and so never reached them. These four do.
+    ctx = role_ctx(snapshot, backend, Claim("role", "roles/owner", location))
+    with evidence.ledger():
+        verdicts = check_escalation(ctx)
+    assert len(verdicts) == 1
+    assert verdicts[0].status == "unverified"
+    assert verdicts[0].kind == "iam_escalation"
+    assert "could not associate" in verdicts[0].message
+
+
+@pytest.mark.parametrize("location", [
+    "bindings[0].role",
+    "google_project_iam_member.pub.role",
+    'module.iam.google_project_iam_binding.viewers["a"].role',
+    "google_project_iam_policy.main.policy_data.bindings[0].role",
+])
+def test_a_real_binding_address_still_pairs_with_its_members(backend, snapshot,
+                                                             location):
+    # BOTH DIRECTIONS for the gate above: each of these IS a binding address and
+    # must still be paired with the member claim anchored under it.
+    member = location[: -len(".role")] + ".members[0]"
+    ctx = role_ctx(snapshot, backend,
+                   Claim("role", "roles/owner", location),
+                   Claim.of("public_principal", "allUsers", member,
+                            polarity="grant", role="roles/owner"))
+    with evidence.ledger():
+        verdicts = check_escalation(ctx)
+    assert [v.status for v in verdicts] == ["contradicted"]
+    assert "anyone can escalate" in verdicts[0].message
