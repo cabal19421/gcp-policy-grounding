@@ -75,6 +75,18 @@ Both Org Policy formats are parsed: legacy v1 (``constraint`` +
 ``/policies/<id>`` + ``spec.rules[]`` with ``enforce`` vs
 ``values``/``allowAll``/``denyAll``). Tag-based ``spec.rules[].condition``
 expressions are request-time constructs and yield no ``cel`` claim.
+
+An org-policy rule yields TWO claims, and the distinction matters: the
+long-standing ``constraint_value`` records only the value *type*
+(``is_list``), which is why ``enforce: true`` and ``enforce: false`` used to
+produce byte-identical reports; the ``constraint_enforcement`` claim added
+beside it carries the value ITSELF — the enforce flag, the allow/deny-all
+flags, the concrete allowed/denied value lists, and the document-level
+``reset`` / ``inheritFromParent`` switches — in the frozen payload, so
+:mod:`~gcp_grounding.org_checks` can compare a proposal against the estate's
+recorded policy. The two are emitted in lockstep: where the conservative
+value-type extractor skips a rule (ambiguous, malformed, or neither shape),
+no enforcement claim is emitted either.
 """
 
 from __future__ import annotations
@@ -86,8 +98,8 @@ from .core.log import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ["KINDS", "PUBLIC_PRINCIPALS", "Claim", "freeze", "unfreeze",
-           "iam_policy_claims", "org_policy_claims"]
+__all__ = ["KINDS", "NO_RULE_INDEX", "PUBLIC_PRINCIPALS", "Claim", "freeze",
+           "unfreeze", "iam_policy_claims", "org_policy_claims"]
 
 KINDS = (
     # -- the original seven, kept first and in order --------------------------
@@ -134,6 +146,20 @@ _RUNTIME_ONLY_MARKERS = (
 #: present for the rule's type usage to be unambiguous.
 _V2_BOOLEAN_KEYS = ("enforce",)
 _V2_LIST_KEYS = ("values", "allowAll", "denyAll")
+
+#: The value-bearing half of a ``constraint_enforcement`` payload, with the
+#: "this rule does not state it" default for each field. ``None`` is that
+#: default for the three booleans precisely so an *explicit* ``false`` stays
+#: distinguishable from silence — the whole point of the claim.
+_ENFORCEMENT_DEFAULTS: dict[str, Any] = {
+    "enforce": None, "allow_all": None, "deny_all": None,
+    "allowed_values": (), "denied_values": (),
+}
+
+#: ``rule_index`` of the one claim a v2 spec with NO rules of its own still
+#: emits, so a bare ``spec.reset``/``spec.inheritFromParent`` — disablement
+#: spellings that carry no rule to hang off — remain checkable.
+NO_RULE_INDEX = -1
 
 
 def freeze(value: Any) -> Any:
@@ -286,23 +312,60 @@ def org_policy_claims(policy: Mapping[str, Any]) -> list[Claim]:
     if resolved is None:
         logger.debug("org policy names no unambiguous constraint — no claims")
         return claims
-    constraint, location = resolved
-    claims.append(Claim("constraint", constraint, location))
+    constraint, name_location = resolved
+    claims.append(Claim("constraint", constraint, name_location))
+    node = _org_policy_node(policy, name_location)
+    spec = policy.get("spec") if isinstance(policy.get("spec"), Mapping) else None
 
-    # Legacy v1: the typed-policy field itself declares the value type.
-    if isinstance(policy.get("booleanPolicy"), Mapping):
+    # Legacy v1: the typed-policy field itself declares the value type. Both
+    # halves map onto the same enforcement payload as their v2 spellings.
+    boolean_policy = policy.get("booleanPolicy")
+    if isinstance(boolean_policy, Mapping):
         claims.append(Claim("constraint_value", constraint, "booleanPolicy", is_list=False))
-    if isinstance(policy.get("listPolicy"), Mapping):
+        claims.append(_enforcement_claim(
+            constraint, "booleanPolicy", node, 0,
+            dict(_ENFORCEMENT_DEFAULTS, enforce=_bool_or_none(boolean_policy, "enforced")),
+            reset=_v1_reset(policy), inherit=None))
+    list_policy = policy.get("listPolicy")
+    if isinstance(list_policy, Mapping):
         claims.append(Claim("constraint_value", constraint, "listPolicy", is_list=True))
+        all_values = list_policy.get("allValues")
+        claims.append(_enforcement_claim(
+            constraint, "listPolicy", node, 0,
+            dict(_ENFORCEMENT_DEFAULTS,
+                 allow_all=True if all_values == "ALLOW" else None,
+                 deny_all=True if all_values == "DENY" else None,
+                 **_values_shape(list_policy)),
+            reset=_v1_reset(policy),
+            inherit=_bool_or_none(list_policy, "inheritFromParent",
+                                  "inherit_from_parent")))
 
-    # v2: each rule carries one value-type-bearing key.
-    spec = policy.get("spec")
-    rules = spec.get("rules") if isinstance(spec, Mapping) else None
+    # v2: each rule carries one value-type-bearing key; the spec-level reset /
+    # inheritFromParent switches ride along on every rule's payload.
+    rules = spec.get("rules") if spec is not None else None
+    reset = _bool_or_none(spec, "reset") if spec is not None else None
+    inherit = (_bool_or_none(spec, "inheritFromParent", "inherit_from_parent")
+               if spec is not None else None)
     if isinstance(rules, list):
         for i, rule in enumerate(rules):
-            claim = _v2_rule_value_claim(constraint, rule, f"spec.rules[{i}]")
+            location = f"spec.rules[{i}]"
+            claim = _v2_rule_value_claim(constraint, rule, location)
             if claim is not None:
                 claims.append(claim)
+                claims.append(_enforcement_claim(constraint, location, node, i,
+                                                 _v2_rule_shape(rule),
+                                                 reset=reset, inherit=inherit))
+    elif spec is not None and rules is not None:
+        logger.debug("spec.rules is %s, not an array — no enforcement claims",
+                     type(rules).__name__)
+    if spec is not None and not rules and (reset is True or inherit is True):
+        # A spec that resets to the inherited default, or defers wholesale to
+        # the parent, carries no rule to hang a claim off — yet those are two
+        # of the three ways to stop enforcing a constraint. Record one claim
+        # against the spec itself so the check can still see them.
+        claims.append(_enforcement_claim(constraint, "spec", node, NO_RULE_INDEX,
+                                         dict(_ENFORCEMENT_DEFAULTS),
+                                         reset=reset, inherit=inherit))
     return claims
 
 
@@ -345,3 +408,90 @@ def _v2_rule_value_claim(constraint: str, rule: Any, location: str) -> Claim | N
         return None
     return Claim("constraint_value", constraint, f"{location}.{key}",
                  is_list=key in _V2_LIST_KEYS)
+
+
+# -- the enforcement payload (the values themselves) --------------------------
+
+
+def _enforcement_claim(constraint: str, location: str, node: str, rule_index: int,
+                       shape: Mapping[str, Any], *, reset: bool | None,
+                       inherit: bool | None) -> Claim:
+    """One ``constraint_enforcement`` claim: *shape*'s value fields plus the
+    node, the rule index and the document-level reset/inherit switches, all
+    frozen into the payload so the values travel to the checker."""
+    return Claim.of("constraint_enforcement", constraint, location,
+                    node=node, rule_index=rule_index, reset=reset,
+                    inherit_from_parent=inherit, **shape)
+
+
+def _v2_rule_shape(rule: Mapping[str, Any]) -> dict[str, Any]:
+    """A v2 rule's value fields. Only reached for a rule the value-type
+    extractor already accepted, so exactly one of the four keys is present
+    and well-formed; the rest keep their "not stated" default."""
+    shape = dict(_ENFORCEMENT_DEFAULTS)
+    if isinstance(rule.get("enforce"), bool):
+        shape["enforce"] = rule["enforce"]
+    if isinstance(rule.get("allowAll"), bool):
+        shape["allow_all"] = rule["allowAll"]
+    if isinstance(rule.get("denyAll"), bool):
+        shape["deny_all"] = rule["denyAll"]
+    values = rule.get("values")
+    if isinstance(values, Mapping):
+        shape.update(_values_shape(values))
+    return shape
+
+
+def _values_shape(values: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
+    """The allowed/denied lists of a v2 ``values`` block or a v1 ``listPolicy``,
+    read in either the REST (``allowedValues``) or the terraform
+    (``allowed_values``) spelling."""
+    return {"allowed_values": _string_tuple(values, "allowedValues", "allowed_values"),
+            "denied_values": _string_tuple(values, "deniedValues", "denied_values")}
+
+
+def _string_tuple(mapping: Mapping[str, Any], *keys: str) -> tuple[str, ...]:
+    """The first of *keys* present in *mapping*, as a tuple of its non-empty
+    string entries. A non-array, or an entry that is not a string, is dropped
+    with a debug log — an unrepresentable value is never guessed at."""
+    for key in keys:
+        if key not in mapping:
+            continue
+        raw = mapping[key]
+        if not isinstance(raw, list):
+            logger.debug("%s is %s, not an array — no values read",
+                         key, type(raw).__name__)
+            return ()
+        out = tuple(v for v in raw if isinstance(v, str) and v)
+        if len(out) != len(raw):
+            logger.debug("%s: %d of %d entries are not non-empty strings — dropped",
+                         key, len(raw) - len(out), len(raw))
+        return out
+    return ()
+
+
+def _bool_or_none(mapping: Mapping[str, Any], *keys: str) -> bool | None:
+    """The first of *keys* whose value is a real boolean — else None, which
+    reads as "the document does not state it", never as False."""
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, bool):
+            return value
+    return None
+
+
+def _v1_reset(policy: Mapping[str, Any]) -> bool | None:
+    """The v1 spelling of ``spec.reset``: a ``restoreDefault`` block restores
+    the constraint's default, i.e. stops enforcing whatever was set here."""
+    return True if isinstance(policy.get("restoreDefault"), Mapping) else None
+
+
+def _org_policy_node(policy: Mapping[str, Any], location: str) -> str:
+    """The resource node a v2 policy is set on — the ``name`` prefix before
+    ``/policies/``. A v1 document names no node (its parent is the API call's,
+    not the document's), so it yields ``""``."""
+    if location != "name":
+        return ""
+    name = policy.get("name")
+    if not isinstance(name, str):  # unreachable: _org_policy_constraint checked
+        return ""
+    return name.split("/policies/", 1)[0]

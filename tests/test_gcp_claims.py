@@ -58,10 +58,18 @@ def test_iam_policy_bad_exact_claims():
 
 
 def test_org_policy_good_exact_claims():
+    # Every rule yields both the value-TYPE claim and the payload-bearing
+    # enforcement claim: the type alone made `enforce: true` and
+    # `enforce: false` indistinguishable.
     assert org_policy_claims(load("org_policy_good.json")) == [
         Claim("constraint", "constraints/iam.disableServiceAccountKeyCreation", "name"),
         Claim("constraint_value", "constraints/iam.disableServiceAccountKeyCreation",
               "spec.rules[0].enforce", is_list=False),
+        Claim.of("constraint_enforcement",
+                 "constraints/iam.disableServiceAccountKeyCreation", "spec.rules[0]",
+                 node="organizations/123456789012", rule_index=0, enforce=True,
+                 allow_all=None, deny_all=None, allowed_values=(), denied_values=(),
+                 reset=None, inherit_from_parent=None),
     ]
 
 
@@ -73,6 +81,11 @@ def test_org_policy_bad_exact_claims():
         Claim("constraint", "constraints/compute.disableSerialPortAccess", "name"),
         Claim("constraint_value", "constraints/compute.disableSerialPortAccess",
               "spec.rules[0].values", is_list=True),
+        Claim.of("constraint_enforcement",
+                 "constraints/compute.disableSerialPortAccess", "spec.rules[0]",
+                 node="projects/acme-prod", rule_index=0, enforce=None,
+                 allow_all=None, deny_all=None, allowed_values=("true",),
+                 denied_values=(), reset=None, inherit_from_parent=None),
     ]
 
 
@@ -88,6 +101,13 @@ def test_legacy_list_policy_on_boolean_constraint_yields_is_list_true():
         Claim("constraint", "constraints/compute.disableSerialPortAccess", "constraint"),
         Claim("constraint_value", "constraints/compute.disableSerialPortAccess",
               "listPolicy", is_list=True),
+        # A v1 document maps onto the very same enforcement payload; it names
+        # no node of its own (its parent is the API call's).
+        Claim.of("constraint_enforcement",
+                 "constraints/compute.disableSerialPortAccess", "listPolicy",
+                 node="", rule_index=0, enforce=None, allow_all=None, deny_all=None,
+                 allowed_values=("true",), denied_values=(), reset=None,
+                 inherit_from_parent=None),
     ]
     assert claims[1].is_list is True
 
@@ -100,6 +120,11 @@ def test_legacy_boolean_policy_yields_is_list_false():
         Claim("constraint", "constraints/iam.disableServiceAccountKeyCreation", "constraint"),
         Claim("constraint_value", "constraints/iam.disableServiceAccountKeyCreation",
               "booleanPolicy", is_list=False),
+        Claim.of("constraint_enforcement",
+                 "constraints/iam.disableServiceAccountKeyCreation", "booleanPolicy",
+                 node="", rule_index=0, enforce=True, allow_all=None, deny_all=None,
+                 allowed_values=(), denied_values=(), reset=None,
+                 inherit_from_parent=None),
     ]
 
 
@@ -111,6 +136,10 @@ def test_v2_deny_all_rule_is_list_typed():
         Claim("constraint", "constraints/compute.vmExternalIpAccess", "name"),
         Claim("constraint_value", "constraints/compute.vmExternalIpAccess",
               "spec.rules[0].denyAll", is_list=True),
+        Claim.of("constraint_enforcement", "constraints/compute.vmExternalIpAccess",
+                 "spec.rules[0]", node="projects/acme-prod", rule_index=0,
+                 enforce=None, allow_all=None, deny_all=True, allowed_values=(),
+                 denied_values=(), reset=None, inherit_from_parent=None),
     ]
 
 

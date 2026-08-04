@@ -122,10 +122,16 @@ def test_bad_iam_policy_fails_on_its_hallucinations(snap):
 def test_good_org_policy_passes_the_gate(snap):
     report = ground_policy(POLICIES / "org_policy_good.json", snap)
     assert report.ok
-    # Constraint existence + boolean usage vs the declared value type — both
-    # decidable without z3, so the counts are backend-independent.
+    # Constraint existence + boolean usage vs the declared value type, both
+    # decidable without z3; the enforcement claim is honestly undecided here
+    # because THIS snapshot captures the five vocabularies only — it has no
+    # `org_policies` table to compare the enforce flag against. So the counts
+    # stay backend-independent.
     assert report.counts() == {"grounded": 2, "ungrounded": 0,
-                               "contradicted": 0, "unverified": 0}
+                               "contradicted": 0, "unverified": 1}
+    [undecided] = report.by_status("unverified")
+    assert undecided.kind == "org_enforcement"
+    assert "not captured" in undecided.message
     assert all(v.target == "constraints/iam.disableServiceAccountKeyCreation"
                for v in report.verdicts)
 
@@ -134,9 +140,11 @@ def test_bad_org_policy_fails_on_the_value_type_mismatch(snap):
     report = ground_policy(POLICIES / "org_policy_bad.json", snap)
     assert not report.ok
     # The constraint is real (grounds); its list-typed usage contradicts the
-    # snapshot's boolean declaration.
+    # snapshot's boolean declaration. The enforce flag abstains: this snapshot
+    # never captured the org policies in force.
     assert [(v.status, v.kind) for v in report.verdicts] == [
-        ("grounded", "constraint"), ("contradicted", "constraint")]
+        ("grounded", "constraint"), ("contradicted", "constraint"),
+        ("unverified", "org_enforcement")]
     [mismatch] = report.contradicted
     assert "boolean" in mismatch.message
 

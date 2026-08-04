@@ -117,6 +117,9 @@ def _org_bad_expected():
     return [
         ("grounded", "constraint", "constraints/compute.disableSerialPortAccess"),
         ("contradicted", "constraint", "constraints/compute.disableSerialPortAccess"),
+        # gcp_grounding.org_checks IS part of this checkout, so its claim check
+        # runs — and abstains, because this snapshot captures no org policies.
+        ("unverified", "org_enforcement", "constraints/compute.disableSerialPortAccess"),
     ]
 
 
@@ -168,7 +171,14 @@ def test_no_providers_is_byte_identical(snap, name, expected):
     # byte-identical to before the seam existed. (_BUILTIN_TF_TYPES is
     # tf_claims._EXTRACTORS, guarded by HAVE_TF so a checkout without the
     # terraform extractor still runs this assertion rather than ImportError-ing.)
-    assert registry.document_checks() == ()
+    # Every registered document check is owned by a landed gcp_grounding domain
+    # module — the seam never picks up a stray provider — and
+    # gcp_grounding.org_checks in particular owns exactly one, check_org_estate,
+    # and contributes no terraform extractor at all.
+    assert all(f.__module__.startswith("gcp_grounding.")
+               for f in registry.document_checks())
+    assert {f.__name__ for f in registry.document_checks()
+            if f.__module__ == "gcp_grounding.org_checks"} == {"check_org_estate"}
     assert set(registry.tf_extractors()).isdisjoint(_BUILTIN_TF_TYPES)
     assert registry.claim_checks("role") == ()
     fixture_types = {"google_project_iam_binding", "google_project_iam_member",
