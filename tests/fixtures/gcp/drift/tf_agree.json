@@ -1,0 +1,5 @@
+{
+  "captured_at": "2026-07-17T12:00:00Z",
+  "firewall_rules": {"projects/acme-prod/global/firewalls/allow-internal": {"action": "allow", "destination_ranges": [], "direction": "INGRESS", "disabled": false, "layer4": [{"ports": ["0-65535"], "protocol": "tcp"}], "network": "projects/acme-prod/global/networks/vpc-main", "priority": 1000, "source_ranges": ["10.0.0.0/8"], "source_service_accounts": [], "source_tags": [], "target_service_accounts": [], "target_tags": []}},
+  "network_tags": ["db", "web"]
+}
