@@ -139,9 +139,11 @@ def test_runtime_only_attribute_condition_yields_no_cel_claim():
     assert claims == [Claim("role", "roles/viewer", "bindings[0].role")]
 
 
-def test_non_principal_members_are_skipped():
-    # allUsers/allAuthenticatedUsers, deleted members and federated identity
-    # pools are not estate principals — no claim, so no false 'ungrounded'.
+def test_non_estate_members_leave_a_trace():
+    # Non-estate members are no longer silently dropped: allUsers /
+    # allAuthenticatedUsers become 'public_principal' grants carrying the role,
+    # and everything else (deleted:…, principalSet://) becomes
+    # 'unmodelled_principal' — a skipped member always leaves a trace.
     claims = iam_policy_claims({"bindings": [{
         "role": "roles/viewer",
         "members": [
@@ -154,6 +156,16 @@ def test_non_principal_members_are_skipped():
     }]})
     assert claims == [
         Claim("role", "roles/viewer", "bindings[0].role"),
+        Claim.of("public_principal", "allUsers", "bindings[0].members[0]",
+                 polarity="grant", role="roles/viewer"),
+        Claim.of("public_principal", "allAuthenticatedUsers", "bindings[0].members[1]",
+                 polarity="grant", role="roles/viewer"),
+        Claim("unmodelled_principal",
+              "deleted:serviceAccount:gone@acme-prod.iam.gserviceaccount.com?uid=123",
+              "bindings[0].members[2]"),
+        Claim("unmodelled_principal",
+              "principalSet://iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/*",
+              "bindings[0].members[3]"),
         Claim("principal", "user:alice@acme.example", "bindings[0].members[4]"),
     ]
 
