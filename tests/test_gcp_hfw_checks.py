@@ -24,6 +24,7 @@ else — which is itself asserted, together with ``report.ok`` staying True.
 """
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -430,6 +431,450 @@ def test_as_vpc_shape_drops_an_empty_layer4_rather_than_making_the_rule_inert():
                             "match": {"src_ip_ranges": ["0.0.0.0/0"],
                                       "dest_ip_ranges": [], "layer4": []}})
     assert "layer4" not in shaped
+
+
+def test_as_vpc_shape_treats_an_absent_layer4_key_the_same_as_an_empty_one():
+    # ABSENT and positively EMPTY both legitimately mean "no layer-4
+    # restriction" — the distinction the fix draws is against a PRESENT key
+    # nobody could read, not against a rule that declares no layer-4 criteria.
+    shaped = _as_vpc_shape({"priority": 1, "action": "goto_next",
+                            "direction": "INGRESS", "disabled": False,
+                            "match": {"src_ip_ranges": ["0.0.0.0/0"]}})
+    assert "layer4" not in shaped
+    assert shaped["destination_ranges"] == []
+
+
+def test_as_vpc_shape_raises_for_a_present_but_unreadable_layer4_entry():
+    # The filter that used to drop this entry is the whole defect:
+    # packet.layer4_match itself RAISES on a string, so filtering it away
+    # actively converted an honest abstention into a confident verdict.
+    with pytest.raises(packet.UnsupportedPacket, match="not a layer-4 config"):
+        _as_vpc_shape({"priority": 1, "action": "deny", "direction": "INGRESS",
+                       "disabled": False,
+                       "match": {"src_ip_ranges": ["0.0.0.0/0"],
+                                 "layer4": ["tcp:3389"]}},
+                      what="the org deny")
+
+
+def test_as_vpc_shape_raises_for_a_non_bool_disabled():
+    # bool("false") is True, which is how the string deleted a live DENY from
+    # both the preemption set and the fold. Mirrors _rank's non-int priority.
+    with pytest.raises(packet.UnsupportedPacket, match="'disabled' is 'false'"):
+        _as_vpc_shape({"priority": 1, "action": "deny", "direction": "INGRESS",
+                       "disabled": "false",
+                       "match": {"src_ip_ranges": ["0.0.0.0/0"]}})
+
+
+# -- unreadable records abstain, they never default ---------------------------
+#
+# Three defaults manufactured confidence out of a record nobody could read.
+# Each is measured against the committed estate fixture; where a polarity
+# exists both legs are pinned, and every case also asserts that the INTACT
+# fixture still decides — an abstention that fired on everything would be
+# worth nothing.
+
+#: A second captured policy, at the folder level, used by the layer-4 legs.
+FOLDER_POLICY = "folders/2/locations/global/firewallPolicies/fp-folder"
+
+#: The proposal the design's preamble names: a folder allow of the RDP port
+#: from a private range, which the intact fixture correctly calls shadowed.
+RDP_FROM_PRIVATE = [{"src_ip_ranges": ["10.0.0.0/8"], "dest_ip_ranges": [],
+                     "layer4_config": [{"ip_protocol": "tcp", "ports": ["3389"]}]}]
+
+#: A rule no ancestor policy touches — the healthy control of the FALSE-BLOCK
+#: leg, pinned as yielding zero shadow verdicts by the polarity test above.
+HIGH_PORT_FROM_PRIVATE = [{"src_ip_ranges": ["10.0.0.0/8"], "dest_ip_ranges": [],
+                           "layer4_config": [{"ip_protocol": "tcp",
+                                              "ports": ["8080"]}]}]
+
+
+def estate_data(mutate=None) -> dict:
+    """The committed estate fixture as raw JSON, its hierarchical firewall
+    policies optionally drifted by *mutate*."""
+    data = json.loads((FIXTURES / "estate_snapshot.json").read_text(encoding="utf-8"))
+    if mutate is not None:
+        mutate(data["hierarchical_firewall_policies"])
+    return data
+
+
+def estate(mutate=None) -> GcpSnapshot:
+    return GcpSnapshot.from_dict(estate_data(mutate))
+
+
+def folder_allow(layer4):
+    """A folder-level allow of everything from anywhere at layer 3, restricted
+    at layer 4 by *layer4* — the field whose readability is under test."""
+    def mutate(policies):
+        policies[FOLDER_POLICY] = {
+            "attachments": ["folders/2"],
+            "rules": [{"action": "allow", "direction": "INGRESS",
+                       "disabled": False, "priority": 300,
+                       "match": {"src_ip_ranges": ["0.0.0.0/0"],
+                                 "dest_ip_ranges": [], "layer4": layer4},
+                       "target_resources": [], "target_secure_tags": [],
+                       "target_service_accounts": []}]}
+    return mutate
+
+
+def org_deny_layer4(layer4):
+    def mutate(policies):
+        policies[BASELINE]["rules"][0]["match"]["layer4"] = layer4
+    return mutate
+
+
+# -- (1) an unreadable layer-4 match, both polarities -------------------------
+
+
+@needs_z3
+def test_false_clean_an_unreadable_folder_layer4_no_longer_grounds_no_effect(snap):
+    """Item (1), the FALSE-CLEAN leg. MEASURED: a folder allow whose layer-4
+    list holds strings was filtered down to no entries and then omitted, which
+    :func:`packet.rule_match` reads as no layer-4 restriction — so the folder
+    rule appeared to allow every port from everywhere and an org-level proposed
+    allow of a high port from everywhere reported ``grounded`` no-effect."""
+    proposal = tf_plan(rule_resource(priority=50, match=[{
+        "src_ip_ranges": ["0.0.0.0/0"], "dest_ip_ranges": [],
+        "layer4_config": [{"ip_protocol": "tcp", "ports": ["8080"]}]}]),
+        association("organizations/1"))
+
+    drifted = run(proposal, estate(folder_allow(["tcp:3389"])))
+    assert [v.status for v in drifted] == ["unverified"]
+    assert [v.kind for v in drifted] == ["hfw_order"]
+    assert FOLDER_POLICY in drifted[0].message      # the offending policy
+    assert "match.layer4[0]" in drifted[0].message  # and the offending field
+    assert of_kind(drifted, "hfw_effect") == []
+
+    # The identical field made readable: the same proposal is a widening, which
+    # is what the drifted run was hiding.
+    readable = run(proposal,
+                   estate(folder_allow([{"protocol": "tcp", "ports": ["3389"]}])))
+    assert [v.status for v in of_kind(readable, "hfw_widen")] == ["contradicted"]
+    assert of_kind(readable, "hfw_order") == []
+
+
+@needs_z3
+def test_false_block_an_unreadable_org_deny_layer4_no_longer_shadows(snap):
+    """Item (1), the FALSE-BLOCK leg — the same drift on an org DENY. Erasing
+    its layer-4 restriction made it match every port, so a healthy live rule
+    (tcp/8080 from a private range, which no ancestor policy touches) was
+    reported ``contradicted hfw_shadow``."""
+    healthy = tf_plan(rule_resource(match=HIGH_PORT_FROM_PRIVATE),
+                      association("folders/2"))
+
+    drifted = run(healthy, estate(org_deny_layer4(["tcp:3389"])))
+    assert [v.status for v in drifted] == ["unverified"]
+    assert [v.kind for v in drifted] == ["hfw_order"]
+    assert BASELINE in drifted[0].message
+    assert "match.layer4[0]" in drifted[0].message
+    assert of_kind(drifted, "hfw_shadow") == []
+
+    # The intact fixture still decides, and decides the healthy way.
+    intact = run(healthy, snap)
+    assert of_kind(intact, "hfw_shadow") == []
+    assert [v.status for v in of_kind(intact, "hfw_effect")] == ["grounded"]
+
+
+# -- (2) a non-bool `disabled` ------------------------------------------------
+
+
+def _org_deny_disabled(value) -> GcpSnapshot:
+    """The estate with the org deny's ``disabled`` set to *value*, built past
+    the loader (which now rejects the same drift — see the test below), so the
+    check's own handling of it is what is under test here."""
+    intact = estate()
+    record = dict(intact.hierarchical_firewall_policies[BASELINE])
+    rules = [dict(rule) for rule in record["rules"]]
+    rules[0] = dict(rules[0], disabled=value)
+    record["rules"] = tuple(rules)
+    return replace(intact,
+                   hierarchical_firewall_policies={BASELINE: record})
+
+
+@needs_z3
+def test_a_non_bool_disabled_no_longer_deletes_a_live_estate_deny(snap):
+    """Item (2). MEASURED: ``bool("false")`` is ``True``, so the string deleted
+    the org DENY from both the preemption set and the effective-decision fold
+    and turned the shadowed rule into a single ``grounded`` no-effect verdict
+    with ``report.ok`` True."""
+    proposal = tf_plan(rule_resource(match=RDP_FROM_PRIVATE),
+                       association("folders/2"))
+
+    drifted = run(proposal, _org_deny_disabled("false"))
+    assert [v.status for v in drifted] == ["unverified"]
+    assert [v.kind for v in drifted] == ["hfw_order"]
+    assert BASELINE in drifted[0].message
+    assert "'disabled'" in drifted[0].message
+    assert of_kind(drifted, "hfw_effect") == []
+
+    # The intact fixture still calls the same rule shadowed by the org deny.
+    intact = run(proposal, snap)
+    assert [v.status for v in of_kind(intact, "hfw_shadow")] == ["contradicted"]
+    assert [v.status for v in of_kind(intact, "hfw_effect")] == ["grounded"]
+
+
+def test_the_loader_rejects_a_non_bool_disabled_in_a_hierarchical_rule():
+    """The same field validation ``_parse_firewall_rules`` already applies, now
+    applied to the hierarchical table too: a half-parsed record would mark the
+    category captured with wrong content."""
+    def drift(policies):
+        policies[BASELINE]["rules"][0]["disabled"] = "false"
+
+    with pytest.raises(ValueError, match="'disabled' must be a bool"):
+        GcpSnapshot.from_dict(estate_data(drift))
+
+
+def test_the_loader_rejects_a_non_int_priority_in_a_hierarchical_rule():
+    def drift(policies):
+        policies[BASELINE]["rules"][0]["priority"] = "100"
+
+    with pytest.raises(ValueError, match="'priority' must be an int"):
+        GcpSnapshot.from_dict(estate_data(drift))
+
+
+# -- (3) a fold that consumed no rule at all ----------------------------------
+
+
+def _drop_rules_key(policies):
+    del policies[BASELINE]["rules"]
+
+
+def _empty_rules_array(policies):
+    policies[BASELINE]["rules"] = []
+
+
+def _drop_attachments(policies):
+    policies[BASELINE]["attachments"] = []
+
+
+@needs_z3
+@pytest.mark.parametrize("mutate", [_drop_rules_key, _empty_rules_array],
+                         ids=["rules-key-dropped", "rules-array-empty"])
+def test_a_fold_that_consumed_no_rule_abstains_naming_what_contributed_nothing(
+        snap, mutate):
+    """Item (3), first clause. MEASURED: the fold emitted a positive verdict
+    asserting the 3-level order decides every packet identically while having
+    read rules from no level at all, with zero unverified."""
+    proposal = tf_plan(rule_resource(match=RDP_FROM_PRIVATE),
+                       association("folders/2"))
+
+    drifted = run(proposal, estate(mutate))
+    assert [v.status for v in drifted] == ["unverified"]
+    assert [v.kind for v in drifted] == ["hfw_order"]
+    assert BASELINE in drifted[0].message    # the policy that contributed none
+    assert "'rules'" in drifted[0].message   # and the field it was read from
+    assert of_kind(drifted, "hfw_effect") == []
+
+    intact = run(proposal, snap)
+    assert [v.status for v in of_kind(intact, "hfw_effect")] == ["grounded"]
+    assert "3-level order" in of_kind(intact, "hfw_effect")[0].message
+
+
+@needs_z3
+def test_a_captured_policy_that_declares_no_attachments_is_never_ignored(snap):
+    """Item (3), second clause. A policy whose NAME is scoped under a node on
+    the evaluation path but which declares no attachments is an input about
+    this project's order that could not be read; ignoring it is how a whole
+    level silently disappears from the fold."""
+    proposal = tf_plan(rule_resource(match=RDP_FROM_PRIVATE),
+                       association("folders/2"))
+
+    drifted = run(proposal, estate(_drop_attachments))
+    assert [v.status for v in drifted] == ["unverified"]
+    assert [v.kind for v in drifted] == ["hfw_order"]
+    assert BASELINE in drifted[0].message
+    assert "'attachments'" in drifted[0].message
+    assert of_kind(drifted, "hfw_effect") == []
+
+    assert [v.status for v in of_kind(run(proposal, snap), "hfw_effect")] == [
+        "grounded"]
+
+
+@needs_z3
+def test_a_policy_scoped_off_the_evaluation_path_is_still_ignored(snap):
+    """The other side of that clause: an unattached policy under a node the
+    project does not sit below says nothing about this project's order, so it
+    must NOT abstain — otherwise the check would go silent estate-wide."""
+    def elsewhere(policies):
+        policies["folders/99/locations/global/firewallPolicies/fp-other"] = {
+            "attachments": [], "rules": []}
+
+    proposal = tf_plan(rule_resource(match=RDP_FROM_PRIVATE),
+                       association("folders/2"))
+    verdicts = run(proposal, estate(elsewhere))
+    assert [v.status for v in of_kind(verdicts, "hfw_shadow")] == ["contradicted"]
+    assert of_kind(verdicts, "hfw_order") == []
+
+
+# -- the named must-kill pins, MK-H01 … MK-H05 --------------------------------
+#
+# AMENDMENT 3 replaced this task's mutation ratio with five named must-kill
+# entries. Each pins ONE guard of the three numbered items above in BOTH
+# directions, because every one of them is a guard an inverting mutant turns
+# inside out: a test that only drives the drift case leaves the inversion
+# alive, and a test that only drives the healthy case leaves the default alive.
+# The entries name these node ids, so they stay UNPARAMETRIZED and keep their
+# spelling.
+
+
+def _org_deny_omits_disabled(policies):
+    del policies[BASELINE]["rules"][0]["disabled"]
+
+
+def _policy_in_another_folder(policies):
+    policies["folders/99/locations/global/firewallPolicies/fp-other"] = {
+        "attachments": [], "rules": []}
+
+
+def hierarchical_rule(**overrides) -> dict:
+    """A captured org-level DENY of tcp/3389 from anywhere, in the hierarchical
+    spelling ``_as_vpc_shape`` reads, with fields overridden per leg."""
+    rule = {"action": "deny", "direction": "INGRESS", "disabled": False,
+            "priority": 100,
+            "match": {"src_ip_ranges": ["0.0.0.0/0"], "dest_ip_ranges": [],
+                      "layer4": [{"protocol": "tcp", "ports": ["3389"]}]}}
+    rule.update(overrides)
+    return rule
+
+
+def two_level_estate(mutate=None) -> GcpSnapshot:
+    """The committed estate plus a project sitting DIRECTLY under the
+    organization, so its evaluation path is exactly TWO levels — the boundary
+    the zero-rules-folded abstention is asserted at."""
+    data = estate_data(mutate)
+    data["resource_hierarchy"]["projects/acme-lab"] = {
+        "display_name": "Acme Lab", "number": "654321",
+        "parent": "organizations/1", "type": "project"}
+    return GcpSnapshot.from_dict(data)
+
+
+@needs_z3
+def test_a_rule_omitting_disabled_is_enabled_and_still_preempts(snap):
+    """MK-H01 — ``_as_vpc_shape``'s ``rule.get("disabled", False)``.
+
+    A captured rule that OMITS the key is ENABLED. Defaulting it to disabled
+    would silently take every such rule out of both the preemption set and the
+    effective-decision fold — item (2)'s measured defect reached through an
+    ABSENT key rather than a non-bool one, and the more common shape in a real
+    capture. Asserted through the verdicts the rule produces, not through the
+    shape helper's return value alone: the org deny still shadows the folder
+    allow of tcp/3389 from 0.0.0.0/0 (it is still in the preemption set), and
+    the proposal is still ``grounded`` no-effect rather than the widening it
+    becomes once that deny leaves the fold.
+    """
+    proposal = tf_plan(rule_resource(), association("folders/2"))
+
+    omitted = run(proposal, estate(_org_deny_omits_disabled))
+    shadow = of_kind(omitted, "hfw_shadow")
+    assert [v.status for v in shadow] == ["contradicted"]
+    assert "organizations/1" in shadow[0].message
+    assert [v.status for v in of_kind(omitted, "hfw_effect")] == ["grounded"]
+    assert of_kind(omitted, "hfw_widen") == []   # still folded, so nothing widens
+    assert of_kind(omitted, "hfw_order") == []
+
+    # It decides exactly as the committed fixture, whose rule spells the key.
+    intact = run(proposal, snap)
+    assert ([(v.status, v.kind) for v in omitted]
+            == [(v.status, v.kind) for v in intact])
+
+
+@needs_z3
+def test_an_unreadable_layer4_entry_abstains_while_a_readable_one_decides(snap):
+    """MK-H02 — ``_layer4_entries``' ``not isinstance(entry, Mapping)`` guard,
+    in both directions.
+
+    A PRESENT but unreadable layer-4 entry raises the unsupported-packet
+    abstain instead of being filtered away into "no layer-4 restriction", which
+    matches every port; AND a readable layer-4 config is not refused. Driving
+    only the drift leg leaves an inverted guard alive — the readable direction,
+    where the committed fixture must still decide, is what kills it.
+    """
+    proposal = tf_plan(rule_resource(), association("folders/2"))
+
+    drifted = run(proposal, estate(org_deny_layer4(["tcp:3389"])))
+    assert [(v.status, v.kind) for v in drifted] == [("unverified", "hfw_order")]
+    assert BASELINE in drifted[0].message           # the offending policy
+    assert "match.layer4[0]" in drifted[0].message  # and the offending field
+
+    # The same field READABLE: the committed fixture decides, and decides the
+    # RDP allow shadowed. A guard that refused this would abstain estate-wide.
+    intact = run(proposal, snap)
+    assert of_kind(intact, "hfw_order") == []
+    assert [v.status for v in of_kind(intact, "hfw_shadow")] == ["contradicted"]
+    assert [v.status for v in of_kind(intact, "hfw_effect")] == ["grounded"]
+
+
+@needs_z3
+def test_a_two_level_chain_that_folded_no_rule_abstains():
+    """MK-H03 — ``_place``'s ``len(chain) > 1``, at its BOUNDARY.
+
+    A TWO-level chain whose captured policies declare no rule at all must
+    abstain naming the policies that contributed nothing. Raising the boundary
+    by one restores, for every two-level chain, exactly the RC1 instance this
+    task exists to close: "the N-level order decides every packet identically"
+    stated over zero rules. The three-level chain the fixture already has must
+    keep abstaining too, which is the other side of the boundary.
+    """
+    proposal = tf_plan(rule_resource(match=RDP_FROM_PRIVATE),
+                       association("projects/acme-lab"))
+
+    two_level = run(proposal, two_level_estate(_empty_rules_array))
+    assert [(v.status, v.kind) for v in two_level] == [("unverified", "hfw_order")]
+    assert "2 levels (organizations/1 > projects/acme-lab)" in two_level[0].message
+    assert BASELINE in two_level[0].message   # the policy that contributed none
+
+    three_level = run(tf_plan(rule_resource(match=RDP_FROM_PRIVATE),
+                              association("folders/2")),
+                      estate(_empty_rules_array))
+    assert [(v.status, v.kind) for v in three_level] == [("unverified", "hfw_order")]
+    assert ("3 levels (organizations/1 > folders/2 > projects/acme-prod)"
+            in three_level[0].message)
+
+
+@needs_z3
+def test_an_off_chain_policy_without_attachments_does_not_abstain(snap):
+    """MK-H04 — ``_unattached_under``'s ``scope is None or scope not in chain``
+    filter, in both directions.
+
+    A captured policy scoped OUTSIDE the evaluation path says nothing about
+    this project's order, so an empty ``attachments`` on it must NOT abstain;
+    treating every captured policy as on-chain would manufacture a false
+    abstention from an unrelated folder and stop the fixture deciding at all.
+    On the chain, the same shape IS the abstention item (3) mandates.
+    """
+    proposal = tf_plan(rule_resource(match=RDP_FROM_PRIVATE),
+                       association("folders/2"))
+
+    off_chain = run(proposal, estate(_policy_in_another_folder))
+    assert of_kind(off_chain, "hfw_order") == []
+    assert [v.status for v in of_kind(off_chain, "hfw_shadow")] == ["contradicted"]
+
+    on_chain = run(proposal, estate(_drop_attachments))
+    assert [(v.status, v.kind) for v in on_chain] == [("unverified", "hfw_order")]
+    assert BASELINE in on_chain[0].message
+    assert "'attachments'" in on_chain[0].message
+
+
+def test_a_non_bool_disabled_raises_while_a_real_bool_encodes():
+    """MK-H05 — ``_as_vpc_shape``'s ``not isinstance(disabled, bool)`` guard,
+    in both directions.
+
+    A non-bool ``disabled`` — the string ``"false"``, whose ``bool()`` is True,
+    or a bare ``0`` — is UNENCODABLE and raises; AND a real boolean passes
+    through and reaches the applicable set with its own value. Inverting the
+    guard refuses every well-formed rule and accepts every malformed one, so
+    only a test carrying both cases kills it.
+    """
+    with pytest.raises(packet.UnsupportedPacket, match="'disabled' is 'false'"):
+        _as_vpc_shape(hierarchical_rule(disabled="false"), what="the org deny")
+    with pytest.raises(packet.UnsupportedPacket, match="'disabled' is 0"):
+        _as_vpc_shape(hierarchical_rule(disabled=0))
+
+    # A real boolean encodes either way round, and the enabled one is the one
+    # the preemption set and the fold go on to keep.
+    enabled = _as_vpc_shape(hierarchical_rule(disabled=False))
+    turned_off = _as_vpc_shape(hierarchical_rule(disabled=True))
+    assert (enabled["disabled"], turned_off["disabled"]) == (False, True)
+    assert hfw_checks._applicable([enabled, turned_off], "INGRESS") == [enabled]
 
 
 # -- the module states its polarity families ----------------------------------

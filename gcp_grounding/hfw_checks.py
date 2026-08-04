@@ -65,6 +65,28 @@ payload key at any level, a solver ``unknown``, or an absent z3 yields
 ``unverified`` naming the reason. As in the VPC estate check, a rule that cannot
 be encoded abstains the WHOLE comparison rather than being dropped — dropping an
 outer deny would fabricate a clean bill of health.
+
+UNREADABLE IS NOT EMPTY. Three defaults used to manufacture confidence out of a
+record nobody could read, and each is now an abstention naming the policy and
+the field:
+
+* an unreadable ``match.layer4`` was FILTERED down to no entries and then
+  omitted, which :func:`packet.rule_match` reads as no layer-4 restriction —
+  matching every port. Only an ABSENT or positively EMPTY key means that; a
+  present-but-unreadable one raises (:func:`_layer4_entries`). Same for every
+  other list field (:func:`_strings`);
+* a non-bool ``disabled`` was passed through ``bool()``, so the string
+  ``"false"`` deleted a live estate DENY from both the preemption set and the
+  fold. It now raises, exactly as a non-int ``priority`` already did in
+  :func:`_rank`, and :mod:`gcp_grounding.knowledge` rejects it at load;
+* the effective-decision fold reported that an N-level order decides every
+  packet identically after consuming ZERO rules. :func:`_place` counts what each
+  captured policy contributed and abstains when the whole chain contributed
+  nothing, and abstains for a captured policy scoped under the chain that
+  declares no ``attachments`` instead of ignoring it.
+
+Every one of those raises inside :func:`_place`, which is why the placement call
+runs INSIDE :func:`check_hierarchical_order`'s guarding ``try``.
 """
 
 from __future__ import annotations
@@ -93,11 +115,116 @@ _WIDEN = "hfw_widen"
 _EFFECT = "hfw_effect"
 _ABSTAIN = "hfw_order"
 
+#: Resource-hierarchy node prefixes a policy name is scoped under.
+_NODE_TYPES = ("organizations", "folders", "projects")
+
+
+# -- reading a record, without inventing what was not there -------------------
+
+
+def _strings(container: Any, key: str, *, what: str) -> list[str]:
+    """The string list at *key*, where ABSENT and positively EMPTY both mean
+    "this rule restricts nothing on that dimension".
+
+    A PRESENT value that is not a list of strings means nothing of the sort: it
+    was captured and could not be read, so it raises
+    :class:`packet.UnsupportedPacket` and the caller records one ``unverified``
+    naming the field. Filtering it away is how an honest abstention becomes a
+    confident verdict.
+    """
+    if not isinstance(container, Mapping):
+        raise UnsupportedPacket(
+            f"{what}: expected an object to read {key!r} from, got "
+            f"{type(container).__name__}")
+    if key not in container:
+        return []
+    value = container[key]
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise UnsupportedPacket(
+            f"{what}: {key!r} is {type(value).__name__}, not a list of strings")
+    out: list[str] = []
+    for i, entry in enumerate(value):
+        if not isinstance(entry, str):
+            raise UnsupportedPacket(
+                f"{what}: {key}[{i}] is {type(entry).__name__}, not a string")
+        out.append(entry)
+    return out
+
+
+def _match_block(rule: Mapping[str, Any], *, what: str) -> Mapping[str, Any]:
+    """A rule's ``match`` block. Absent is an empty block (the rule declares no
+    match criteria, which :func:`packet.rule_match` then rejects for an ingress
+    rule); a present non-object raises."""
+    if "match" not in rule:
+        return {}
+    value = rule["match"]
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise UnsupportedPacket(
+            f"{what}: 'match' is {type(value).__name__}, not an object")
+    return value
+
+
+def _layer4_entries(match: Mapping[str, Any], *, what: str) -> list[dict[str, Any]]:
+    """The layer-4 configs of a *match* block; ``[]`` means NO layer-4
+    restriction.
+
+    An ABSENT ``layer4`` key and one present holding an EMPTY list both
+    legitimately say the rule restricts nothing at layer 4. A present entry the
+    encoding cannot read says no such thing —
+    :func:`packet.layer4_match` itself raises on it — so dropping it would
+    convert an honest abstention into a rule that matches every port, which is
+    the measured defect: an outer deny silently widening to everything, or a
+    healthy rule reported as shadowed by one.
+    """
+    if "layer4" not in match:
+        return []
+    value = match["layer4"]
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise UnsupportedPacket(
+            f"{what}: 'match.layer4' is {type(value).__name__}, not a list of "
+            f"layer-4 configs")
+    entries: list[dict[str, Any]] = []
+    for i, entry in enumerate(value):
+        if not isinstance(entry, Mapping):
+            raise UnsupportedPacket(
+                f"{what}: match.layer4[{i}] is {type(entry).__name__}, not a "
+                f"layer-4 config object — an unreadable layer-4 match is not "
+                f"the same as no layer-4 restriction")
+        entries.append(dict(entry))
+    return entries
+
+
+def _rule_records(policy: Any, *, what: str) -> list[Mapping[str, Any]]:
+    """The rules a captured hierarchical policy declares.
+
+    An absent key and a present empty list both yield no records — a fact the
+    caller COUNTS (see :func:`_place`) rather than folding away silently. A
+    present non-list raises.
+    """
+    if not isinstance(policy, Mapping):
+        raise UnsupportedPacket(
+            f"{what}: expected a policy object, got {type(policy).__name__}")
+    if "rules" not in policy:
+        return []
+    value = policy["rules"]
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise UnsupportedPacket(
+            f"{what}: 'rules' is {type(value).__name__}, not a list of rules")
+    return list(value)
+
 
 # -- rule shaping -------------------------------------------------------------
 
 
-def _as_vpc_shape(rule: Mapping[str, Any]) -> dict[str, Any]:
+def _as_vpc_shape(rule: Mapping[str, Any], *, what: str = "the rule") -> dict[str, Any]:
     """A normalized *hierarchical* rule mapped onto the field names
     :func:`packet.rule_match` expects.
 
@@ -108,27 +235,41 @@ def _as_vpc_shape(rule: Mapping[str, Any]) -> dict[str, Any]:
     self-link contains ``/`` and a secure tag short name does not, so the two
     can never collide).
 
-    An EMPTY ``layer4`` list is rendered as *no* ``layer4`` key — i.e. no
-    layer-4 restriction — rather than as ``[]``, which
+    An ABSENT or EMPTY ``layer4`` list is rendered as *no* ``layer4`` key — i.e.
+    no layer-4 restriction — rather than as ``[]``, which
     :func:`packet.layer4_match` reads as "matches nothing". A hierarchical rule
     whose match block carries no layer4 config restricts nothing at layer 4;
     reading it as inert would silently drop it from the preemption set, and this
-    module never drops a rule.
+    module never drops a rule. A layer4 list that is PRESENT and unreadable is
+    the opposite case and raises — see :func:`_layer4_entries`.
+
+    ``disabled`` must be a real boolean. ``bool("false")`` is ``True``, so
+    passing a non-bool through would delete a live estate DENY from both the
+    preemption set and the fold; it raises instead, mirroring :func:`_rank`'s
+    handling of a non-int priority.
     """
-    match = rule.get("match") or {}
-    layer4 = [dict(entry) for entry in (match.get("layer4") or ())
-              if isinstance(entry, Mapping)]
+    if not isinstance(rule, Mapping):
+        raise UnsupportedPacket(
+            f"{what}: expected a rule object, got {type(rule).__name__}")
+    match = _match_block(rule, what=what)
+    disabled = rule.get("disabled", False)
+    if not isinstance(disabled, bool):
+        raise UnsupportedPacket(
+            f"{what}: 'disabled' is {disabled!r}, not a boolean — a rule whose "
+            f"enablement cannot be read is not silently disabled")
     shape: dict[str, Any] = {
         "action": rule.get("action"),
         "priority": rule.get("priority", 1000),
         "direction": str(rule.get("direction", "INGRESS")).upper(),
-        "disabled": bool(rule.get("disabled", False)),
-        "source_ranges": list(match.get("src_ip_ranges") or ()),
-        "destination_ranges": list(match.get("dest_ip_ranges") or ()),
-        "target_tags": (list(rule.get("target_secure_tags") or ())
-                        + list(rule.get("target_resources") or ())),
-        "target_service_accounts": list(rule.get("target_service_accounts") or ()),
+        "disabled": disabled,
+        "source_ranges": _strings(match, "src_ip_ranges", what=what),
+        "destination_ranges": _strings(match, "dest_ip_ranges", what=what),
+        "target_tags": (_strings(rule, "target_secure_tags", what=what)
+                        + _strings(rule, "target_resources", what=what)),
+        "target_service_accounts": _strings(rule, "target_service_accounts",
+                                            what=what),
     }
+    layer4 = _layer4_entries(match, what=what)
     if layer4:
         shape["layer4"] = layer4
     return shape
@@ -177,7 +318,9 @@ def effective_decision(z3, v: packet.PacketVars,
     eff = packet.effective_allow(z3, v, vpc_rules, direction,
                                  default_allow=(direction == "EGRESS"))
     for _node, rules in reversed(list(levels)):
-        shapes = _applicable([_as_vpc_shape(r) for r in rules], direction)
+        shapes = _applicable(
+            [_as_vpc_shape(r, what=f"a hierarchical rule at {_node}")
+             for r in rules], direction)
         if not shapes:
             continue
         e = eff
@@ -297,16 +440,70 @@ def _attachment_nodes(claim, ctx) -> list[str]:
         return [n for n in carried if isinstance(n, str)]
     record = ctx.snapshot.hierarchical_firewall_policy(policy)
     if record is not UNKNOWN and record is not None:
-        return list(record.get("attachments") or ())
+        return _strings(record, "attachments",
+                        what=f"hierarchical firewall policy {policy!r}")
     return []
+
+
+def _scope_of(name: Any) -> str | None:
+    """The hierarchy node a policy NAME is scoped under —
+    ``organizations/1/locations/global/firewallPolicies/fp`` → ``organizations/1``
+    — or None when the name carries no such pair."""
+    if not isinstance(name, str):
+        return None
+    parts = name.split("/")
+    for i in range(len(parts) - 1):
+        if parts[i] in _NODE_TYPES and parts[i + 1]:
+            return f"{parts[i]}/{parts[i + 1]}"
+    return None
+
+
+def _unattached_under(snapshot: GcpSnapshot, chain: Sequence[str]) -> str | None:
+    """The reason to abstain when a CAPTURED policy scoped under a node on the
+    evaluation path declares no ``attachments``, or None.
+
+    Such a policy is an input about this project's evaluation order that could
+    not be read. Ignoring it is how a whole level silently disappears from the
+    fold and the remaining levels are then reported as deciding every packet.
+    """
+    table = snapshot.hierarchical_firewall_policies or {}
+    orphans = []
+    for name in sorted(table):
+        scope = _scope_of(name)
+        if scope is None or scope not in chain:
+            continue
+        if not _strings(table[name], "attachments",
+                        what=f"hierarchical firewall policy {name!r}"):
+            orphans.append(name)
+    if not orphans:
+        return None
+    return (f"the captured hierarchical firewall policies {', '.join(orphans)} "
+            f"are scoped under a node on the evaluation path "
+            f"({' > '.join(chain)}) but declare no 'attachments', so the level "
+            f"they decide at could not be read")
+
+
+def _nothing_folded(chain: Sequence[str], contributed: Mapping[str, int]) -> str:
+    """The reason to abstain when the fold would consume no rule at all: the
+    N-level order cannot be said to decide anything when it read rules from no
+    level, so the policies that contributed nothing are named."""
+    where = f"{len(chain)} levels ({' > '.join(chain)})"
+    if contributed:
+        return (f"no hierarchical firewall rule was read from any of the "
+                f"{where} — the captured policies "
+                f"{', '.join(sorted(contributed))} declare no 'rules', so the "
+                f"effective decision would rest on rules from no level at all")
+    return (f"no captured hierarchical firewall policy attaches to any of the "
+            f"{where}, so the effective decision would rest on rules from no "
+            f"level at all")
 
 
 def _project_under_evaluation(rule: Mapping[str, Any], node: str,
                               snapshot: GcpSnapshot) -> tuple[str | None, str]:
     """→ (project, reason-if-None). From the rule's ``target_resources`` when
     they name networks, otherwise from the attachment *node*."""
-    targets = {p for p in (_project_of(t) for t in rule.get("target_resources") or ())
-               if p is not None}
+    named = _strings(rule, "target_resources", what="the proposed rule")
+    targets = {p for p in (_project_of(t) for t in named) if p is not None}
     if len(targets) == 1:
         return targets.pop(), ""
     if len(targets) > 1:
@@ -335,8 +532,8 @@ def _vpc_rules(snapshot: GcpSnapshot, project: str,
     ``target_resources`` name, when it names any. Caller has already established
     that ``firewall_rules`` was captured."""
     table = snapshot.firewall_rules or {}
-    targets = {t for t in (rule.get("target_resources") or ())
-               if _project_of(t) is not None}
+    named = _strings(rule, "target_resources", what="the proposed rule")
+    targets = {t for t in named if _project_of(t) is not None}
     out = []
     for name in sorted(table):
         record = table[name]
@@ -395,7 +592,13 @@ def _place(claim, ctx, proposals: Sequence[Any]) -> tuple[Any, Any]:
                                      f"({' > '.join(chain)})")
 
     direction = str(rule.get("direction", "INGRESS")).upper()
+    orphaned = _unattached_under(snapshot, chain)
+    if orphaned is not None:
+        return None, _abstain(claim, orphaned)
+
     placed: list[_Placed] = []
+    # captured policy -> how many rules it actually contributed to the fold.
+    contributed: dict[str, int] = {}
     for level, name in enumerate(chain):
         attached = snapshot.firewall_policies_attached_to(name)
         if attached is UNKNOWN:  # pragma: no cover - guarded above
@@ -403,12 +606,21 @@ def _place(claim, ctx, proposals: Sequence[Any]) -> tuple[Any, Any]:
                                          "hierarchical_firewall_policies")
         for policy in attached:
             policy_name = _policy_key(snapshot, policy)
-            for i, estate_rule in enumerate(policy.get("rules") or ()):
+            what = f"hierarchical firewall policy {policy_name!r}"
+            records = _rule_records(policy, what=what)
+            contributed[policy_name] = contributed.get(policy_name, 0) + len(records)
+            for i, estate_rule in enumerate(records):
                 placed.append(_Placed(
                     level=level, node=name,
                     label=f"{policy_name} rule[{i}] priority "
                           f"{estate_rule.get('priority')}",
-                    shape=_as_vpc_shape(estate_rule), rule=estate_rule))
+                    shape=_as_vpc_shape(estate_rule, what=what), rule=estate_rule))
+
+    # The fold consumed nothing from a chain that claims more than one level:
+    # "the N-level order decides every packet identically" would be a statement
+    # about rules nobody read. Name what contributed nothing and abstain.
+    if len(chain) > 1 and not sum(contributed.values()):
+        return None, _abstain(claim, _nothing_folded(chain, contributed))
 
     vpc = _vpc_rules(snapshot, project, rule)
     vpc_level = len(chain)
@@ -427,7 +639,11 @@ def _place(claim, ctx, proposals: Sequence[Any]) -> tuple[Any, Any]:
             continue  # a rule for a different policy/level in the same document
         entry = _Placed(level=level_of_node, node=node,
                         label=f"{other.value} ({other.location})",
-                        shape=_as_vpc_shape(other_rule), rule=other_rule)
+                        shape=_as_vpc_shape(
+                            other_rule,
+                            what=f"the proposed rule {other.value!r} "
+                                 f"({other.location})"),
+                        rule=other_rule)
         placed.append(entry)
         if other is claim:
             mine = entry
@@ -626,12 +842,16 @@ def check_hierarchical_order(ctx) -> list[Verdict]:
 
     verdicts: list[Verdict] = []
     for claim in proposals:
-        resolved, abstention = _place(claim, ctx, proposals)
-        if abstention is not None:
-            verdicts.append(abstention)
-            continue
-        project, chain, placed, mine, vpc_rules, direction = resolved
         try:
+            # INSIDE the guard: placement is where an unreadable record is first
+            # touched (`_as_vpc_shape` over every estate rule on the chain), so
+            # running it outside would let an UnsupportedPacket escape the one
+            # funnel that turns it into an honest `unverified`.
+            resolved, abstention = _place(claim, ctx, proposals)
+            if abstention is not None:
+                verdicts.append(abstention)
+                continue
+            project, chain, placed, mine, vpc_rules, direction = resolved
             v = packet.packet_vars(
                 z3,
                 tags=sorted(ctx.snapshot.network_tags or ()),

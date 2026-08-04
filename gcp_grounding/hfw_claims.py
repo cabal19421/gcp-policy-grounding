@@ -121,10 +121,35 @@ def _plain_tag(name: Any) -> bool:
 # -- rule normalization -------------------------------------------------------
 
 
+def _unreadable_layer4(value: Any, *, as_blocks: bool) -> str | None:
+    """Why a PRESENT layer-4 attribute could not be read, or ``None``.
+
+    An ABSENT attribute legitimately declares no layer-4 restriction. A present
+    one the extractor cannot read declares nothing of the sort: normalizing it
+    to an empty list hands the cross-level check a rule that restricts nothing
+    at layer 4 — matching every port — which is the very default this module's
+    ``unsupported`` payload exists to prevent. Terraform's repeated-block
+    spelling also accepts a single bare object (*as_blocks*).
+    """
+    if value is None:
+        return None
+    if as_blocks and isinstance(value, Mapping):
+        return None
+    if not isinstance(value, (list, tuple)):
+        return (f"layer-4 configuration is {type(value).__name__}, not a list "
+                f"of protocol/port objects")
+    for i, entry in enumerate(value):
+        if not isinstance(entry, Mapping):
+            return (f"layer-4 configuration [{i}] is {type(entry).__name__}, "
+                    f"not a protocol/port object")
+    return None
+
+
 def _build_rule(priority: Any, action: Any, direction: Any, disabled: Any,
                 src: list[str], dest: list[str], layer4: list[dict[str, Any]],
                 target_resources: list[str], target_service_accounts: list[str],
-                target_secure_tags: list[str], *, match_present: bool
+                target_secure_tags: list[str], *, match_present: bool,
+                layer4_unreadable: str | None = None
                 ) -> tuple[dict[str, Any], str | None]:
     """Assemble the normalized rule dict and decide whether the packet algebra
     can encode it. Returns ``(rule, unsupported_reason_or_None)`` — the rule is
@@ -141,18 +166,21 @@ def _build_rule(priority: Any, action: Any, direction: Any, disabled: Any,
         "target_secure_tags": target_secure_tags,
     }
     return rule, _unsupported_reason(action, priority, direction, src, dest,
-                                     match_present=match_present)
+                                     match_present=match_present,
+                                     layer4_unreadable=layer4_unreadable)
 
 
 def _unsupported_reason(action: Any, priority: Any, direction: Any,
-                        src: list[str], dest: list[str], *, match_present: bool
-                        ) -> str | None:
+                        src: list[str], dest: list[str], *, match_present: bool,
+                        layer4_unreadable: str | None = None) -> str | None:
     if action not in _ACTIONS:
         return f"action {action!r} is not one of allow/deny/goto_next"
     if not isinstance(priority, int) or isinstance(priority, bool):
         return f"priority {priority!r} is not an integer"
     if not match_present:
         return "rule has no match block"
+    if layer4_unreadable is not None:
+        return layer4_unreadable
     if not src and not dest:
         return "match declares no source or destination IP ranges"
     if direction == "INGRESS" and not src:
@@ -167,18 +195,22 @@ def _normalize_rest_rule(rule: Mapping[str, Any]) -> tuple[dict[str, Any], str |
     match_present = isinstance(match, Mapping)
     src = _str_list(match.get("srcIpRanges")) if match_present else []
     dest = _str_list(match.get("destIpRanges")) if match_present else []
+    configs = match.get("layer4Configs") if match_present else None
+    unreadable = _unreadable_layer4(configs, as_blocks=False)
+    entries = configs if isinstance(configs, (list, tuple)) else ()
     layer4 = [{"protocol": cfg.get("ipProtocol"), "ports": _str_list(cfg.get("ports"))}
-              for cfg in (match.get("layer4Configs") if match_present else None) or ()
-              if isinstance(cfg, Mapping)]
+              for cfg in entries if isinstance(cfg, Mapping)]
+    tags = rule.get("targetSecureTags")
+    tag_blocks = tags if isinstance(tags, (list, tuple)) else ()
     secure_tags = [tag.get("name")
-                   for tag in rule.get("targetSecureTags") or ()
+                   for tag in tag_blocks
                    if isinstance(tag, Mapping) and isinstance(tag.get("name"), str)]
     return _build_rule(
         rule.get("priority"), rule.get("action"), rule.get("direction"),
         rule.get("disabled", False), src, dest, layer4,
         _str_list(rule.get("targetResources")),
         _str_list(rule.get("targetServiceAccounts")),
-        secure_tags, match_present=match_present)
+        secure_tags, match_present=match_present, layer4_unreadable=unreadable)
 
 
 def _normalize_tf_rule(values: Mapping[str, Any]) -> tuple[dict[str, Any], str | None]:
@@ -186,9 +218,10 @@ def _normalize_tf_rule(values: Mapping[str, Any]) -> tuple[dict[str, Any], str |
     match_present = match is not None
     src = _str_list(match.get("src_ip_ranges")) if match_present else []
     dest = _str_list(match.get("dest_ip_ranges")) if match_present else []
+    configs = match.get("layer4_config") if match_present else None
+    unreadable = _unreadable_layer4(configs, as_blocks=True)
     layer4 = [{"protocol": block.get("ip_protocol"), "ports": _str_list(block.get("ports"))}
-              for block, _ in _blocks(match.get("layer4_config") if match_present else None,
-                                      "layer4_config")]
+              for block, _ in _blocks(configs, "layer4_config")]
     secure_tags = [block.get("name")
                    for block, _ in _blocks(values.get("target_secure_tags"), "target_secure_tags")
                    if isinstance(block.get("name"), str)]
@@ -197,7 +230,7 @@ def _normalize_tf_rule(values: Mapping[str, Any]) -> tuple[dict[str, Any], str |
         values.get("disabled", False), src, dest, layer4,
         _str_list(values.get("target_resources")),
         _str_list(values.get("target_service_accounts")),
-        secure_tags, match_present=match_present)
+        secure_tags, match_present=match_present, layer4_unreadable=unreadable)
 
 
 def _rule_claims(rule: dict[str, Any], unsupported: str | None, policy: str,
@@ -257,7 +290,8 @@ def _association_nodes(doc: Mapping[str, Any]) -> list[str]:
     any — the rules of an attached policy carry these so a check knows where the
     policy takes effect."""
     nodes = []
-    for assoc in doc.get("associations") or ():
+    declared = doc.get("associations")
+    for assoc in declared if isinstance(declared, (list, tuple)) else ():
         if isinstance(assoc, Mapping):
             node = _normalize_node(assoc.get("attachmentTarget")
                                    or assoc.get("attachment_target"))
