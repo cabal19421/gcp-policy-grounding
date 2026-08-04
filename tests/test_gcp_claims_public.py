@@ -133,12 +133,18 @@ def test_prefixed_only_policy_is_byte_identical_to_before():
 
 def test_public_policy_no_longer_grounds_silently(snap):
     # roles/storage.objectViewer grounds, but the two public_principal claims
-    # have no offline checker wired here, so ground_policy's honest catch-all
-    # records them as unverified. Before this task the members were dropped and
-    # the report was grounded=1, unverified=0 — a byte-identical clean pass.
+    # are now DECIDED: `sx-iam-escalation` landed gcp_grounding.iam_checks,
+    # whose public-principal check turns each grant into a contradicted
+    # `iam_public` verdict. Before the claims existed the members were dropped
+    # and the report was grounded=1, unverified=0 — a byte-identical clean pass;
+    # while they existed but had no checker they recorded as unverified; now the
+    # exposure blocks outright.
     report = ground_policy(PUBLIC_POLICY, snap)
     counts = report.counts()
     non_grounded = sum(v for s, v in counts.items() if s != "grounded")
     assert non_grounded >= 1
-    assert counts["unverified"] >= 2
-    assert any(v.kind == "public_principal" for v in report.verdicts)
+    public = [v for v in report.verdicts if v.kind == "iam_public"]
+    assert len(public) == 2
+    assert {v.status for v in public} == {"contradicted"}
+    assert {v.target for v in public} == set(PUBLIC_PRINCIPALS)
+    assert report.ok is False

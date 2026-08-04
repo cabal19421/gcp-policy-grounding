@@ -168,7 +168,14 @@ def test_no_providers_is_byte_identical(snap, name, expected):
     # shadowing a built-in and never touching these fixtures — so the invariant
     # relaxes from "registry is empty" to "registry never shadows a built-in tf
     # type", which keeps the gate byte-identical to before the seam existed.
-    assert registry.document_checks() == ()
+    #
+    # `iam_checks.check_escalation` IS a registered document check (escalation
+    # needs both halves of a binding, so it cannot hang off one claim), but it
+    # is silent unless a role hits the curated escalation table — which none of
+    # these fixtures' roles does. The verdict-list equality below is what
+    # actually proves that; this line only pins that no OTHER document check
+    # sneaked in.
+    assert {f.__name__ for f in registry.document_checks()} <= {"check_escalation"}
     assert set(registry.tf_extractors()).isdisjoint(_BUILTIN_TF_TYPES)
     assert registry.claim_checks("role") == ()
     report = ground_policy(POLICIES / f"{name}.json", snap)
