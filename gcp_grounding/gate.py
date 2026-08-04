@@ -10,15 +10,44 @@ straight back into a generator's next prompt.
 
 THE THREE INPUTS, and what each changed file is judged against:
 
-- the PROPOSAL is the changed file itself. ``*.json`` (including
-  ``*.policy.json`` and terraform-JSON ``*.tf.json``) is read end-to-end,
-  auto-detecting IAM policy / Org Policy / ``terraform show -json`` plan
-  content; a plain ``.json`` whose content is none of those (say a
-  ``package.json``) is recorded ``unverified`` as a non-policy file and
-  raises no risk; ``*.tf`` (raw HCL) is policy-relevant but not parseable
-  offline by this gate and is recorded ``unverified`` with a pointer at
-  gating the ``terraform show -json`` plan output instead; everything else
-  is recorded ``unverified`` as a non-policy file.
+- the PROPOSAL is the changed file itself, routed by suffix. FOUR suffixes
+  are policy candidates by name alone, and when an agent edits terraform the
+  proposal IS the terraform:
+
+  ``*.policy.json`` and every other ``*.json``
+      read end-to-end, auto-detecting IAM policy / Org Policy /
+      ``terraform show -json`` plan content. A plain ``.json`` whose content
+      is none of those (say a ``package.json``) is recorded ``unverified``
+      as a non-policy file and raises no risk.
+  ``*.tf.json``
+      TERRAFORM'S OWN JSON CONFIGURATION SYNTAX, parsed with ``json.load``
+      and no parser at all. Both legal ``resource`` encodings — a mapping of
+      type to name to body, and a list of single-key mappings — are walked
+      to the same ``type.name`` addresses, interpolations are stripped and
+      REPORTED, and the blocks are assembled into one synthetic plan
+      document so ``tf_claims.terraform_plan_claims`` and every registered
+      provider extractor apply unchanged.
+  ``*.tf``
+      RAW HCL, read through :mod:`gcp_grounding.tfsource.hcl` (resolved
+      lazily, so a checkout without the reader degrades to a stated note)
+      and fed through the SAME assemble-then-prepare pipeline as
+      ``*.tf.json``. A static read of a terraform program enumerates a
+      SUBSET of what will be applied, so the file always carries one
+      unresolved path and no ``grounded`` on it is ever claimed clean;
+      ``ungrounded`` and ``contradicted`` findings stand and still block.
+  ``*.tfstate``
+      NOT A PROPOSAL, EVER. State describes what EXISTS, so grading it would
+      report the whole estate as if an agent had just written it. It is
+      recorded ``unverified`` with
+      :data:`gcp_grounding.tfsource.discover.STATE_NOT_A_PROPOSAL` — the
+      shared constant, so this entry point and the CLI cannot say different
+      things about the same file — and pointed at the terraform-state flag
+      and the config file as the way to use it as a BASELINE. An
+      extensionless or plain-``.json`` state file reaches the same arm
+      through :func:`gcp_grounding.tfsource.discover.is_v4_state`, applied
+      BEFORE the kind detector.
+
+  Everything else is recorded ``unverified`` as a non-policy file.
 - the CURRENT state is the ``current`` constructor argument, the sources a
   ``resolve_sources`` construction assembled, or — with ``discover_config``
   — the state discovered PER EDITED FILE by walking up from that file. It
@@ -128,8 +157,91 @@ ALWAYS_REPORT_KINDS = (
 )
 
 #: Suffixes that make a file a policy candidate by name alone; other
-#: ``.json`` files qualify by content (their JSON sniffs as a policy kind).
-_CANDIDATE_SUFFIXES = (".policy.json", ".tf.json")
+#: ``.json`` files qualify by content (their JSON sniffs as a policy kind, or
+#: as terraform state). Matched case-insensitively, and ``.tf.json`` is tested
+#: BEFORE ``.tf`` and ``.json`` everywhere, since it ends with both.
+_CANDIDATE_SUFFIXES = (".policy.json", ".tf.json", ".tf", ".tfstate")
+
+#: :data:`gcp_grounding.engine.UNRESOLVED_KIND`, spelled here so the raw-``.tf``
+#: note can carry it without importing the engine. It is in
+#: :data:`ALWAYS_REPORT_KINDS`, so the note reaches the agent whatever the
+#: file's own status turns out to be.
+_UNRESOLVED_KIND = "proposal:unresolved"
+
+#: Terraform's JSON spelling of a comment, legal at every level of a
+#: ``.tf.json`` document and never an attribute.
+_COMMENT_KEY = "//"
+
+#: The two terraform CONFIGURATION suffixes — the ones that are a PROPOSAL.
+#: ``.tfstate`` is deliberately not here: state is never a proposal.
+_TERRAFORM_SUFFIXES = (".tf.json", ".tf")
+
+#: The ``facts.PROPOSED_SOURCES`` spelling for configuration read as a proposed
+#: change, mirroring :data:`gcp_grounding.tfsource.hcl.PROPOSED_SOURCE`. Spelled
+#: literally so the ``.tf.json`` arm needs no parser and no ``tfsource`` import.
+_HCL_PROPOSED = "hcl-proposed"
+
+#: The one unresolved path a raw ``.tf`` ALWAYS reports, and why it always
+#: does. Terraform configuration is a PROGRAM: variables, locals, function
+#: calls, ``module`` blocks and the other ``.tf`` files of the same module are
+#: not evaluated by a static reader, so what was enumerated is a SUBSET of what
+#: terraform will apply. Reporting it is what makes the engine downgrade every
+#: ``grounded`` on the file to ``unverified`` — a resource whose rule set may be
+#: truncated must never produce a conclusion that no permissive rule exists.
+#: ``ungrounded`` and ``contradicted`` STAND, so a hallucinated role name in raw
+#: HCL still fails the gate.
+_HCL_SUBSET_PATH = "{path}:<hcl-static-read>"
+
+#: The terraform note the gate emits for a raw ``.tf`` it DID read.
+_HCL_READ_NOTE = (
+    "{path}: raw Terraform HCL was read STATICALLY — variables, locals, "
+    "function calls, `module` blocks and the other files of this module are "
+    "not evaluated, so what was enumerated is a SUBSET of what terraform will "
+    "apply and nothing on this file is reported as a clean pass. Gate the "
+    "`terraform show -json` plan output, or the equivalent .tf.json, for a "
+    "complete view. Terraform-derived ESTATE facts come from the "
+    "terraform-state and merge-source flags, never from the file under review."
+)
+
+#: The same note for a checkout WITHOUT the HCL reader — still unverified,
+#: still a policy candidate.
+_HCL_ABSENT_NOTE = (
+    "{path}: raw Terraform HCL was NOT parsed, because the HCL reader "
+    "gcp_grounding.tfsource.hcl is not available in this checkout. Gate the "
+    "`terraform show -json` plan output, or the equivalent .tf.json, instead. "
+    "Terraform-derived ESTATE facts come from the terraform-state and "
+    "merge-source flags, never from the file under review."
+)
+
+#: The same, for a checkout whose terraform PROPOSAL machinery is incomplete.
+_TF_ENGINE_ABSENT_NOTE = (
+    "{path}: terraform configuration was not graded, because {missing} "
+    "is not part of this checkout — gate the `terraform show -json` plan "
+    "output instead."
+)
+
+#: A DUPLICATE OF LAST RESORT, used only where ``tfsource`` cannot be imported.
+#: :data:`gcp_grounding.tfsource.discover.STATE_NOT_A_PROPOSAL` is
+#: AUTHORITATIVE and is what every reachable checkout emits; this copy exists
+#: so a stripped checkout still refuses to grade a state file, and it is
+#: byte-identical on purpose — a differently WORDED copy is exactly the drift
+#: the shared constant exists to prevent.
+_STATE_NOT_A_PROPOSAL_FALLBACK = (
+    "{path}: this is Terraform state, not a proposed change. State records "
+    "what already EXISTS, so it is a CURRENT-state source; it was not graded "
+    "as a proposal, because grading it would report the whole estate as if an "
+    "agent had just written it. Pass it with the terraform-state flag, or "
+    "list it as a state source in the config file, to use it as a baseline "
+    "for other edits."
+)
+
+#: Appended when the state file under review is ALREADY one of this run's
+#: configured state sources — the user is looking at the baseline itself.
+_ALREADY_A_STATE_SOURCE = (
+    " It is already configured as a state source for this run, so the facts "
+    "in it are already part of the current state every other edited file was "
+    "compared against."
+)
 
 #: The blocks of :func:`gcp_grounding.explain_state.state_document` carried
 #: onto a file result, in document order.
@@ -155,6 +267,121 @@ def _optional(name: str) -> Any:
     except ImportError:
         logger.debug("gcp_grounding.%s is not part of this checkout", name)
         return None
+
+
+def _tf_module(name: str) -> Any:
+    """``gcp_grounding.tfsource.<name>``, or ``None`` where the terraform
+    readers are not part of this checkout.
+
+    The same try-import-except-``ImportError`` idiom as :func:`_optional`, and
+    the same lazy-extractor precedent :mod:`gcp_grounding.preflight` sets: the
+    import happens INSIDE the call, so a checkout without the ``tfsource``
+    subpackage degrades to a stated note rather than failing to import the
+    gate. That path stays live code even though the readers now ship.
+    """
+    try:
+        return importlib.import_module(f"{__package__}.tfsource.{name}")
+    except ImportError:
+        logger.debug("gcp_grounding.tfsource.%s is not part of this checkout", name)
+        return None
+
+
+def _is_v4_state(document: Any) -> bool:
+    """Whether *document* is a version-4 Terraform state file.
+
+    THE ONE PREDICATE, resolved lazily:
+    :func:`gcp_grounding.tfsource.discover.is_v4_state` is authoritative and is
+    what decides this everywhere it can be imported. ``tx-cli-state-flags``
+    applies the same sniff to the ``verify-policy`` positional argument and
+    ``tx-tf-discover``'s ``tfstate`` arm applies it again on classification;
+    three hand-written ``version == 4`` tests would be three places to drift,
+    and a drifted sniff is exactly the zero-claim clean pass this arm exists to
+    close.
+    """
+    discover = _tf_module("discover")
+    if discover is not None:
+        return bool(discover.is_v4_state(document))
+    # A DUPLICATE OF LAST RESORT, for the import-unavailable path ONLY.
+    # `discover.is_v4_state` is AUTHORITATIVE; this exists so a checkout
+    # without `tfsource` still refuses to grade a state file as a proposal.
+    return (isinstance(document, Mapping)
+            and document.get("version") == 4
+            and "lineage" in document
+            and isinstance(document.get("resources"), list))
+
+
+# -- terraform's own JSON configuration syntax --------------------------------
+
+
+def _tf_json_entries(document: Any) -> list[tuple[str, str, Mapping[str, Any]]]:
+    """``(type, name, body)`` for BOTH legal ``resource`` encodings.
+
+    A MAPPING of type to name to body, and a LIST of single-key mappings of the
+    same shape — both are committed as fixtures, so neither is hypothetical.
+    The innermost value may itself be a one-element LIST of blocks, which is
+    the array spelling of a body. Anything else is skipped rather than guessed
+    at, and ``"//"`` comment keys are dropped at every level.
+    """
+    block = document.get("resource") if isinstance(document, Mapping) else None
+    containers = [block] if isinstance(block, Mapping) else (
+        [entry for entry in block if isinstance(entry, Mapping)]
+        if isinstance(block, list) else [])
+    entries: list[tuple[str, str, Mapping[str, Any]]] = []
+    for container in containers:
+        for resource_type, named in container.items():
+            if resource_type == _COMMENT_KEY or not isinstance(named, Mapping):
+                continue
+            for name, body in named.items():
+                if name == _COMMENT_KEY:
+                    continue
+                if isinstance(body, list) and len(body) == 1:
+                    body = body[0]      # the one-element array spelling of a body
+                if isinstance(body, Mapping):
+                    entries.append((str(resource_type), str(name), body))
+    return entries
+
+
+def _tf_json_value(value: Any, path: str, facts: Any) -> Any:
+    """One ``.tf.json`` attribute value in the plan-JSON encoding.
+
+    A string carrying ``${`` becomes an
+    :class:`gcp_grounding.facts.Unresolved` — the SUBSTRING rule
+    :func:`gcp_grounding.facts.is_interpolated` states, so
+    ``roles/${var.tier}.admin`` is refused too. A JSON OBJECT is a nested block
+    and normalises to a one-element list of objects; an ARRAY of objects keeps
+    its length. That is the shape ``tf_claims``' block helpers read, and it is
+    what makes the two encodings produce the same triples.
+    """
+    if isinstance(value, str):
+        if facts.is_interpolated(value):
+            return facts.Unresolved("interpolation", path or "<root>",
+                                    "a JSON string carrying '${'")
+        return value
+    if isinstance(value, Mapping):
+        return [_tf_json_body(value, f"{path}[0].", facts)]
+    if isinstance(value, list):
+        return [_tf_json_body(item, f"{path}[{index}].", facts)
+                if isinstance(item, Mapping)
+                else _tf_json_value(item, f"{path}[{index}]", facts)
+                for index, item in enumerate(value)]
+    return value                        # numbers, booleans and null are literals
+
+
+def _tf_json_body(body: Mapping[str, Any], prefix: str, facts: Any
+                  ) -> dict[str, Any]:
+    """One ``.tf.json`` body, comment keys dropped."""
+    return {key: _tf_json_value(value, f"{prefix}{key}", facts)
+            for key, value in body.items() if key != _COMMENT_KEY}
+
+
+def _tf_json_triples(document: Any, facts: Any
+                     ) -> tuple[tuple[str, str, Mapping[str, Any]], ...]:
+    """``(address, resource_type, values)`` for one ``.tf.json`` document —
+    the same contract :func:`gcp_grounding.tfsource.hcl.parse_config_file`
+    hands the raw-``.tf`` arm, so both arms feed ONE pipeline."""
+    return tuple((f"{resource_type}.{name}", resource_type,
+                  _tf_json_body(body, "", facts))
+                 for resource_type, name, body in _tf_json_entries(document))
 
 
 @dataclass(frozen=True)
@@ -501,35 +728,271 @@ class PolicyGroundingGate:
 
     def _check_one(self, path: str, backend: str) -> FileResult:
         lower = path.lower()
-        if lower.endswith(".tf"):
-            return self._unverified(
-                path, backend, candidate=True,
-                note=f"{path}: raw Terraform HCL cannot be grounded offline — "
-                     f"gate the `terraform show -json` plan output instead")
+        if lower.endswith(".tfstate"):
+            return self._state_source_file(path, backend)
+        if lower.endswith(_TERRAFORM_SUFFIXES):
+            return self._check_terraform(path, backend,
+                                         raw=not lower.endswith(".tf.json"))
         if lower.endswith(".json"):
-            if (lower.endswith(_CANDIDATE_SUFFIXES)
-                    or self._sniffs_as_policy(path)):
+            if lower.endswith(_CANDIDATE_SUFFIXES):
+                report, state = self._ground(path, backend)
+                return self._file_result(path, report, candidate=True, state=state)
+            sniffed = self._sniff(path)
+            if sniffed == "state":
+                return self._state_source_file(path, backend)
+            if sniffed == "policy":
                 report, state = self._ground(path, backend)
                 return self._file_result(path, report, candidate=True, state=state)
             return self._unverified(
                 path, backend, candidate=False,
                 note=f"{path}: not recognized as an IAM policy, Org Policy or "
                      f"terraform plan document — not checked")
+        # An extensionless file still reaches the state sniff: a `terraform
+        # state pull > current` is a state file whatever it is called, and the
+        # preflight plan-key set contains `terraform_version`, which EVERY
+        # tfstate carries — so without this it classifies as a terraform plan
+        # and degrades to a zero-claims unverified that reads like a clean run.
+        if self._sniff(path) == "state":
+            return self._state_source_file(path, backend)
         return self._unverified(
             path, backend, candidate=False,
-            note=f"{path}: not a policy file (*.tf / *.json) — not checked")
+            note=f"{path}: not a policy file "
+                 f"(*.tf / *.tf.json / *.tfstate / *.json) — not checked")
 
-    def _sniffs_as_policy(self, path: str) -> bool:
-        """Whether a plain ``.json`` file's content looks like a policy
-        document. Unreadable or invalid files sniff False — by name alone
-        they were never policy-relevant. RecursionError (deeply nested
-        JSON) degrades to False too: check() never raises on its input."""
+    def _sniff(self, path: str) -> str:
+        """What a file's CONTENT says it is: ``"state"``, ``"policy"`` or ``""``.
+
+        THE V4-STATE SNIFF COMES FIRST, before the kind detector, so a state
+        file with no ``.tfstate`` suffix routes into the state arm rather than
+        into ``detect_kind`` — see :func:`_is_v4_state` for why it is one
+        shared predicate and not a fourth ``version == 4``.
+
+        Unreadable or invalid files sniff to ``""`` — by name alone they were
+        never policy-relevant. RecursionError (deeply nested JSON) degrades the
+        same way: check() never raises on its input.
+        """
         try:
             with open(path, encoding="utf-8") as fh:
                 doc = json.load(fh)
         except (OSError, ValueError, RecursionError):
-            return False
-        return detect_kind(doc) is not None
+            return ""
+        if _is_v4_state(doc):
+            return "state"
+        return "policy" if detect_kind(doc) is not None else ""
+
+    def _sniffs_as_policy(self, path: str) -> bool:
+        """Whether a plain ``.json`` file's content looks like a policy
+        document. A v4 state file does NOT: it sniffs as ``"state"`` first, so
+        the whole estate is never graded as if it had just been written."""
+        return self._sniff(path) == "policy"
+
+    # -- .tfstate: a source, never a proposal --------------------------------
+
+    def _state_source_file(self, path: str, backend: str) -> FileResult:
+        """Terraform state, refused as a proposal and pointed at the flag that
+        makes it a BASELINE. Still a policy candidate, so the run's risk says
+        a policy-relevant file went unjudged."""
+        discover = _tf_module("discover")
+        template = (discover.STATE_NOT_A_PROPOSAL if discover is not None
+                    else _STATE_NOT_A_PROPOSAL_FALLBACK)
+        note = template.format(path=path)
+        if self._already_a_state_source(path):
+            note += _ALREADY_A_STATE_SOURCE
+        return self._unverified(path, backend, candidate=True, note=note)
+
+    def _already_a_state_source(self, path: str) -> bool:
+        """Whether this run's configured current state ALREADY reads *path*."""
+        resolved = os.path.abspath(path)
+        return any(os.path.abspath(entry) == resolved
+                   for entry in self._configured_state_paths(path))
+
+    def _configured_state_paths(self, path: str) -> list[str]:
+        """Every state path this run was configured with — from the supplied
+        ``current``, from the options and settings the gate holds, and from the
+        state discovered beside *path* when per-file discovery is on."""
+        holders: list[Any] = [self.current, self.options, self.settings]
+        try:
+            view = self._state_for(path)
+        except Exception:                   # noqa: BLE001 — never raises here
+            logger.debug("gate: the configured state could not be resolved for %s",
+                         path, exc_info=True)
+            view = None
+        if view is not None:
+            holders.extend([view.current, view.settings])
+        found: list[str] = []
+        for holder in holders:
+            if holder is None:
+                continue
+            # `CurrentState.sources` is what actually loaded; a `SourceOptions`
+            # (bare, or wrapped by a `Settings`) is what was asked for.
+            for entry in getattr(holder, "sources", ()) or ():
+                found.append(os.fspath(entry))
+            options = holder if hasattr(holder, "terraform_state") else \
+                getattr(holder, "options", None)
+            for entry in getattr(options, "terraform_state", ()) or ():
+                found.append(os.fspath(entry))
+        return [entry for entry in found if entry]
+
+    # -- .tf / .tf.json: the proposal IS the terraform ------------------------
+
+    def _check_terraform(self, path: str, backend: str, *, raw: bool
+                         ) -> FileResult:
+        """One terraform CONFIGURATION file through the one HCL-to-claims path.
+
+        Fail-open like every other arm: an unreadable file, an unrecognized
+        shape or a reader that is not part of this checkout all land in an
+        honest ``unverified``, never a crash.
+        """
+        try:
+            report, state, candidate = self._terraform_report(path, backend,
+                                                              raw=raw)
+        except Exception as exc:            # noqa: BLE001 — the gate never raises
+            logger.debug("fail-open: terraform routing crashed on %s", path,
+                         exc_info=True)
+            report = GroundingReport()
+            report.backend = backend
+            report.add(Verdict(
+                "unverified", "document", path, 0,
+                f"{path}: grounding crashed ({type(exc).__name__}: {exc}) "
+                f"— nothing was checked"))
+            state, candidate = (), True
+        return self._file_result(path, report, candidate=candidate, state=state)
+
+    def _terraform_report(self, path: str, backend: str, *, raw: bool
+                          ) -> tuple[GroundingReport, tuple[Mapping[str, Any], ...],
+                                     bool]:
+        engine = _optional("engine")
+        facts = _optional("facts")
+        plan = _tf_module("plan")
+        missing = ("gcp_grounding.engine" if engine is None else
+                   "gcp_grounding.facts" if facts is None else
+                   "gcp_grounding.tfsource.plan" if plan is None else "")
+        if missing:
+            return self._note_only(path, backend,
+                                   _TF_ENGINE_ABSENT_NOTE.format(path=path,
+                                                                 missing=missing))
+        if raw:
+            triples, unresolved, note = self._read_hcl(path)
+        else:
+            triples, unresolved, note = self._read_tf_json(path, facts)
+        if triples is None:
+            return self._note_only(path, backend, note)
+
+        proposal = self._tf_proposal(engine, facts, plan, path, triples,
+                                     unresolved)
+        view = self._state_for(path)
+        if view is None:
+            # No current state configured: today's plain grounding, reached
+            # through the engine's OWN proposal stage so the `proposal:
+            # unresolved` wording and the downgrade rule have exactly one
+            # implementation rather than a second copy living here.
+            report = GroundingReport()
+            report.backend = backend
+            engine._stage_proposal(report, proposal, self.snapshot)
+            engine._downgrade_grounded(report, proposal)
+            if self.state_configured:
+                # Never silence, exactly as `_ground` does not: a configured
+                # source no module in this checkout can read is a smaller
+                # coverage than was asked for.
+                report.add(Verdict(
+                    "unverified", "state:source", path, 0,
+                    f"a current-state source was configured, but the discovery "
+                    f"modules are not part of this checkout - {path} was "
+                    f"grounded against the vocabulary alone and NOTHING was "
+                    f"compared against the estate"))
+            state: tuple[Mapping[str, Any], ...] = ()
+        else:
+            report, state = self._ground_with_state(path, view, backend,
+                                                    proposal=proposal)
+        if note:
+            report.add(Verdict("unverified", _UNRESOLVED_KIND, path, 0, note))
+        return report, state, True
+
+    def _note_only(self, path: str, backend: str, note: str
+                   ) -> tuple[GroundingReport, tuple[Mapping[str, Any], ...], bool]:
+        report = GroundingReport()
+        report.backend = backend
+        report.add(Verdict("unverified", "document", path, 0, note))
+        return report, (), True
+
+    def _read_tf_json(self, path: str, facts: Any
+                      ) -> tuple[Any, tuple[str, ...], str]:
+        """``.tf.json`` through ``json.load`` and NO parser at all.
+
+        Loaded through the one fail-open loader :func:`_ground_with_state`
+        already uses, so "not valid JSON" is phrased in exactly one place.
+        """
+        document, source, error = preflight._load_document(path)
+        if error is not None:
+            return None, (), f"{source}: {error} — nothing was checked"
+        return _tf_json_triples(document, facts), (), ""
+
+    def _read_hcl(self, path: str) -> tuple[Any, tuple[str, ...], str]:
+        """Raw ``.tf`` through :mod:`gcp_grounding.tfsource.hcl`.
+
+        The reader is resolved LAZILY — a checkout without the ``tfsource``
+        subpackage must degrade rather than fail — and reports an unresolved
+        path for the CONTAINING resource of every ``dynamic`` block and every
+        ``count``/``for_each``. The gate strips nothing itself: it REPORTS
+        those paths, and the engine's downgrade rule turns every ``grounded``
+        on the document into ``unverified``.
+        """
+        hcl = _tf_module("hcl")
+        if hcl is None:
+            return None, (), _HCL_ABSENT_NOTE.format(path=path)
+        if os.path.isdir(path):
+            triples, unresolved = hcl.parse_config_dir(path)
+        else:
+            triples, unresolved = hcl.parse_config_file(path)
+        return (triples,
+                tuple(unresolved) + (_HCL_SUBSET_PATH.format(path=path),),
+                _HCL_READ_NOTE.format(path=path))
+
+    @staticmethod
+    def _tf_proposal(engine: Any, facts: Any, plan: Any, path: str,
+                     triples: Iterable[tuple[str, str, Mapping[str, Any]]],
+                     unresolved: Iterable[str]) -> Any:
+        """ASSEMBLE THEN PREPARE, and it is normative in that order.
+
+        The synthetic plan document is built FIRST, from the raw block bodies,
+        with :func:`gcp_grounding.tfsource.plan.as_plan_document`; then
+        :func:`gcp_grounding.engine.prepare_proposal` is called EXACTLY ONCE on
+        the assembled plan. One call yields one :class:`~gcp_grounding.engine.
+        Proposal` whose ``unresolved`` tuple is single-sourced, so the
+        ``proposal:unresolved`` verdicts and the every-``grounded``-becomes-
+        ``unverified`` downgrade both key off the same tuple. Calling
+        ``prepare_proposal`` per block body instead would produce N throwaway
+        proposals whose ``unresolved`` tuples are free to be dropped while only
+        the sanitized documents are kept — and dropping them loses the
+        downgrade entirely, turning an interpolated firewall into a clean pass.
+
+        The PER-BODY pass here is the sanitize half only, and it exists so
+        every path can be RE-PREFIXED WITH ITS RESOURCE ADDRESS before the
+        final proposal is constructed: the tuples are UNIONED, re-prefixed, and
+        handed to the single ``prepare_proposal`` call as ``unknown_paths``, in
+        exactly the spelling
+        :meth:`gcp_grounding.tfsource.hcl.HclRead.unresolved_paths` uses, so
+        the two arms name the same attribute the same way and the set collapses
+        duplicates instead of double-reporting them.
+
+        The proposal is handed to the engine as a TERRAFORM-PLAN-kind proposal,
+        so ``tf_claims.terraform_plan_claims`` and every extractor registered
+        through ``registry.tf_extractors`` apply unchanged. There is never a
+        second extractor table.
+        """
+        objects = []
+        paths = {str(entry) for entry in unresolved}
+        for address, resource_type, values in triples:
+            sanitized, stripped = facts.strip_unresolved(values)
+            paths.update(f"{address}.{removed}" for removed in stripped)
+            objects.append(facts.TfObject(
+                address=address, type=resource_type,
+                name=address.rsplit(".", 1)[-1],
+                source=_HCL_PROPOSED, side="proposed", values=sanitized))
+        document = plan.as_plan_document(objects)
+        return engine.prepare_proposal(document, engine.TF_PLAN_KIND,
+                                       source=path,
+                                       unknown_paths=sorted(paths))
 
     def _ground(self, path: str, backend: str
                 ) -> tuple[GroundingReport, tuple[Mapping[str, Any], ...]]:
@@ -668,9 +1131,18 @@ class PolicyGroundingGate:
 
     # -- the three-input evaluation ------------------------------------------
 
-    def _ground_with_state(self, path: str, view: _StateView, backend: str
+    def _ground_with_state(self, path: str, view: _StateView, backend: str,
+                           proposal: Any = None
                            ) -> tuple[GroundingReport, tuple[Mapping[str, Any], ...]]:
-        """One file through the three-input engine: proposal, current, rules."""
+        """One file through the three-input engine: proposal, current, rules.
+
+        *proposal* is supplied ALREADY BUILT by the terraform arms, which
+        assemble a synthetic plan out of block bodies rather than grading the
+        file's own JSON; everything else about the run — the baseline, the
+        rules, the drift pass and the redaction boundary — is identical, so
+        terraform reaches the pair tier by the same road every other proposal
+        does.
+        """
         engine = _optional("engine")
         if engine is None:
             report = ground_policy(path, self.snapshot)
@@ -682,20 +1154,20 @@ class PolicyGroundingGate:
             self._attach_notes(report, view)
             return report, ()
 
-        # The same fail-open document loading `ground_policy` does, reached
-        # through the one loader rather than re-spelled: two copies of the
-        # "not valid JSON" phrasing is two messages that can drift apart.
-        document, source, error = preflight._load_document(path)
-        if error is not None:
-            report = GroundingReport()
-            report.backend = backend
-            report.add(Verdict("unverified", "document", source, 0,
-                               f"{source}: {error} — nothing was checked"))
-            self._attach_notes(report, view)
-            return report, ()
-
-        kind = detect_kind(document)
-        proposal = engine.prepare_proposal(document, kind, source=source)
+        if proposal is None:
+            # The same fail-open document loading `ground_policy` does, reached
+            # through the one loader rather than re-spelled: two copies of the
+            # "not valid JSON" phrasing is two messages that can drift apart.
+            document, source, error = preflight._load_document(path)
+            if error is not None:
+                report = GroundingReport()
+                report.backend = backend
+                report.add(Verdict("unverified", "document", source, 0,
+                                   f"{source}: {error} — nothing was checked"))
+                self._attach_notes(report, view)
+                return report, ()
+            kind = detect_kind(document)
+            proposal = engine.prepare_proposal(document, kind, source=source)
         settings = {"as_of": self._now.isoformat() if self._now is not None else None,
                     "drift": self._drift_mode(engine, view)}
         hints = self._hints(path, view)
