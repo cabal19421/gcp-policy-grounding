@@ -19,7 +19,8 @@ from gcp_grounding.claims import KINDS
 from gcp_grounding.preflight import DOCUMENT_KINDS, detect_kind
 from gcp_grounding.tf_claims import terraform_plan_claims
 from gcp_grounding.vpcsc_claims import (
-    DOCUMENT_EXTRACTORS, TF_EXTRACTORS, access_level_claims, perimeter_claims,
+    DOCUMENT_EXTRACTORS, TF_EXTRACTORS, _normalize_perimeter, _obj,
+    access_level_claims, perimeter_claims,
 )
 
 POLICIES = Path(__file__).parent / "fixtures" / "gcp" / "policies"
@@ -113,6 +114,32 @@ def test_rest_and_terraform_normalizations_agree():
         "service_name": "storage.googleapis.com",
         "method_selectors": [{"method": "google.storage.objects.get"}],
     }]
+
+
+def test_only_an_object_or_a_one_element_block_normalizes_to_a_config():
+    # MK-V05: a nested block is a REST bare object or the first element of a
+    # terraform block array, and ANYTHING ELSE is no readable block — never a
+    # value to index into and build a configuration out of.
+    block = {"resources": ["projects/123456"], "restricted_services": []}
+    assert _obj(block) is block
+    assert _obj([block]) is block
+
+    # A scalar, a truthy non-list, an empty array and a two-element array of
+    # non-objects all read as "nothing here", not as their first character or
+    # their first entry.
+    for value in ("see the other perimeter", 7, True, [],
+                  ["projects/123456", "projects/700700"]):
+        assert _obj(value) is None, value
+
+    # …so a `status` that is a string leaves the normalized perimeter with no
+    # configuration at all, and the checks abstain instead of differencing one
+    # that was invented out of a scalar.
+    drifted = _normalize_perimeter({"name": "accessPolicies/987/servicePerimeters/prod",
+                                    "status": "see the other perimeter"})
+    assert drifted["status"] is None
+    readable = _normalize_perimeter({"name": "accessPolicies/987/servicePerimeters/prod",
+                                     "status": [block]})
+    assert readable["status"]["resources"] == ["projects/123456"]
 
 
 # -- perimeter_ref only for referencing documents -----------------------------

@@ -91,6 +91,8 @@ EXPECTED_MODULES = frozenset({
     "gcp_grounding/fw_claims.py",
     "gcp_grounding/sec_domains.py",
     "gcp_grounding/tf_claims.py",
+    "gcp_grounding/vpcsc_claims.py",
+    "gcp_grounding/vpcsc_checks.py",
 })
 
 #: The measured inventory at the moment the lint landed. The allowlist may only
