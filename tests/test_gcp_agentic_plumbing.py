@@ -330,6 +330,8 @@ def test_subprocess_budget_teardown_fails_past_a_tiny_ceiling():
 
 def test_subprocess_budget_default_ceiling_is_not_exceeded_by_a_quiet_run():
     quiet = SubprocessBudget()
-    assert quiet.MAX_SUBPROCESS_SPAWNS == 260
+    # Re-derived for the integrated suite (nineteen spawn-using modules measure
+    # 408 spawns); see SubprocessBudget.MAX_SUBPROCESS_SPAWNS for the derivation.
+    assert quiet.MAX_SUBPROCESS_SPAWNS == 450
     quiet.increment("hookrunner")
     quiet.check()  # well under the ceiling: no assertion

@@ -127,8 +127,13 @@ def test_the_registry_discovers_both_checks():
     # Registered by module-level table only — no edit to a shared file.
     assert check_open_exposure in registry.claim_checks("firewall_rule")
     assert registry.pair_check("firewall_rule") is check_packet_set_pair
-    # And nothing else: this module owns no document kind and no tf resource.
-    assert registry.document_checks() == ()
+    # And nothing else: THIS module owns no document kind and no tf resource.
+    # Asserted per owning module rather than as "the registry is empty", because
+    # the integrated tree has other domain modules (org_checks, hfw_checks,
+    # vpcsc_checks, armor_checks, iam_checks, fw_estate) each registering their
+    # own whole-document check; fw_checks contributing one would still go red.
+    assert [fn for fn in registry.document_checks()
+            if fn.__module__ == "gcp_grounding.fw_checks"] == []
 
 
 def _egress_rule() -> dict:

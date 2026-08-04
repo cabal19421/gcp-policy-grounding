@@ -44,7 +44,8 @@ tfstate is permitted: a case module needing a variant derives it from this base
 through :func:`variant`.
 
 SUBPROCESS BUDGET. The agentic plumbing enforces a session-wide ceiling of
-``budget.SubprocessBudget.MAX_SUBPROCESS_SPAWNS`` (260) spawns. THIS DOCUMENT
+``budget.SubprocessBudget.MAX_SUBPROCESS_SPAWNS`` (450 in the integrated
+tree; 260 on the branch this document was written on) spawns. THIS DOCUMENT
 SPENDS AT MOST 50 OF THEM: about 14 in the blocking cases, about 18 in the
 benign cases including the two promise arms, about 8 in the drift cases, about 6
 in the source-reconciliation cases and about 4 here — of which

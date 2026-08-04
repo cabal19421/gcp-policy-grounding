@@ -1081,12 +1081,30 @@ def scope_verdict(source: Any, category: str, *, rule: str | None = None,
 #: and the snapshot names its categories in the plural; this mapping is what
 #: makes ``drift.postpass`` — which must re-examine every existence verdict
 #: against the category it was decided from — possible at all.
+#:
+#: EVERY kind in :data:`gcp_grounding.reasoner.EXISTENCE_KINDS` must appear —
+#: the five original vocabularies and the ten estate kinds the reasoner grew —
+#: because an existence verdict whose kind is missing here is one
+#: ``drift.postpass`` cannot re-examine, i.e. one that would keep a clean
+#: ``grounded`` over a disputed or stale fact. ``perimeter`` /
+#: ``firewall_policy`` / ``security_policy`` / ``hierarchy_node`` are the record
+#: tables' singulars, each mapping to the table it was decided from.
 VERDICT_KIND_CATEGORIES = {
     "role": "roles",
     "permission": "permissions",
     "principal": "principals",
     "constraint": "constraints",
     "resource_type": "resource_types",
+    "network": "networks",
+    "subnetwork": "subnetworks",
+    "network_tag": "network_tags",
+    "service_account": "service_accounts",
+    "access_level": "access_levels",
+    "restricted_service": "restricted_services",
+    "perimeter": "vpc_sc_perimeters",
+    "firewall_policy": "hierarchical_firewall_policies",
+    "security_policy": "cloud_armor_policies",
+    "hierarchy_node": "resource_hierarchy",
 }
 
 

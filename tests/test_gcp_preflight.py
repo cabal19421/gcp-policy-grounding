@@ -18,7 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from gcp_grounding import preflight
+from gcp_grounding import preflight, reasoner, registry
 from gcp_grounding.core.solver import get_solver
 from gcp_grounding.knowledge import GcpSnapshot
 from gcp_grounding.preflight import DOCUMENT_KINDS, detect_kind, ground_policy
@@ -371,23 +371,51 @@ def test_unrecognized_baseline_shape_is_unverified_not_contradicted(snap):
 # -- the fail-open paths no bundle reaches ------------------------------------
 
 
+def only(report, kind):
+    """The one verdict of *kind* in *report*, asserting it really is the one.
+
+    In the integrated tree a registered whole-document check may add its OWN
+    honest abstention to a document these tests hand the gate — for an IAM
+    policy, ``iam_checks.check_escalation`` says the escalation classes were not
+    decided because no role claim was extracted. That is a second ``unverified``
+    on a different kind, not a second answer to the question under test, so the
+    channel is selected by kind and the surrounding tests still assert that
+    NOTHING here decides: every other verdict must be an abstention too.
+    """
+    matching = [v for v in report.verdicts if v.kind == kind]
+    assert len(matching) == 1, [(v.status, v.kind, v.target) for v in report.verdicts]
+    assert {v.status for v in report.verdicts} == {"unverified"}, (
+        [(v.status, v.kind, v.target) for v in report.verdicts])
+    return matching[0]
+
+
+
 def test_claim_kind_no_layer_decides_is_unverified_naming_the_kind(snap, monkeypatch):
-    # Defensive-only in this checkout: no extractor emits a kind outside the
-    # existence kinds plus 'cel'/'constraint_value'. The module promises every
-    # extracted claim receives exactly one verdict, so a stub claim (the layers
-    # duck-type them: kind/value/location) is the honest way to reach it.
-    stub = SimpleNamespace(kind="network_tag_ref", value="web-tier",
+    # Defensive-only: the module promises every extracted claim receives at
+    # least one verdict, so a stub claim (the layers duck-type them:
+    # kind/value/location) is the honest way to reach the no-layer arm.
+    #
+    # The kind must be one NO layer decides. `network_tag_ref` was that kind on
+    # the branch this test came from; in the integrated tree the reasoner decides
+    # it (it is an EXISTENCE_KIND now and comes back as kind `network_tag`), so
+    # the arm was no longer being reached at all. The premise is now asserted
+    # rather than assumed, which is what stops this test going vacuous the next
+    # time a layer grows.
+    undecided = "unmodelled_principal"
+    assert undecided not in reasoner.EXISTENCE_KINDS
+    assert undecided not in ("cel", "constraint_value")
+    assert registry.claim_checks(undecided) == ()
+    stub = SimpleNamespace(kind=undecided, value="web-tier",
                            location="bindings[0].condition.expression")
     monkeypatch.setattr(preflight, "iam_policy_claims", lambda doc: [stub])
     report = ground_policy({"bindings": [{"role": "roles/viewer",
                                           "members": ["user:alice@acme.example"]}]},
                            snap)
     assert report.ok  # an undecided kind is ignorance, not a gate failure
-    [v] = report.verdicts
-    assert (v.status, v.kind, v.target) == ("unverified", "network_tag_ref",
-                                            "web-tier")
+    v = only(report, undecided)
+    assert (v.status, v.kind, v.target) == ("unverified", undecided, "web-tier")
     assert "no offline check is wired" in v.message
-    assert "network_tag_ref" in v.message and stub.location in v.message
+    assert undecided in v.message and stub.location in v.message
     assert_no_line_numbers(report)
 
 
@@ -415,7 +443,7 @@ def test_claim_extraction_raising_fails_open_to_unverified(snap, monkeypatch):
                                           "members": ["user:alice@acme.example"]}]},
                            snap)
     assert report.ok  # a broken extractor is not a hallucination
-    [v] = report.verdicts
+    v = only(report, "document")
     assert (v.status, v.kind, v.target) == ("unverified", "document",
                                             "<policy object>")
     assert "iam_policy claim extraction failed" in v.message
@@ -443,7 +471,11 @@ def test_claim_extraction_failure_logs_its_traceback(snap, monkeypatch, caplog):
     # truthiness — not `is not None` — is what says the traceback is on it.
     assert record.exc_info, record.exc_info
     assert record.exc_info[0] is TypeError
-    assert [v.status for v in report.verdicts] == ["unverified"]
+    # Nothing decided: the extraction failure abstains on the document channel,
+    # and any registered document check that also spoke abstained too.
+    assert {v.status for v in report.verdicts} == {"unverified"}
+    assert [v.status for v in report.verdicts
+            if v.kind == "document"] == ["unverified"]
 
 
 def test_unreadable_baseline_is_unverified_not_contradicted(snap, tmp_path):
