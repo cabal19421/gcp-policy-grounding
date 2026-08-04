@@ -1,0 +1,2045 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "planned_values": {
+    "outputs": {
+      "etl_runner_private_key": {
+        "sensitive": true,
+        "type": "string",
+        "value": "FIXTURE-SECRET-DO-NOT-LEAK"
+      },
+      "vpc_main_self_link": {
+        "sensitive": false,
+        "type": "string",
+        "value": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/networks/vpc-main"
+      }
+    },
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_access_context_manager_access_level.trusted-corp",
+          "mode": "managed",
+          "type": "google_access_context_manager_access_level",
+          "name": "trusted-corp",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "basic": [
+              {
+                "combining_function": "AND",
+                "conditions": [
+                  {
+                    "device_policy": [],
+                    "ip_subnetworks": [
+                      "203.0.113.0/24"
+                    ],
+                    "members": [],
+                    "negate": false,
+                    "regions": [],
+                    "required_access_levels": []
+                  }
+                ]
+              }
+            ],
+            "custom": [],
+            "id": "accessPolicies/987/accessLevels/trusted_corp",
+            "name": "accessPolicies/987/accessLevels/trusted_corp",
+            "parent": "accessPolicies/987",
+            "timeouts": null,
+            "title": "trusted_corp"
+          },
+          "sensitive_values": {
+            "basic": [
+              {}
+            ],
+            "custom": []
+          }
+        },
+        {
+          "address": "google_access_context_manager_service_perimeter.prod",
+          "mode": "managed",
+          "type": "google_access_context_manager_service_perimeter",
+          "name": "prod",
+          "provider_name": "registry.terraform.io/hashicorp/google-beta",
+          "schema_version": 0,
+          "values": {
+            "create_time": "2026-01-04T10:02:15.552131Z",
+            "id": "accessPolicies/987/servicePerimeters/prod",
+            "name": "accessPolicies/987/servicePerimeters/prod",
+            "parent": "accessPolicies/987",
+            "perimeter_type": "PERIMETER_TYPE_REGULAR",
+            "spec": [],
+            "status": [
+              {
+                "access_levels": [
+                  "accessPolicies/987/accessLevels/trusted_corp"
+                ],
+                "egress_policies": [
+                  {
+                    "egress_from": [
+                      {
+                        "identities": [
+                          "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com"
+                        ],
+                        "identity_type": null
+                      }
+                    ],
+                    "egress_to": [
+                      {
+                        "operations": [
+                          {
+                            "method_selectors": [
+                              {
+                                "method": "*"
+                              }
+                            ],
+                            "service_name": "storage.googleapis.com"
+                          }
+                        ],
+                        "resources": [
+                          "*"
+                        ]
+                      }
+                    ]
+                  }
+                ],
+                "ingress_policies": [],
+                "resources": [
+                  "projects/123456"
+                ],
+                "restricted_services": [
+                  "storage.googleapis.com",
+                  "bigquery.googleapis.com"
+                ]
+              }
+            ],
+            "timeouts": null,
+            "title": "prod",
+            "update_time": "2026-01-04T10:02:15.552131Z",
+            "use_explicit_dry_run_spec": false
+          },
+          "sensitive_values": {
+            "spec": [],
+            "status": [
+              {}
+            ]
+          }
+        },
+        {
+          "address": "google_compute_firewall.allow-db-internal",
+          "mode": "managed",
+          "type": "google_compute_firewall",
+          "name": "allow-db-internal",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 1,
+          "values": {
+            "allow": [
+              {
+                "protocol": "tcp"
+              }
+            ],
+            "destination_ranges": [],
+            "direction": "INGRESS",
+            "disabled": false,
+            "log_config": [],
+            "name": "allow-db-internal",
+            "network": "projects/acme-prod/global/networks/vpc-main",
+            "priority": 1100,
+            "project": "acme-prod",
+            "source_ranges": [
+              "10.0.0.0/8"
+            ],
+            "source_service_accounts": [],
+            "source_tags": [],
+            "target_service_accounts": [],
+            "target_tags": [
+              "db"
+            ],
+            "timeouts": null
+          },
+          "sensitive_values": {
+            "allow": [
+              {}
+            ],
+            "log_config": []
+          }
+        },
+        {
+          "address": "google_compute_firewall.allow-internal",
+          "mode": "managed",
+          "type": "google_compute_firewall",
+          "name": "allow-internal",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 1,
+          "values": {
+            "allow": [
+              {
+                "ports": [
+                  "0-65535"
+                ],
+                "protocol": "tcp"
+              }
+            ],
+            "creation_timestamp": "2026-01-04T02:11:47.884-08:00",
+            "destination_ranges": [],
+            "direction": "INGRESS",
+            "disabled": false,
+            "id": "projects/acme-prod/global/firewalls/allow-internal",
+            "log_config": [],
+            "name": "allow-internal",
+            "network": "projects/acme-prod/global/networks/vpc-main",
+            "priority": 1000,
+            "project": "acme-prod",
+            "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/firewalls/allow-internal",
+            "source_ranges": [
+              "10.0.0.0/8"
+            ],
+            "source_service_accounts": [],
+            "source_tags": [],
+            "target_service_accounts": [],
+            "target_tags": [],
+            "timeouts": null
+          },
+          "sensitive_values": {
+            "allow": [
+              {}
+            ],
+            "log_config": []
+          }
+        },
+        {
+          "address": "google_compute_firewall_policy.fp-baseline",
+          "mode": "managed",
+          "type": "google_compute_firewall_policy",
+          "name": "fp-baseline",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "creation_timestamp": "2026-01-04T02:09:03.114-08:00",
+            "fingerprint": "0lFTkVzUV0M=",
+            "id": "locations/global/firewallPolicies/fp-baseline",
+            "name": "fp-baseline",
+            "parent": "organizations/1",
+            "rule_tuple_count": 2,
+            "self_link": "https://www.googleapis.com/compute/v1/locations/global/firewallPolicies/fp-baseline",
+            "self_link_with_id": "https://www.googleapis.com/compute/v1/locations/global/firewallPolicies/fp-baseline",
+            "short_name": "fp-baseline",
+            "timeouts": null
+          },
+          "sensitive_values": {}
+        },
+        {
+          "address": "google_compute_firewall_policy_association.fp-baseline-org",
+          "mode": "managed",
+          "type": "google_compute_firewall_policy_association",
+          "name": "fp-baseline-org",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "attachment_target": "organizations/1",
+            "firewall_policy": "fp-baseline",
+            "id": "locations/global/firewallPolicies/fp-baseline/associations/fp-baseline-org",
+            "name": "fp-baseline-org",
+            "short_name": "fp-baseline",
+            "timeouts": null
+          },
+          "sensitive_values": {}
+        },
+        {
+          "address": "google_compute_firewall_policy_rule.deny-rdp",
+          "mode": "managed",
+          "type": "google_compute_firewall_policy_rule",
+          "name": "deny-rdp",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "action": "deny",
+            "direction": "INGRESS",
+            "disabled": false,
+            "enable_logging": false,
+            "firewall_policy": "fp-baseline",
+            "id": "locations/global/firewallPolicies/fp-baseline/rules/100",
+            "kind": "compute#firewallPolicyRule",
+            "match": [
+              {
+                "dest_ip_ranges": [],
+                "layer4_configs": [
+                  {
+                    "ip_protocol": "tcp",
+                    "ports": [
+                      "3389"
+                    ]
+                  }
+                ],
+                "src_ip_ranges": [
+                  "0.0.0.0/0"
+                ]
+              }
+            ],
+            "priority": 100,
+            "rule_tuple_count": 2,
+            "target_resources": [],
+            "target_secure_tags": [],
+            "target_service_accounts": [],
+            "timeouts": null
+          },
+          "sensitive_values": {
+            "match": [
+              {}
+            ]
+          }
+        },
+        {
+          "address": "google_compute_firewall_policy_rule.goto-next",
+          "mode": "managed",
+          "type": "google_compute_firewall_policy_rule",
+          "name": "goto-next",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "action": "goto_next",
+            "direction": "INGRESS",
+            "disabled": false,
+            "enable_logging": false,
+            "firewall_policy": "fp-baseline",
+            "id": "locations/global/firewallPolicies/fp-baseline/rules/2000",
+            "kind": "compute#firewallPolicyRule",
+            "match": [
+              {
+                "dest_ip_ranges": [],
+                "layer4_configs": [],
+                "src_ip_ranges": [
+                  "0.0.0.0/0"
+                ]
+              }
+            ],
+            "priority": 2000,
+            "rule_tuple_count": 1,
+            "target_resources": [],
+            "target_secure_tags": [],
+            "target_service_accounts": [],
+            "timeouts": null
+          },
+          "sensitive_values": {
+            "match": [
+              {}
+            ]
+          }
+        },
+        {
+          "address": "google_compute_security_policy.edge-waf",
+          "mode": "managed",
+          "type": "google_compute_security_policy",
+          "name": "edge-waf",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "adaptive_protection_config": [],
+            "advanced_options_config": [],
+            "description": "Edge WAF for acme-prod",
+            "fingerprint": "Yj5nQ2VwR3M=",
+            "id": "projects/acme-prod/global/securityPolicies/edge-waf",
+            "name": "edge-waf",
+            "project": "acme-prod",
+            "recaptcha_options_config": [],
+            "rule": [
+              {
+                "action": "deny(403)",
+                "match": [
+                  {
+                    "config": [
+                      {
+                        "src_ip_ranges": [
+                          "203.0.113.0/24"
+                        ]
+                      }
+                    ],
+                    "expr": [],
+                    "versioned_expr": "SRC_IPS_V1"
+                  }
+                ],
+                "preview": false,
+                "priority": 1000
+              }
+            ],
+            "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/securityPolicies/edge-waf",
+            "timeouts": null,
+            "type": "CLOUD_ARMOR"
+          },
+          "sensitive_values": {
+            "rule": [
+              {}
+            ]
+          }
+        },
+        {
+          "address": "google_compute_security_policy_rule.edge-waf-default",
+          "mode": "managed",
+          "type": "google_compute_security_policy_rule",
+          "name": "edge-waf-default",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "action": "allow",
+            "id": "projects/acme-prod/global/securityPolicies/edge-waf/priority/2147483647",
+            "match": [
+              {
+                "config": [
+                  {
+                    "src_ip_ranges": [
+                      "*"
+                    ]
+                  }
+                ],
+                "expr": [],
+                "versioned_expr": "SRC_IPS_V1"
+              }
+            ],
+            "preview": false,
+            "priority": 2147483647,
+            "project": "acme-prod",
+            "security_policy": "edge-waf",
+            "timeouts": null
+          },
+          "sensitive_values": {
+            "match": [
+              {}
+            ]
+          }
+        },
+        {
+          "address": "google_org_policy_policy.disable-serial-port",
+          "mode": "managed",
+          "type": "google_org_policy_policy",
+          "name": "disable-serial-port",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "dry_run_spec": [],
+            "id": "projects/acme-prod/policies/compute.disableSerialPortAccess",
+            "name": "projects/acme-prod/policies/compute.disableSerialPortAccess",
+            "parent": "projects/acme-prod",
+            "spec": [
+              {
+                "etag": "CO2vqLwGEIC1lZgD",
+                "inherit_from_parent": false,
+                "reset": false,
+                "rules": [
+                  {
+                    "allow_all": null,
+                    "condition": [],
+                    "deny_all": null,
+                    "enforce": "TRUE",
+                    "values": []
+                  }
+                ],
+                "update_time": "2026-01-04T10:03:41.002Z"
+              }
+            ],
+            "timeouts": null
+          },
+          "sensitive_values": {
+            "dry_run_spec": [],
+            "spec": [
+              {}
+            ]
+          }
+        },
+        {
+          "address": "google_org_policy_policy.member-domains",
+          "mode": "managed",
+          "type": "google_org_policy_policy",
+          "name": "member-domains",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "dry_run_spec": [],
+            "id": "projects/acme-prod/policies/iam.allowedPolicyMemberDomains",
+            "name": "projects/acme-prod/policies/iam.allowedPolicyMemberDomains",
+            "parent": "projects/acme-prod",
+            "spec": [
+              {
+                "etag": "CO2vqLwGEIC1lZgD",
+                "inherit_from_parent": false,
+                "reset": false,
+                "rules": [
+                  {
+                    "allow_all": null,
+                    "condition": [],
+                    "deny_all": null,
+                    "enforce": null,
+                    "values": [
+                      {
+                        "allowed_values": [
+                          "C01abcdef"
+                        ],
+                        "denied_values": []
+                      }
+                    ]
+                  }
+                ],
+                "update_time": "2026-01-04T10:03:41.002Z"
+              }
+            ],
+            "timeouts": null
+          },
+          "sensitive_values": {
+            "dry_run_spec": [],
+            "spec": [
+              {}
+            ]
+          }
+        },
+        {
+          "address": "google_org_policy_policy.vm-external-ip",
+          "mode": "managed",
+          "type": "google_org_policy_policy",
+          "name": "vm-external-ip",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "dry_run_spec": [],
+            "id": "projects/acme-prod/policies/compute.vmExternalIpAccess",
+            "name": "projects/acme-prod/policies/compute.vmExternalIpAccess",
+            "parent": "projects/acme-prod",
+            "spec": [
+              {
+                "etag": "CO2vqLwGEIC1lZgD",
+                "inherit_from_parent": false,
+                "reset": false,
+                "rules": [
+                  {
+                    "allow_all": null,
+                    "condition": [],
+                    "deny_all": null,
+                    "enforce": null,
+                    "values": [
+                      {
+                        "allowed_values": [],
+                        "denied_values": [
+                          "projects/acme-prod/zones/us-central1-a/instances/legacy-box"
+                        ]
+                      }
+                    ]
+                  }
+                ],
+                "update_time": "2026-01-04T10:03:41.002Z"
+              }
+            ],
+            "timeouts": null
+          },
+          "sensitive_values": {
+            "dry_run_spec": [],
+            "spec": [
+              {}
+            ]
+          }
+        },
+        {
+          "address": "google_project_iam_binding.owner",
+          "mode": "managed",
+          "type": "google_project_iam_binding",
+          "name": "owner",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "condition": [],
+            "etag": "BwYcQ0hSbW8=",
+            "id": "acme-prod/roles/owner",
+            "members": [
+              "user:alice@acme.example"
+            ],
+            "project": "acme-prod",
+            "role": "roles/owner"
+          },
+          "sensitive_values": {
+            "condition": [],
+            "members": [
+              false
+            ]
+          }
+        },
+        {
+          "address": "google_project_iam_binding.security-admin",
+          "mode": "managed",
+          "type": "google_project_iam_binding",
+          "name": "security-admin",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "condition": [],
+            "etag": "BwYcQ0hSbW8=",
+            "id": "acme-prod/roles/iam.securityAdmin",
+            "members": [
+              "serviceAccount:ci-deployer@acme-prod.iam.gserviceaccount.com"
+            ],
+            "project": "acme-prod",
+            "role": "roles/iam.securityAdmin"
+          },
+          "sensitive_values": {
+            "condition": [],
+            "members": [
+              false
+            ]
+          }
+        },
+        {
+          "address": "google_service_account.etl-runner",
+          "mode": "managed",
+          "type": "google_service_account",
+          "name": "etl-runner",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "account_id": "etl-runner",
+            "disabled": false,
+            "display_name": "ETL runner",
+            "email": "etl-runner@acme-prod.iam.gserviceaccount.com",
+            "id": "projects/acme-prod/serviceAccounts/etl-runner@acme-prod.iam.gserviceaccount.com",
+            "kms_key_name": "projects/acme-prod/locations/us-central1/keyRings/tf-state/cryptoKeys/service-account-keys",
+            "member": "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com",
+            "name": "projects/acme-prod/serviceAccounts/etl-runner@acme-prod.iam.gserviceaccount.com",
+            "password": "FIXTURE-SECRET-BY-NAME",
+            "private_key": "FIXTURE-PLAN-SECRET",
+            "project": "acme-prod",
+            "unique_id": "104729518293746501827"
+          },
+          "sensitive_values": {
+            "password": false,
+            "private_key": true
+          }
+        },
+        {
+          "address": "google_sql_database_instance.legacy-reporting",
+          "mode": "managed",
+          "type": "google_sql_database_instance",
+          "name": "legacy-reporting",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 1,
+          "values": {
+            "database_version": "POSTGRES_15",
+            "deletion_protection": true,
+            "id": "legacy-reporting",
+            "name": "legacy-reporting",
+            "project": "acme-prod",
+            "region": "us-central1",
+            "root_password": "FIXTURE-PLAN-SECRET",
+            "settings": [
+              {
+                "availability_type": "ZONAL",
+                "disk_size": 20,
+                "tier": "db-custom-2-7680"
+              }
+            ],
+            "timeouts": null
+          },
+          "sensitive_values": {
+            "root_password": true,
+            "settings": [
+              {}
+            ]
+          }
+        }
+      ],
+      "child_modules": [
+        {
+          "address": "module.net",
+          "resources": [
+            {
+              "address": "module.net.google_compute_firewall.allow-health-checks",
+              "mode": "managed",
+              "type": "google_compute_firewall",
+              "name": "allow-health-checks",
+              "provider_name": "registry.terraform.io/hashicorp/google",
+              "schema_version": 1,
+              "values": {
+                "allow": [],
+                "creation_timestamp": "2026-01-04T02:11:47.884-08:00",
+                "destination_ranges": [],
+                "direction": "INGRESS",
+                "disabled": false,
+                "id": "projects/acme-prod/global/firewalls/allow-health-checks",
+                "log_config": [],
+                "name": "allow-health-checks",
+                "network": "projects/acme-prod/global/networks/vpc-main",
+                "priority": 1000,
+                "project": "acme-prod",
+                "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/firewalls/allow-health-checks",
+                "source_ranges": [
+                  "35.191.0.0/16",
+                  "130.211.0.0/22"
+                ],
+                "source_service_accounts": [],
+                "source_tags": [],
+                "target_service_accounts": [],
+                "target_tags": [
+                  "web"
+                ],
+                "timeouts": null
+              },
+              "sensitive_values": {
+                "allow": [],
+                "log_config": []
+              }
+            },
+            {
+              "address": "module.net.google_compute_firewall.allow-iap-ssh[\"prod\"]",
+              "mode": "managed",
+              "type": "google_compute_firewall",
+              "name": "allow-iap-ssh",
+              "index": "prod",
+              "provider_name": "registry.terraform.io/hashicorp/google",
+              "schema_version": 1,
+              "values": {
+                "allow": [
+                  {
+                    "ports": [
+                      "22"
+                    ],
+                    "protocol": "tcp"
+                  }
+                ],
+                "creation_timestamp": "2026-01-04T02:11:47.884-08:00",
+                "destination_ranges": [],
+                "direction": "INGRESS",
+                "disabled": false,
+                "id": "projects/acme-prod/global/firewalls/allow-iap-ssh",
+                "log_config": [],
+                "name": "allow-iap-ssh",
+                "network": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/networks/vpc-main",
+                "priority": 800,
+                "project": "acme-prod",
+                "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/firewalls/allow-iap-ssh",
+                "source_ranges": [
+                  "35.235.240.0/20"
+                ],
+                "source_service_accounts": [],
+                "source_tags": [],
+                "target_service_accounts": [],
+                "target_tags": [],
+                "timeouts": null
+              },
+              "sensitive_values": {
+                "allow": [
+                  {}
+                ],
+                "log_config": []
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "resource_drift": [
+    {
+      "address": "module.net.google_compute_firewall.allow-iap-ssh[\"prod\"]",
+      "module_address": "module.net",
+      "mode": "managed",
+      "type": "google_compute_firewall",
+      "name": "allow-iap-ssh",
+      "index": "prod",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "allow": [
+            {
+              "ports": [
+                "22"
+              ],
+              "protocol": "tcp"
+            }
+          ],
+          "creation_timestamp": "2026-01-04T02:11:47.884-08:00",
+          "destination_ranges": [],
+          "direction": "INGRESS",
+          "disabled": false,
+          "id": "projects/acme-prod/global/firewalls/allow-iap-ssh",
+          "log_config": [],
+          "name": "allow-iap-ssh",
+          "network": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/networks/vpc-main",
+          "priority": 850,
+          "project": "acme-prod",
+          "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/firewalls/allow-iap-ssh",
+          "source_ranges": [
+            "35.235.240.0/20"
+          ],
+          "source_service_accounts": [],
+          "source_tags": [],
+          "target_service_accounts": [],
+          "target_tags": [],
+          "timeouts": null
+        },
+        "after": {
+          "allow": [
+            {
+              "ports": [
+                "22"
+              ],
+              "protocol": "tcp"
+            }
+          ],
+          "creation_timestamp": "2026-01-04T02:11:47.884-08:00",
+          "destination_ranges": [],
+          "direction": "INGRESS",
+          "disabled": false,
+          "id": "projects/acme-prod/global/firewalls/allow-iap-ssh",
+          "log_config": [],
+          "name": "allow-iap-ssh",
+          "network": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/networks/vpc-main",
+          "priority": 800,
+          "project": "acme-prod",
+          "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/firewalls/allow-iap-ssh",
+          "source_ranges": [
+            "35.235.240.0/20"
+          ],
+          "source_service_accounts": [],
+          "source_tags": [],
+          "target_service_accounts": [],
+          "target_tags": [],
+          "timeouts": null
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "allow": [
+            {}
+          ],
+          "log_config": []
+        },
+        "after_sensitive": {
+          "allow": [
+            {}
+          ],
+          "log_config": []
+        }
+      }
+    }
+  ],
+  "resource_changes": [
+    {
+      "address": "google_compute_firewall.allow-internal",
+      "mode": "managed",
+      "type": "google_compute_firewall",
+      "name": "allow-internal",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": [
+          "no-op"
+        ],
+        "before": {
+          "allow": [
+            {
+              "ports": [
+                "0-65535"
+              ],
+              "protocol": "tcp"
+            }
+          ],
+          "creation_timestamp": "2026-01-04T02:11:47.884-08:00",
+          "destination_ranges": [],
+          "direction": "INGRESS",
+          "disabled": false,
+          "id": "projects/acme-prod/global/firewalls/allow-internal",
+          "log_config": [],
+          "name": "allow-internal",
+          "network": "projects/acme-prod/global/networks/vpc-main",
+          "priority": 1000,
+          "project": "acme-prod",
+          "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/firewalls/allow-internal",
+          "source_ranges": [
+            "10.0.0.0/8"
+          ],
+          "source_service_accounts": [],
+          "source_tags": [],
+          "target_service_accounts": [],
+          "target_tags": [],
+          "timeouts": null
+        },
+        "after": {
+          "allow": [
+            {
+              "ports": [
+                "0-65535"
+              ],
+              "protocol": "tcp"
+            }
+          ],
+          "creation_timestamp": "2026-01-04T02:11:47.884-08:00",
+          "destination_ranges": [],
+          "direction": "INGRESS",
+          "disabled": false,
+          "id": "projects/acme-prod/global/firewalls/allow-internal",
+          "log_config": [],
+          "name": "allow-internal",
+          "network": "projects/acme-prod/global/networks/vpc-main",
+          "priority": 1000,
+          "project": "acme-prod",
+          "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/firewalls/allow-internal",
+          "source_ranges": [
+            "10.0.0.0/8"
+          ],
+          "source_service_accounts": [],
+          "source_tags": [],
+          "target_service_accounts": [],
+          "target_tags": [],
+          "timeouts": null
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "allow": [
+            {}
+          ],
+          "log_config": []
+        },
+        "after_sensitive": {
+          "allow": [
+            {}
+          ],
+          "log_config": []
+        }
+      }
+    },
+    {
+      "address": "google_compute_firewall.allow-db-internal",
+      "mode": "managed",
+      "type": "google_compute_firewall",
+      "name": "allow-db-internal",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "allow": [
+            {
+              "protocol": "tcp"
+            }
+          ],
+          "destination_ranges": [],
+          "direction": "INGRESS",
+          "disabled": false,
+          "log_config": [],
+          "name": "allow-db-internal",
+          "network": "projects/acme-prod/global/networks/vpc-main",
+          "priority": 1100,
+          "project": "acme-prod",
+          "source_ranges": [
+            "10.0.0.0/8"
+          ],
+          "source_service_accounts": [],
+          "source_tags": [],
+          "target_service_accounts": [],
+          "target_tags": [
+            "db"
+          ],
+          "timeouts": null
+        },
+        "after_unknown": {
+          "allow": [
+            {
+              "ports": true,
+              "protocol": false
+            }
+          ],
+          "destination_ranges": false,
+          "id": true,
+          "log_config": [],
+          "self_link": true,
+          "source_ranges": [
+            false
+          ],
+          "source_service_accounts": false,
+          "source_tags": false,
+          "target_service_accounts": false,
+          "target_tags": [
+            false
+          ]
+        },
+        "before_sensitive": false,
+        "after_sensitive": {
+          "allow": [
+            {}
+          ],
+          "log_config": []
+        }
+      }
+    },
+    {
+      "address": "google_compute_firewall.deny-ssh-external[0]",
+      "mode": "managed",
+      "type": "google_compute_firewall",
+      "name": "deny-ssh-external",
+      "index": 0,
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "creation_timestamp": "2026-01-04T02:11:47.884-08:00",
+          "deny": [
+            {
+              "ports": [
+                "22"
+              ],
+              "protocol": "tcp"
+            }
+          ],
+          "destination_ranges": [],
+          "direction": "INGRESS",
+          "disabled": false,
+          "id": "projects/acme-prod/global/firewalls/deny-ssh-external",
+          "log_config": [],
+          "name": "deny-ssh-external",
+          "network": "projects/acme-prod/global/networks/vpc-main",
+          "priority": 900,
+          "project": "acme-prod",
+          "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/firewalls/deny-ssh-external",
+          "source_ranges": [
+            "0.0.0.0/0"
+          ],
+          "source_service_accounts": [],
+          "source_tags": [],
+          "target_service_accounts": [],
+          "target_tags": [],
+          "timeouts": null
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {
+          "deny": [
+            {}
+          ],
+          "log_config": []
+        },
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "google_compute_security_policy.edge-waf",
+      "mode": "managed",
+      "type": "google_compute_security_policy",
+      "name": "edge-waf",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "adaptive_protection_config": [],
+          "advanced_options_config": [],
+          "fingerprint": "Yj5nQ2VwR3M=",
+          "id": "projects/acme-prod/global/securityPolicies/edge-waf",
+          "name": "edge-waf",
+          "project": "acme-prod",
+          "recaptcha_options_config": [],
+          "rule": [
+            {
+              "action": "deny(403)",
+              "match": [
+                {
+                  "config": [
+                    {
+                      "src_ip_ranges": [
+                        "203.0.113.0/24"
+                      ]
+                    }
+                  ],
+                  "expr": [],
+                  "versioned_expr": "SRC_IPS_V1"
+                }
+              ],
+              "preview": false,
+              "priority": 1000
+            }
+          ],
+          "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/securityPolicies/edge-waf",
+          "timeouts": null,
+          "type": "CLOUD_ARMOR"
+        },
+        "after": {
+          "adaptive_protection_config": [],
+          "advanced_options_config": [],
+          "description": "Edge WAF for acme-prod",
+          "fingerprint": "Yj5nQ2VwR3M=",
+          "id": "projects/acme-prod/global/securityPolicies/edge-waf",
+          "name": "edge-waf",
+          "project": "acme-prod",
+          "recaptcha_options_config": [],
+          "rule": [
+            {
+              "action": "deny(403)",
+              "match": [
+                {
+                  "config": [
+                    {
+                      "src_ip_ranges": [
+                        "203.0.113.0/24"
+                      ]
+                    }
+                  ],
+                  "expr": [],
+                  "versioned_expr": "SRC_IPS_V1"
+                }
+              ],
+              "preview": false,
+              "priority": 1000
+            }
+          ],
+          "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/securityPolicies/edge-waf",
+          "timeouts": null,
+          "type": "CLOUD_ARMOR"
+        },
+        "after_unknown": {},
+        "before_sensitive": {
+          "rule": [
+            {}
+          ]
+        },
+        "after_sensitive": {
+          "rule": [
+            {}
+          ]
+        }
+      }
+    },
+    {
+      "address": "google_org_policy_policy.vm-external-ip",
+      "mode": "managed",
+      "type": "google_org_policy_policy",
+      "name": "vm-external-ip",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "action_reason": "replace_because_cannot_update",
+      "change": {
+        "actions": [
+          "delete",
+          "create"
+        ],
+        "before": {
+          "dry_run_spec": [],
+          "id": "projects/acme-prod/policies/compute.vmExternalIpAccess",
+          "name": "projects/acme-prod/policies/compute.vmExternalIpAccess",
+          "parent": "projects/acme-prod",
+          "spec": [
+            {
+              "etag": "CO2vqLwGEIC1lZgD",
+              "inherit_from_parent": false,
+              "reset": false,
+              "rules": [
+                {
+                  "allow_all": null,
+                  "condition": [],
+                  "deny_all": null,
+                  "enforce": null,
+                  "values": [
+                    {
+                      "allowed_values": [],
+                      "denied_values": [
+                        "projects/acme-prod/zones/us-central1-a/instances/legacy-box"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "update_time": "2026-01-04T10:03:41.002Z"
+            }
+          ],
+          "timeouts": null
+        },
+        "after": {
+          "dry_run_spec": [],
+          "id": "projects/acme-prod/policies/compute.vmExternalIpAccess",
+          "name": "projects/acme-prod/policies/compute.vmExternalIpAccess",
+          "parent": "projects/acme-prod",
+          "spec": [
+            {
+              "etag": "CO2vqLwGEIC1lZgD",
+              "inherit_from_parent": false,
+              "reset": false,
+              "rules": [
+                {
+                  "allow_all": null,
+                  "condition": [],
+                  "deny_all": null,
+                  "enforce": null,
+                  "values": [
+                    {
+                      "allowed_values": [],
+                      "denied_values": [
+                        "projects/acme-prod/zones/us-central1-a/instances/legacy-box"
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "update_time": "2026-01-04T10:03:41.002Z"
+            }
+          ],
+          "timeouts": null
+        },
+        "after_unknown": {
+          "dry_run_spec": [],
+          "spec": [
+            {}
+          ]
+        },
+        "before_sensitive": {
+          "dry_run_spec": [],
+          "spec": [
+            {}
+          ]
+        },
+        "after_sensitive": {
+          "dry_run_spec": [],
+          "spec": [
+            {}
+          ]
+        },
+        "replace_paths": [
+          [
+            "parent"
+          ]
+        ]
+      }
+    },
+    {
+      "address": "google_service_account.etl-runner",
+      "mode": "managed",
+      "type": "google_service_account",
+      "name": "etl-runner",
+      "deposed": "abc12345",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "account_id": "etl-runner",
+          "disabled": false,
+          "display_name": "ETL runner",
+          "email": "etl-runner@acme-prod.iam.gserviceaccount.com",
+          "id": "projects/acme-prod/serviceAccounts/etl-runner@acme-prod.iam.gserviceaccount.com",
+          "kms_key_name": "projects/acme-prod/locations/us-central1/keyRings/tf-state/cryptoKeys/service-account-keys",
+          "member": "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com",
+          "name": "projects/acme-prod/serviceAccounts/etl-runner@acme-prod.iam.gserviceaccount.com",
+          "password": "FIXTURE-SECRET-BY-NAME",
+          "private_key": "FIXTURE-SECRET-DO-NOT-LEAK",
+          "project": "acme-prod",
+          "unique_id": "104729518293746501827"
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {
+          "password": false,
+          "private_key": true
+        },
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "google_service_account.etl-runner",
+      "mode": "managed",
+      "type": "google_service_account",
+      "name": "etl-runner",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "account_id": "etl-runner",
+          "disabled": false,
+          "display_name": "ETL runner",
+          "email": "etl-runner@acme-prod.iam.gserviceaccount.com",
+          "id": "projects/acme-prod/serviceAccounts/etl-runner@acme-prod.iam.gserviceaccount.com",
+          "kms_key_name": "projects/acme-prod/locations/us-central1/keyRings/tf-state/cryptoKeys/service-account-keys",
+          "member": "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com",
+          "name": "projects/acme-prod/serviceAccounts/etl-runner@acme-prod.iam.gserviceaccount.com",
+          "password": "FIXTURE-SECRET-BY-NAME",
+          "private_key": "FIXTURE-PLAN-SECRET",
+          "project": "acme-prod",
+          "unique_id": "104729518293746501827"
+        },
+        "after_unknown": {
+          "unique_id": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {
+          "password": false,
+          "private_key": true
+        }
+      }
+    },
+    {
+      "address": "google_project_iam_member.legacy-viewer",
+      "mode": "managed",
+      "type": "google_project_iam_member",
+      "name": "legacy-viewer",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": {
+          "condition": [],
+          "etag": "BwYcQ0hSbW8=",
+          "id": "acme-prod/roles/viewer/group:data-eng@acme.example",
+          "member": "group:data-eng@acme.example",
+          "project": "acme-prod",
+          "role": "roles/viewer"
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {
+          "condition": []
+        },
+        "after_sensitive": false
+      }
+    }
+  ],
+  "prior_state": {
+    "format_version": "1.0",
+    "terraform_version": "1.9.5",
+    "values": {
+      "outputs": {
+        "etl_runner_private_key": {
+          "sensitive": true,
+          "type": "string",
+          "value": "FIXTURE-SECRET-DO-NOT-LEAK"
+        },
+        "vpc_main_self_link": {
+          "sensitive": false,
+          "type": "string",
+          "value": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/networks/vpc-main"
+        }
+      },
+      "root_module": {
+        "resources": [
+          {
+            "address": "google_access_context_manager_access_level.trusted-corp",
+            "mode": "managed",
+            "type": "google_access_context_manager_access_level",
+            "name": "trusted-corp",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "basic": [
+                {
+                  "combining_function": "AND",
+                  "conditions": [
+                    {
+                      "device_policy": [],
+                      "ip_subnetworks": [
+                        "203.0.113.0/24"
+                      ],
+                      "members": [],
+                      "negate": false,
+                      "regions": [],
+                      "required_access_levels": []
+                    }
+                  ]
+                }
+              ],
+              "custom": [],
+              "id": "accessPolicies/987/accessLevels/trusted_corp",
+              "name": "accessPolicies/987/accessLevels/trusted_corp",
+              "parent": "accessPolicies/987",
+              "timeouts": null,
+              "title": "trusted_corp"
+            },
+            "sensitive_values": {
+              "basic": [
+                {}
+              ],
+              "custom": []
+            }
+          },
+          {
+            "address": "google_access_context_manager_service_perimeter.prod",
+            "mode": "managed",
+            "type": "google_access_context_manager_service_perimeter",
+            "name": "prod",
+            "provider_name": "registry.terraform.io/hashicorp/google-beta",
+            "schema_version": 0,
+            "values": {
+              "create_time": "2026-01-04T10:02:15.552131Z",
+              "id": "accessPolicies/987/servicePerimeters/prod",
+              "name": "accessPolicies/987/servicePerimeters/prod",
+              "parent": "accessPolicies/987",
+              "perimeter_type": "PERIMETER_TYPE_REGULAR",
+              "spec": [],
+              "status": [
+                {
+                  "access_levels": [
+                    "accessPolicies/987/accessLevels/trusted_corp"
+                  ],
+                  "egress_policies": [
+                    {
+                      "egress_from": [
+                        {
+                          "identities": [
+                            "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com"
+                          ],
+                          "identity_type": null
+                        }
+                      ],
+                      "egress_to": [
+                        {
+                          "operations": [
+                            {
+                              "method_selectors": [
+                                {
+                                  "method": "*"
+                                }
+                              ],
+                              "service_name": "storage.googleapis.com"
+                            }
+                          ],
+                          "resources": [
+                            "*"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "ingress_policies": [],
+                  "resources": [
+                    "projects/123456"
+                  ],
+                  "restricted_services": [
+                    "storage.googleapis.com",
+                    "bigquery.googleapis.com"
+                  ]
+                }
+              ],
+              "timeouts": null,
+              "title": "prod",
+              "update_time": "2026-01-04T10:02:15.552131Z",
+              "use_explicit_dry_run_spec": false
+            },
+            "sensitive_values": {
+              "spec": [],
+              "status": [
+                {}
+              ]
+            }
+          },
+          {
+            "address": "google_compute_firewall.allow-internal",
+            "mode": "managed",
+            "type": "google_compute_firewall",
+            "name": "allow-internal",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 1,
+            "values": {
+              "allow": [
+                {
+                  "ports": [
+                    "0-65535"
+                  ],
+                  "protocol": "tcp"
+                }
+              ],
+              "creation_timestamp": "2026-01-04T02:11:47.884-08:00",
+              "destination_ranges": [],
+              "direction": "INGRESS",
+              "disabled": false,
+              "id": "projects/acme-prod/global/firewalls/allow-internal",
+              "log_config": [],
+              "name": "allow-internal",
+              "network": "projects/acme-prod/global/networks/vpc-main",
+              "priority": 1000,
+              "project": "acme-prod",
+              "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/firewalls/allow-internal",
+              "source_ranges": [
+                "10.0.0.0/8"
+              ],
+              "source_service_accounts": [],
+              "source_tags": [],
+              "target_service_accounts": [],
+              "target_tags": [],
+              "timeouts": null
+            },
+            "sensitive_values": {
+              "allow": [
+                {}
+              ],
+              "log_config": []
+            }
+          },
+          {
+            "address": "google_compute_firewall.deny-ssh-external[0]",
+            "mode": "managed",
+            "type": "google_compute_firewall",
+            "name": "deny-ssh-external",
+            "index": 0,
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 1,
+            "values": {
+              "creation_timestamp": "2026-01-04T02:11:47.884-08:00",
+              "deny": [
+                {
+                  "ports": [
+                    "22"
+                  ],
+                  "protocol": "tcp"
+                }
+              ],
+              "destination_ranges": [],
+              "direction": "INGRESS",
+              "disabled": false,
+              "id": "projects/acme-prod/global/firewalls/deny-ssh-external",
+              "log_config": [],
+              "name": "deny-ssh-external",
+              "network": "projects/acme-prod/global/networks/vpc-main",
+              "priority": 900,
+              "project": "acme-prod",
+              "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/firewalls/deny-ssh-external",
+              "source_ranges": [
+                "0.0.0.0/0"
+              ],
+              "source_service_accounts": [],
+              "source_tags": [],
+              "target_service_accounts": [],
+              "target_tags": [],
+              "timeouts": null
+            },
+            "sensitive_values": {
+              "deny": [
+                {}
+              ],
+              "log_config": []
+            }
+          },
+          {
+            "address": "google_compute_firewall_policy.fp-baseline",
+            "mode": "managed",
+            "type": "google_compute_firewall_policy",
+            "name": "fp-baseline",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "creation_timestamp": "2026-01-04T02:09:03.114-08:00",
+              "fingerprint": "0lFTkVzUV0M=",
+              "id": "locations/global/firewallPolicies/fp-baseline",
+              "name": "fp-baseline",
+              "parent": "organizations/1",
+              "rule_tuple_count": 2,
+              "self_link": "https://www.googleapis.com/compute/v1/locations/global/firewallPolicies/fp-baseline",
+              "self_link_with_id": "https://www.googleapis.com/compute/v1/locations/global/firewallPolicies/fp-baseline",
+              "short_name": "fp-baseline",
+              "timeouts": null
+            },
+            "sensitive_values": {}
+          },
+          {
+            "address": "google_compute_firewall_policy_association.fp-baseline-org",
+            "mode": "managed",
+            "type": "google_compute_firewall_policy_association",
+            "name": "fp-baseline-org",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "attachment_target": "organizations/1",
+              "firewall_policy": "fp-baseline",
+              "id": "locations/global/firewallPolicies/fp-baseline/associations/fp-baseline-org",
+              "name": "fp-baseline-org",
+              "short_name": "fp-baseline",
+              "timeouts": null
+            },
+            "sensitive_values": {}
+          },
+          {
+            "address": "google_compute_firewall_policy_rule.deny-rdp",
+            "mode": "managed",
+            "type": "google_compute_firewall_policy_rule",
+            "name": "deny-rdp",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "action": "deny",
+              "direction": "INGRESS",
+              "disabled": false,
+              "enable_logging": false,
+              "firewall_policy": "fp-baseline",
+              "id": "locations/global/firewallPolicies/fp-baseline/rules/100",
+              "kind": "compute#firewallPolicyRule",
+              "match": [
+                {
+                  "dest_ip_ranges": [],
+                  "layer4_configs": [
+                    {
+                      "ip_protocol": "tcp",
+                      "ports": [
+                        "3389"
+                      ]
+                    }
+                  ],
+                  "src_ip_ranges": [
+                    "0.0.0.0/0"
+                  ]
+                }
+              ],
+              "priority": 100,
+              "rule_tuple_count": 2,
+              "target_resources": [],
+              "target_secure_tags": [],
+              "target_service_accounts": [],
+              "timeouts": null
+            },
+            "sensitive_values": {
+              "match": [
+                {}
+              ]
+            }
+          },
+          {
+            "address": "google_compute_firewall_policy_rule.goto-next",
+            "mode": "managed",
+            "type": "google_compute_firewall_policy_rule",
+            "name": "goto-next",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "action": "goto_next",
+              "direction": "INGRESS",
+              "disabled": false,
+              "enable_logging": false,
+              "firewall_policy": "fp-baseline",
+              "id": "locations/global/firewallPolicies/fp-baseline/rules/2000",
+              "kind": "compute#firewallPolicyRule",
+              "match": [
+                {
+                  "dest_ip_ranges": [],
+                  "layer4_configs": [],
+                  "src_ip_ranges": [
+                    "0.0.0.0/0"
+                  ]
+                }
+              ],
+              "priority": 2000,
+              "rule_tuple_count": 1,
+              "target_resources": [],
+              "target_secure_tags": [],
+              "target_service_accounts": [],
+              "timeouts": null
+            },
+            "sensitive_values": {
+              "match": [
+                {}
+              ]
+            }
+          },
+          {
+            "address": "google_compute_security_policy.edge-waf",
+            "mode": "managed",
+            "type": "google_compute_security_policy",
+            "name": "edge-waf",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "adaptive_protection_config": [],
+              "advanced_options_config": [],
+              "fingerprint": "Yj5nQ2VwR3M=",
+              "id": "projects/acme-prod/global/securityPolicies/edge-waf",
+              "name": "edge-waf",
+              "project": "acme-prod",
+              "recaptcha_options_config": [],
+              "rule": [
+                {
+                  "action": "deny(403)",
+                  "match": [
+                    {
+                      "config": [
+                        {
+                          "src_ip_ranges": [
+                            "203.0.113.0/24"
+                          ]
+                        }
+                      ],
+                      "expr": [],
+                      "versioned_expr": "SRC_IPS_V1"
+                    }
+                  ],
+                  "preview": false,
+                  "priority": 1000
+                }
+              ],
+              "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/securityPolicies/edge-waf",
+              "timeouts": null,
+              "type": "CLOUD_ARMOR"
+            },
+            "sensitive_values": {
+              "rule": [
+                {}
+              ]
+            }
+          },
+          {
+            "address": "google_compute_security_policy_rule.edge-waf-default",
+            "mode": "managed",
+            "type": "google_compute_security_policy_rule",
+            "name": "edge-waf-default",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "action": "allow",
+              "id": "projects/acme-prod/global/securityPolicies/edge-waf/priority/2147483647",
+              "match": [
+                {
+                  "config": [
+                    {
+                      "src_ip_ranges": [
+                        "*"
+                      ]
+                    }
+                  ],
+                  "expr": [],
+                  "versioned_expr": "SRC_IPS_V1"
+                }
+              ],
+              "preview": false,
+              "priority": 2147483647,
+              "project": "acme-prod",
+              "security_policy": "edge-waf",
+              "timeouts": null
+            },
+            "sensitive_values": {
+              "match": [
+                {}
+              ]
+            }
+          },
+          {
+            "address": "google_org_policy_policy.disable-serial-port",
+            "mode": "managed",
+            "type": "google_org_policy_policy",
+            "name": "disable-serial-port",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "dry_run_spec": [],
+              "id": "projects/acme-prod/policies/compute.disableSerialPortAccess",
+              "name": "projects/acme-prod/policies/compute.disableSerialPortAccess",
+              "parent": "projects/acme-prod",
+              "spec": [
+                {
+                  "etag": "CO2vqLwGEIC1lZgD",
+                  "inherit_from_parent": false,
+                  "reset": false,
+                  "rules": [
+                    {
+                      "allow_all": null,
+                      "condition": [],
+                      "deny_all": null,
+                      "enforce": "TRUE",
+                      "values": []
+                    }
+                  ],
+                  "update_time": "2026-01-04T10:03:41.002Z"
+                }
+              ],
+              "timeouts": null
+            },
+            "sensitive_values": {
+              "dry_run_spec": [],
+              "spec": [
+                {}
+              ]
+            }
+          },
+          {
+            "address": "google_org_policy_policy.member-domains",
+            "mode": "managed",
+            "type": "google_org_policy_policy",
+            "name": "member-domains",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "dry_run_spec": [],
+              "id": "projects/acme-prod/policies/iam.allowedPolicyMemberDomains",
+              "name": "projects/acme-prod/policies/iam.allowedPolicyMemberDomains",
+              "parent": "projects/acme-prod",
+              "spec": [
+                {
+                  "etag": "CO2vqLwGEIC1lZgD",
+                  "inherit_from_parent": false,
+                  "reset": false,
+                  "rules": [
+                    {
+                      "allow_all": null,
+                      "condition": [],
+                      "deny_all": null,
+                      "enforce": null,
+                      "values": [
+                        {
+                          "allowed_values": [
+                            "C01abcdef"
+                          ],
+                          "denied_values": []
+                        }
+                      ]
+                    }
+                  ],
+                  "update_time": "2026-01-04T10:03:41.002Z"
+                }
+              ],
+              "timeouts": null
+            },
+            "sensitive_values": {
+              "dry_run_spec": [],
+              "spec": [
+                {}
+              ]
+            }
+          },
+          {
+            "address": "google_org_policy_policy.vm-external-ip",
+            "mode": "managed",
+            "type": "google_org_policy_policy",
+            "name": "vm-external-ip",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "dry_run_spec": [],
+              "id": "projects/acme-prod/policies/compute.vmExternalIpAccess",
+              "name": "projects/acme-prod/policies/compute.vmExternalIpAccess",
+              "parent": "projects/acme-prod",
+              "spec": [
+                {
+                  "etag": "CO2vqLwGEIC1lZgD",
+                  "inherit_from_parent": false,
+                  "reset": false,
+                  "rules": [
+                    {
+                      "allow_all": null,
+                      "condition": [],
+                      "deny_all": null,
+                      "enforce": null,
+                      "values": [
+                        {
+                          "allowed_values": [],
+                          "denied_values": [
+                            "projects/acme-prod/zones/us-central1-a/instances/legacy-box"
+                          ]
+                        }
+                      ]
+                    }
+                  ],
+                  "update_time": "2026-01-04T10:03:41.002Z"
+                }
+              ],
+              "timeouts": null
+            },
+            "sensitive_values": {
+              "dry_run_spec": [],
+              "spec": [
+                {}
+              ]
+            }
+          },
+          {
+            "address": "google_project_iam_binding.owner",
+            "mode": "managed",
+            "type": "google_project_iam_binding",
+            "name": "owner",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "condition": [],
+              "etag": "BwYcQ0hSbW8=",
+              "id": "acme-prod/roles/owner",
+              "members": [
+                "user:alice@acme.example"
+              ],
+              "project": "acme-prod",
+              "role": "roles/owner"
+            },
+            "sensitive_values": {
+              "condition": [],
+              "members": [
+                false
+              ]
+            }
+          },
+          {
+            "address": "google_project_iam_binding.security-admin",
+            "mode": "managed",
+            "type": "google_project_iam_binding",
+            "name": "security-admin",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "condition": [],
+              "etag": "BwYcQ0hSbW8=",
+              "id": "acme-prod/roles/iam.securityAdmin",
+              "members": [
+                "serviceAccount:ci-deployer@acme-prod.iam.gserviceaccount.com"
+              ],
+              "project": "acme-prod",
+              "role": "roles/iam.securityAdmin"
+            },
+            "sensitive_values": {
+              "condition": [],
+              "members": [
+                false
+              ]
+            }
+          },
+          {
+            "address": "google_service_account.etl-runner",
+            "mode": "managed",
+            "type": "google_service_account",
+            "name": "etl-runner",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 0,
+            "values": {
+              "account_id": "etl-runner",
+              "disabled": false,
+              "display_name": "ETL runner",
+              "email": "etl-runner@acme-prod.iam.gserviceaccount.com",
+              "id": "projects/acme-prod/serviceAccounts/etl-runner@acme-prod.iam.gserviceaccount.com",
+              "kms_key_name": "projects/acme-prod/locations/us-central1/keyRings/tf-state/cryptoKeys/service-account-keys",
+              "member": "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com",
+              "name": "projects/acme-prod/serviceAccounts/etl-runner@acme-prod.iam.gserviceaccount.com",
+              "password": "FIXTURE-SECRET-BY-NAME",
+              "private_key": "FIXTURE-SECRET-DO-NOT-LEAK",
+              "project": "acme-prod",
+              "unique_id": "104729518293746501827"
+            },
+            "sensitive_values": {
+              "password": false,
+              "private_key": true
+            }
+          },
+          {
+            "address": "google_sql_database_instance.legacy-reporting",
+            "mode": "managed",
+            "type": "google_sql_database_instance",
+            "name": "legacy-reporting",
+            "provider_name": "registry.terraform.io/hashicorp/google",
+            "schema_version": 1,
+            "values": {
+              "database_version": "POSTGRES_15",
+              "deletion_protection": true,
+              "id": "legacy-reporting",
+              "name": "legacy-reporting",
+              "project": "acme-prod",
+              "region": "us-central1",
+              "root_password": "FIXTURE-PLAN-SECRET",
+              "settings": [
+                {
+                  "availability_type": "ZONAL",
+                  "disk_size": 20,
+                  "tier": "db-custom-2-7680"
+                }
+              ],
+              "timeouts": null
+            },
+            "sensitive_values": {
+              "root_password": true,
+              "settings": [
+                {}
+              ]
+            }
+          }
+        ],
+        "child_modules": [
+          {
+            "address": "module.net",
+            "resources": [
+              {
+                "address": "module.net.google_compute_firewall.allow-health-checks",
+                "mode": "managed",
+                "type": "google_compute_firewall",
+                "name": "allow-health-checks",
+                "provider_name": "registry.terraform.io/hashicorp/google",
+                "schema_version": 1,
+                "values": {
+                  "allow": [],
+                  "creation_timestamp": "2026-01-04T02:11:47.884-08:00",
+                  "destination_ranges": [],
+                  "direction": "INGRESS",
+                  "disabled": false,
+                  "id": "projects/acme-prod/global/firewalls/allow-health-checks",
+                  "log_config": [],
+                  "name": "allow-health-checks",
+                  "network": "projects/acme-prod/global/networks/vpc-main",
+                  "priority": 1000,
+                  "project": "acme-prod",
+                  "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/firewalls/allow-health-checks",
+                  "source_ranges": [
+                    "35.191.0.0/16",
+                    "130.211.0.0/22"
+                  ],
+                  "source_service_accounts": [],
+                  "source_tags": [],
+                  "target_service_accounts": [],
+                  "target_tags": [
+                    "web"
+                  ],
+                  "timeouts": null
+                },
+                "sensitive_values": {
+                  "allow": [],
+                  "log_config": []
+                }
+              },
+              {
+                "address": "module.net.google_compute_firewall.allow-iap-ssh[\"prod\"]",
+                "mode": "managed",
+                "type": "google_compute_firewall",
+                "name": "allow-iap-ssh",
+                "index": "prod",
+                "provider_name": "registry.terraform.io/hashicorp/google",
+                "schema_version": 1,
+                "values": {
+                  "allow": [
+                    {
+                      "ports": [
+                        "22"
+                      ],
+                      "protocol": "tcp"
+                    }
+                  ],
+                  "creation_timestamp": "2026-01-04T02:11:47.884-08:00",
+                  "destination_ranges": [],
+                  "direction": "INGRESS",
+                  "disabled": false,
+                  "id": "projects/acme-prod/global/firewalls/allow-iap-ssh",
+                  "log_config": [],
+                  "name": "allow-iap-ssh",
+                  "network": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/networks/vpc-main",
+                  "priority": 800,
+                  "project": "acme-prod",
+                  "self_link": "https://www.googleapis.com/compute/v1/projects/acme-prod/global/firewalls/allow-iap-ssh",
+                  "source_ranges": [
+                    "35.235.240.0/20"
+                  ],
+                  "source_service_accounts": [],
+                  "source_tags": [],
+                  "target_service_accounts": [],
+                  "target_tags": [],
+                  "timeouts": null
+                },
+                "sensitive_values": {
+                  "allow": [
+                    {}
+                  ],
+                  "log_config": []
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "timestamp": "2026-07-18T09:28:11Z",
+  "errored": false
+}
