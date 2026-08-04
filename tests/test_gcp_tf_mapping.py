@@ -90,7 +90,16 @@ def estate():
 @pytest.fixture(autouse=True)
 def clean_registry():
     """Registration is import-time and therefore process-global; a stub that
-    leaked would answer for every test that ran afterwards."""
+    leaked would answer for every test that ran afterwards.
+
+    The load is forced BEFORE the clear so that whichever test runs first is not
+    the one that pays for it: a real domain mapper registers while its module is
+    being imported, so a `register` call that happens to trigger that import
+    would find the real mapper already holding the type and keep it. Forcing the
+    import once and then clearing leaves the seam under test answering with the
+    stubs, whether or not a domain mapper module exists in this checkout.
+    """
+    mapping.mappers()
     mapping.reset_cache()
     yield
     mapping.reset_cache()
