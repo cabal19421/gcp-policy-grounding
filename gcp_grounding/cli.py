@@ -1,7 +1,7 @@
 """Command-line interface: ``gcp-ground verify-policy`` / ``scan-command`` /
-``compile-requirements``.
+``compile-requirements`` / ``capture-terraform``.
 
-Three subcommands, exposed both as the ``gcp-ground`` console script and as
+Four subcommands, exposed both as the ``gcp-ground`` console script and as
 ``python -m gcp_grounding``::
 
     gcp-ground verify-policy FILE [--snapshot PATH] [--baseline PATH]
@@ -20,6 +20,13 @@ Three subcommands, exposed both as the ``gcp-ground`` console script and as
     gcp-ground compile-requirements [DIR] [--snapshot PATH] [--out DIR]
                              [--check] [--format text|json]
                              [--no-independence] [--llm]
+    gcp-ground capture-terraform PATH... [--out PATH] [--origins-out PATH]
+                             [--include CATEGORY ...] [--source SOURCE ...]
+                             [--no-hcl] [--include-backups]
+                             [--project ID] [--org ORG] [--folder FOLDER]
+                             [--access-policy N] [--captured-at ISO8601]
+                             [--max-age DURATION] [--format text|json]
+                             [--dry-run]
 
 ``verify-policy`` runs the preflight gate
 (:func:`~gcp_grounding.preflight.ground_policy`) over one policy document;
@@ -308,6 +315,56 @@ on ``--abstain-notes`` — a silently inert baseline is indistinguishable from a
 passing one — and it NEVER changes an exit code. Nothing is printed when every
 configured source loaded.
 
+``capture-terraform`` is the OTHER end of the second input: it discovers,
+reads, maps and reconciles the terraform artifacts under one or more paths
+(:func:`gcp_grounding.estate.capture`) and writes TWO files through
+:func:`gcp_grounding.estate.write_capture` — a snapshot and its
+``.origins.json`` sidecar.
+
+**A TERRAFORM-DERIVED SNAPSHOT IS A PARTIAL, TERRAFORM-MANAGED-ONLY VIEW OF THE
+ESTATE, AND ITS SIDECAR MUST TRAVEL WITH IT.** Terraform enumerates what
+terraform manages and nothing else, so every category it emits is at most
+``partial`` — and a snapshot is byte-indistinguishable from an API one, so the
+sidecar is the ONLY thing that says so. The sidecar therefore cannot be switched
+off: a snapshot read back without one is ``undeclared`` at best, which costs the
+user every new-resource answer, and at worst is read as authoritative. Two
+captures of unchanged inputs are byte-identical, because both files go through
+the blessed deterministic writers.
+
+``--include CATEGORY`` opts a category out of the emit policy's default four and
+into :data:`gcp_grounding.estate.EXISTENCE_LICENSING`; because that lets the
+reasoner answer ``False`` for a name terraform simply does not manage, it earns
+a LOUD stderr warning naming the consequence in full before anything is written.
+``--source`` / ``--no-hcl`` restrict which of ``tfstate``, ``tfplan-prior`` and
+``hcl`` contribute; a restriction drops a whole source BEFORE ``merge.resolve``
+sees it, so no dispute can be computed for what was excluded — which is why
+every excluded artifact is still discovered, still classified, and named in the
+summary and in the sidecar as an EXCLUDED source. PRECEDENCE NEVER SUPPRESSES A
+FINDING applies here too. ``--captured-at`` overrides the derived timestamp;
+without it the stamp is the OLDEST contributing artifact's file modification
+time, which the human output says on its own line so nobody reads it as an
+estate capture time. ``--max-age`` is ADVISORY here and never changes the exit
+code: grounding is where staleness must abstain.
+
+Its exit codes are NOT the gate's, and it is not a gate:
+
+- ``0`` — a snapshot was written, EVEN WHEN COVERAGE IS PARTIAL, because
+  partial is the normal case for terraform and not a failure;
+- ``1`` — no terraform artifact could be classified under the given paths, or
+  every reader failed: nothing was captured and nothing was written;
+- ``2`` — a usage error ONLY (an unknown ``--include`` category, an unwritable
+  output path, a ``--captured-at`` that is not ISO-8601, ``--source hcl``
+  together with ``--no-hcl``). NEVER for a partial or empty capture: ``2`` is
+  Claude Code's blocking code and this subcommand blocks nothing.
+
+The coverage summary is printed before returning on EVERY path, successful or
+empty: a user must never receive a snapshot without being told what it does not
+cover. ``--format text`` prints :func:`gcp_grounding.provenance.summarize` under
+a one-line header; ``--format json`` prints the ledger document to stdout (the
+human lines move to stderr), so the summary is pipeable while the two files stay
+the durable artifacts. ``--dry-run`` prints exactly what would be written and
+writes nothing.
+
 stdlib ``argparse`` only — no third-party CLI framework.
 """
 
@@ -470,6 +527,71 @@ _READ_ONLY_TOOLS = frozenset({
     "AskUserQuestion",
 })
 
+#: ``capture-terraform``'s own name, for :func:`_usage`.
+_CAPTURE_PROG = "capture-terraform"
+
+#: Where ``capture-terraform`` writes when ``--out`` is not given, resolved
+#: against the cwd. ``--origins-out`` defaults to ``provenance.origins_path`` of
+#: whatever ``--out`` resolves to.
+_CAPTURE_OUT_DEFAULT = "terraform-snapshot.json"
+
+#: What ``--include CATEGORY`` costs, printed LOUDLY on stderr before anything
+#: is written. It names the consequence in full because the consequence is the
+#: whole reason the licence is opt-in.
+_LICENSING_WARNING = (
+    "gcp-ground capture-terraform: WARNING — --include {category} LICENSES AN "
+    "ABSENCE. Including {category!r} makes this snapshot answer False for any "
+    "name of that kind terraform does not manage, so a {category} name that "
+    "EXISTS in the estate but was created outside terraform will be reported "
+    "'ungrounded'. Terraform enumerates only what terraform manages.")
+
+#: What a ``--source`` / ``--no-hcl`` restriction did to one discovered
+#: artifact. PRECEDENCE NEVER SUPPRESSES A FINDING: a restriction drops a whole
+#: source BEFORE ``merge.resolve`` sees it, so no dispute can be computed for
+#: it, and the only honest answer is to name it anyway.
+_EXCLUDED_LINE = (
+    "  EXCLUDED {path} [{source}]: discovered and classified, then dropped by "
+    "--source/--no-hcl BEFORE the merge — no dispute could be computed for it, "
+    "so it is named here rather than being silently absent")
+
+#: The same fact, carried in the sidecar, so the exclusion survives the run that
+#: printed it.
+_EXCLUDED_NOTE = (
+    "EXCLUDED by a --source/--no-hcl restriction: this {source} artifact was "
+    "discovered and classified but never read, so it contributed no fact and no "
+    "dispute could be computed for it — it was dropped by CONFIGURATION, not "
+    "absent from disk")
+
+#: The empty-capture headline. Nothing was read, so nothing may be concluded.
+_NOTHING_CAPTURED = (
+    "gcp-ground capture-terraform: NOTHING was captured and NO file was "
+    "written — no terraform artifact could be classified under the path(s) "
+    "examined, or every reader refused what was found")
+
+#: The note every category earns on the empty-capture path.
+_NOTHING_CAPTURED_NOTE = (
+    "nothing was captured, so this category is uncaptured: an uncaptured "
+    "category answers UNKNOWN and licenses no absence")
+
+#: The one line saying the sidecar is not optional.
+_SIDECAR_LINE = (
+    "  THE SIDECAR MUST TRAVEL WITH THE SNAPSHOT: it is the only thing that "
+    "says this view is PARTIAL and terraform-managed-only; read back alone the "
+    "snapshot is 'undeclared' at best, which costs every new-resource answer")
+
+#: What a derived ``captured_at`` really is, on its own line, so nobody reads it
+#: as an estate capture time.
+_MTIME_LINE = (
+    "  captured_at is the OLDEST contributing artifact's FILE MODIFICATION "
+    "TIME, not an estate capture time — pass --captured-at to override it")
+
+#: Staleness is ADVISORY in a capture: the exit code is unchanged, and the
+#: message says which flag makes the VERIFIER abstain on it.
+_STALENESS_ADVICE = (
+    "  this is ADVISORY: the capture still succeeded and the exit code is "
+    "unchanged, because grounding — not capture — is where staleness must "
+    "abstain. Pass --max-age to verify-policy to make it do so.")
+
 EXIT_OK = 0
 EXIT_FAILED = 1
 #: Usage errors, and hook-mode gate failures (Claude Code's blocking code).
@@ -528,6 +650,7 @@ def build_parser() -> argparse.ArgumentParser:
              f"${REQUIREMENTS_ENV}; unset means no rules load)")
     _add_state_flags(verify)
     verify.set_defaults(handler=_cmd_verify_policy)
+    _add_capture_terraform(sub)
     scan = sub.add_parser(
         "scan-command",
         help="classify one shell command for state-mutating GCP CLI "
@@ -583,6 +706,96 @@ def build_parser() -> argparse.ArgumentParser:
              "deterministically (never a hard failure)")
     compile_req.set_defaults(handler=_cmd_compile_requirements)
     return parser
+
+
+def _add_capture_terraform(sub: Any) -> None:
+    """``capture-terraform``, registered next to ``verify-policy``.
+
+    Every flag here is this subcommand's own; nothing on ``verify-policy`` is
+    touched, and the two commands share only :func:`_usage` and the ``--format``
+    vocabulary.
+    """
+    capture = sub.add_parser(
+        "capture-terraform",
+        help="read the terraform artifacts under PATH... and write a PARTIAL "
+             "estate snapshot plus its coverage sidecar; exit 1 iff nothing "
+             "could be captured",
+        description="Discover, read, map and reconcile every terraform "
+                    "artifact under PATH... and write TWO files: the snapshot "
+                    "and its .origins.json sidecar. The snapshot is a PARTIAL, "
+                    "terraform-managed-only view of the estate and the sidecar "
+                    "is the only thing that says so, so they must travel "
+                    "together. EXIT CODES: 0 when a snapshot was written, EVEN "
+                    "WHEN COVERAGE IS PARTIAL — partial is the normal case for "
+                    "terraform and not a failure; 1 when no terraform artifact "
+                    "could be classified or every reader failed, so nothing was "
+                    "captured; 2 for usage errors ONLY. A partial or empty "
+                    "capture is NEVER a 2: that is Claude Code's blocking code "
+                    "and this subcommand is not a gate.")
+    capture.add_argument(
+        "paths", nargs="+", metavar="PATH",
+        help="a directory to walk or a single artifact to read; classification "
+             "is BY CONTENT, so a name proves nothing either way")
+    capture.add_argument(
+        "--out", metavar="PATH", default=None,
+        help=f"where the snapshot is written (default: "
+             f"{_CAPTURE_OUT_DEFAULT} in the current directory)")
+    capture.add_argument(
+        "--origins-out", metavar="PATH", default=None,
+        help="where the coverage sidecar is written (default: the .origins.json "
+             "spelling of --out). It CANNOT be switched off: verify-policy "
+             "reads it to learn that this snapshot is partial")
+    capture.add_argument(
+        "--include", metavar="CATEGORY", action="append", default=None,
+        help="emit one more estate category (repeatable). A category outside "
+             "the default four LICENSES AN ABSENCE in it, which earns a loud "
+             "stderr warning before anything is written")
+    capture.add_argument(
+        "--source", metavar="SOURCE", action="append", default=None,
+        choices=tuple(provenance.TERRAFORM_SOURCES),
+        help=f"restrict which sources contribute (repeatable; default: all of "
+             f"{list(provenance.TERRAFORM_SOURCES)}). An artifact a restriction "
+             f"excludes is still discovered, still classified and still named — "
+             f"a dropped source must be visible as a CHOICE")
+    capture.add_argument(
+        "--no-hcl", action="store_true",
+        help="shorthand for dropping 'hcl' from --source: read state and plan "
+             "prior state only")
+    capture.add_argument(
+        "--include-backups", action="store_true",
+        help="also read *.tfstate.backup files, which hold the estate as it was "
+             "BEFORE the last apply")
+    capture.add_argument(
+        "--project", metavar="ID", default=None,
+        help="the project a bare terraform name lives in, used to build the "
+             "estate key a resource is looked up by")
+    capture.add_argument(
+        "--org", metavar="ORG", default=None,
+        help="the organization a bare organization-scoped name lives under")
+    capture.add_argument(
+        "--folder", metavar="FOLDER", default=None,
+        help="the folder a bare folder-scoped name lives under")
+    capture.add_argument(
+        "--access-policy", metavar="N", default=None,
+        help="the access policy number a bare VPC-SC perimeter name lives under")
+    capture.add_argument(
+        "--captured-at", metavar="ISO8601", default=None,
+        help="stamp the snapshot with this AWARE ISO-8601 instant instead of "
+             "the oldest contributing artifact's file modification time")
+    capture.add_argument(
+        "--max-age", metavar="DURATION", default=None,
+        help="report — never enforce — sources older than this ('7d', '36h', a "
+             "bare integer of seconds, 'off'). ADVISORY here: grounding is "
+             "where staleness must abstain")
+    capture.add_argument(
+        "--format", choices=tuple(_FORMATS), default="text",
+        help="text prints the coverage summary on stdout; json prints the "
+             "ledger document there instead and moves the human lines to "
+             "stderr (default: text)")
+    capture.add_argument(
+        "--dry-run", action="store_true",
+        help="print exactly what would be written and write nothing")
+    capture.set_defaults(handler=_cmd_capture_terraform)
 
 
 def _add_state_flags(verify: argparse.ArgumentParser) -> None:
@@ -1798,6 +2011,353 @@ def _cmd_scan_command(args: argparse.Namespace) -> int:
     print(_bash_report(verdicts, source=command.strip()).render(
         _FORMATS[args.format]))
     return EXIT_OK
+
+
+# -- capture-terraform ---------------------------------------------------------
+
+
+def _cmd_capture_terraform(args: argparse.Namespace) -> int:
+    """Capture the terraform artifacts under ``PATH...`` into a snapshot plus
+    its sidecar.
+
+    THE LAZY IMPORT is the point of this arm's shape, and it follows
+    ``preflight._tf_plan_extractor``'s precedent: :mod:`gcp_grounding.estate`
+    and the readers it reaches are imported HERE, inside the handler, behind
+    ``ImportError``. The module-level import list is not extended, so the hook
+    path pays neither their import cost nor the risk that a missing reader turns
+    its fail-open contract into a traceback.
+
+    EXIT CODES, and they are NOT the gate's: 0 when a snapshot was written even
+    when coverage is partial, 1 when nothing could be captured, 2 for usage
+    errors only. A partial capture is the normal case for terraform, so making
+    it a 2 would hand Claude Code a blocking code for a healthy run.
+    """
+    try:
+        from . import estate
+        from .tfsource import discover, state
+    except ImportError as exc:
+        return _usage(f"the terraform capture pipeline is not part of this "
+                      f"checkout ({exc}) — nothing was captured",
+                      prog=_CAPTURE_PROG)
+
+    problem = _capture_flag_problem(args, estate)
+    if problem is not None:
+        return _usage(problem, prog=_CAPTURE_PROG)
+    out = args.out or _CAPTURE_OUT_DEFAULT
+    origins_out = args.origins_out or provenance.origins_path(out)
+    if not args.dry_run:
+        for path in (out, origins_out):
+            problem = _unwritable(path)
+            if problem is not None:
+                return _usage(problem, prog=_CAPTURE_PROG)
+
+    options = _capture_options(args, estate)
+    found, excluded, rejected, notes = _capture_discovery(
+        args, discover, _capture_sources(args))
+
+    # BEFORE WRITING, and loudly: an opted-in category can answer False for a
+    # name terraform simply does not manage.
+    for category in options.include:
+        print(_LICENSING_WARNING.format(category=category), file=sys.stderr)
+
+    capture, failure = _run_capture(estate, found, options)
+    if capture is None:
+        # THE EMPTY-CAPTURE PATH. Not a usage error and not a silent success:
+        # exit 1, no file written, and the coverage summary still printed.
+        ledger = _record_exclusions(
+            _empty_capture_ledger(options), excluded, state)
+        _capture_render(
+            args, _NOTHING_CAPTURED,
+            _capture_explanation(args, excluded, rejected, notes, failure),
+            ledger)
+        return EXIT_FAILED
+
+    ledger = _record_exclusions(capture.ledger, excluded, state)
+    capture = dataclasses.replace(capture, ledger=ledger)
+
+    lines: list[str] = []
+    if not args.captured_at:
+        lines.append(_MTIME_LINE)
+    lines.extend(_EXCLUDED_LINE.format(path=a.path, source=a.source)
+                 for a in excluded)
+    if args.dry_run:
+        lines.append(f"  --dry-run: NOTHING was written. A real run would write "
+                     f"the snapshot to {out} and the sidecar to {origins_out}.")
+        lines.append(_SIDECAR_LINE)
+    else:
+        try:
+            snapshot_path, ledger_path = estate.write_capture(capture, out)
+            ledger_path = _place_sidecar(ledger_path, origins_out)
+        except OSError as exc:
+            return _usage(f"the capture could not be written ({exc})",
+                          prog=_CAPTURE_PROG)
+        lines.append(f"  wrote snapshot {snapshot_path}")
+        lines.append(f"  wrote sidecar  {ledger_path}")
+        lines.append(_SIDECAR_LINE)
+    lines.extend(_capture_staleness(args, ledger))
+    _capture_render(args, _capture_header(ledger, found, args), lines, ledger)
+    # PARTIAL IS NOT A FAILURE. Every terraform category is at most partial by
+    # construction, so an exit code that punished it would fail every healthy
+    # run of this subcommand.
+    return EXIT_OK
+
+
+def _capture_flag_problem(args: argparse.Namespace, estate: Any) -> str | None:
+    """The first usage error on the capture command line, or ``None``.
+
+    Every one of these is a 2, and NOTHING else is: a partial capture, an empty
+    capture and a stale source are all honest outcomes of a well-formed command
+    line.
+    """
+    if args.no_hcl and "hcl" in (args.source or ()):
+        return ("--source hcl and --no-hcl contradict each other — one asks for "
+                "the configuration reader and the other drops it; say which")
+    valid = tuple(estate.DEFAULT_EMIT) + tuple(estate.EXISTENCE_LICENSING)
+    for category in args.include or ():
+        if category not in valid:
+            return (f"--include {category!r} is not an estate category; expected "
+                    f"one of {sorted(valid)}")
+    if args.captured_at is not None and \
+            freshness.parse_timestamp(args.captured_at) is None:
+        return (f"--captured-at {args.captured_at!r} is not an AWARE ISO-8601 "
+                f"instant — a naive stamp is refused rather than assumed UTC, "
+                f"because assuming UTC shifts every age by up to a day")
+    if args.max_age is not None:
+        try:
+            freshness.parse_duration(args.max_age)
+        except ValueError as exc:
+            return f"--max-age {args.max_age!r}: {exc}"
+    return None
+
+
+def _unwritable(path: str) -> str | None:
+    """Why *path* cannot be written, or ``None``.
+
+    Checked BEFORE the artifacts are read: discovering that the output
+    directory does not exist after a whole estate has been mapped wastes the
+    work and buries the one thing the operator has to fix.
+    """
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    if not os.path.isdir(directory):
+        return f"{path}: its directory {directory} does not exist"
+    if not os.access(directory, os.W_OK):
+        return f"{path}: its directory {directory} is not writable"
+    if os.path.isdir(path):
+        return f"{path}: is a directory, not a file this capture can write"
+    if os.path.exists(path) and not os.access(path, os.W_OK):
+        return f"{path}: exists and is not writable"
+    return None
+
+
+def _capture_sources(args: argparse.Namespace) -> tuple[str, ...]:
+    """Which of ``tfstate`` / ``tfplan-prior`` / ``hcl`` may contribute."""
+    chosen = tuple(dict.fromkeys(args.source or ())) or \
+        tuple(provenance.TERRAFORM_SOURCES)
+    if args.no_hcl:
+        chosen = tuple(source for source in chosen if source != "hcl")
+    return chosen
+
+
+def _capture_options(args: argparse.Namespace, estate: Any) -> Any:
+    """The :class:`~gcp_grounding.estate.CaptureOptions` this run emits under.
+
+    A ``--include`` naming one of the DEFAULT four is a no-op rather than an
+    error: those are emitted already, and ``CaptureOptions.include`` refuses
+    them outright because opting one into existence licensing is exactly what
+    the emit policy rules out.
+    """
+    include = tuple(category for category in dict.fromkeys(args.include or ())
+                    if category not in estate.DEFAULT_EMIT)
+    return estate.CaptureOptions(
+        emit=estate.DEFAULT_EMIT, include=include,
+        captured_at=args.captured_at or "", project=args.project or "",
+        organization=args.org or "", folder=args.folder or "",
+        access_policy=args.access_policy or "",
+        include_backups=args.include_backups)
+
+
+def _capture_discovery(args: argparse.Namespace, discover: Any,
+                       selected: tuple[str, ...]) -> tuple[list, list, list,
+                                                           list[str]]:
+    """→ ``(found, excluded, rejected, notes)`` over every path, deduplicated
+    by path and sorted.
+
+    THE EXCLUDED BUCKET IS THE POINT. A ``--source`` restriction drops a whole
+    source BEFORE ``merge.resolve`` sees it, so no dispute can ever be computed
+    for what it removed — which is the one place in the capture path where
+    "precedence never suppresses a finding" could be violated. Classifying the
+    artifact anyway and carrying it here is what keeps a dropped source visible
+    as a CONFIGURATION CHOICE rather than as a file that was never there.
+    """
+    found: list[Any] = []
+    excluded: list[Any] = []
+    rejected: list[Any] = []
+    notes: list[str] = []
+    seen: set[str] = set()
+    for root in args.paths:
+        if not os.path.exists(root):
+            notes.append(f"{root}: no such file or directory — nothing under it "
+                         f"was examined")
+            continue
+        result = discover.discover(root, include_backups=args.include_backups)
+        notes.extend(result.notes)
+        for artifact in result.rejected:
+            if artifact.path not in seen:
+                seen.add(artifact.path)
+                rejected.append(artifact)
+        for artifact in result.artifacts:
+            if artifact.path in seen:
+                continue
+            seen.add(artifact.path)
+            (found if artifact.source in selected else excluded).append(artifact)
+    for bucket in (found, excluded, rejected):
+        bucket.sort(key=lambda artifact: artifact.path)
+    return found, excluded, rejected, notes
+
+
+def _run_capture(estate: Any, found: list, options: Any) -> tuple[Any, str]:
+    """→ ``(capture, failure)`` — exactly one is meaningful.
+
+    A capture whose ledger declares no source read NOTHING: every reader
+    refused, and a snapshot built over that would be an empty estate
+    indistinguishable from a clean one. That is the exit-1 case, not a pass.
+    """
+    if not found:
+        return None, ""
+    try:
+        capture = estate.capture([artifact.path for artifact in found],
+                                 options=options)
+    except ValueError as exc:
+        return None, str(exc)
+    if not capture.ledger.sources:
+        return None, ("every discovered artifact was refused by its reader, so "
+                      "no source contributed a single fact")
+    return capture, ""
+
+
+def _record_exclusions(ledger: Any, excluded: list, state: Any) -> Any:
+    """Carry every ``--source``-excluded artifact into the sidecar.
+
+    An excluded artifact is declared as an ``uncaptured`` source rather than
+    dropped: the note says it was excluded by CONFIGURATION, and the capture
+    time is the file's own mtime, so the freshness pass over the finished ledger
+    reads it as a known-age source that contributed nothing rather than as a
+    source of unknown age.
+    """
+    if not excluded:
+        return ledger
+    sources = dict(ledger.sources)
+    for artifact in excluded:
+        if artifact.path in sources:
+            continue
+        stamp = state.mtime_utc(artifact.ref.mtime) if artifact.ref else ""
+        sources[artifact.path] = provenance.SourceRecord(
+            source_id=artifact.path, kind=artifact.source, origin=artifact.path,
+            captured_at=stamp, scope="uncaptured",
+            note=_EXCLUDED_NOTE.format(source=artifact.source))
+    return dataclasses.replace(ledger, sources=sources)
+
+
+def _empty_capture_ledger(options: Any) -> Any:
+    """The ledger an empty capture still writes about: every category that WOULD
+    have been emitted, declared ``uncaptured``.
+
+    A summary with no categories at all would read as "nothing to say"; this
+    says "nothing was captured, and here is everything that therefore answers
+    UNKNOWN".
+    """
+    builder = provenance.LedgerBuilder()
+    for category in options.categories():
+        builder.declare(category, scope="uncaptured", keys=0, emitted=False,
+                        existence_licensed=False, note=_NOTHING_CAPTURED_NOTE)
+    return builder.build()
+
+
+def _capture_explanation(args: argparse.Namespace, excluded: list,
+                         rejected: list, notes: list[str],
+                         failure: str) -> list[str]:
+    """Why nothing was captured: which paths were examined, and why each
+    candidate was refused. A candidate that vanished silently is a candidate the
+    user believes was read."""
+    lines = [f"  paths examined: {', '.join(args.paths)}"]
+    lines.extend(f"  {note}" for note in notes)
+    lines.extend(f"  rejected {artifact.path}: {artifact.reason}"
+                 for artifact in rejected)
+    lines.extend(_EXCLUDED_LINE.format(path=artifact.path,
+                                       source=artifact.source)
+                 for artifact in excluded)
+    if failure:
+        lines.append(f"  {failure}")
+    if not rejected and not excluded and not notes:
+        lines.append("  no candidate file was found at all: this tool reads "
+                     "*.tf, *.tf.json, *.tfstate and terraform show -json "
+                     "output, and classifies every one of them BY CONTENT")
+    return lines
+
+
+def _capture_staleness(args: argparse.Namespace, ledger: Any) -> list[str]:
+    """The ``--max-age`` abstention message, or ``[]``.
+
+    ADVISORY, always: the exit code is untouched, because a stale capture is
+    still a capture and grounding is where staleness has to abstain.
+    """
+    if args.max_age is None:
+        return []
+    max_age = freshness.parse_duration(args.max_age)
+    if max_age is None:
+        return []
+    try:
+        now = freshness.resolve_now()
+    except ValueError as exc:
+        return [f"  the staleness check did not run: {exc}"]
+    verdicts = freshness.check_freshness(ledger, now=now, max_age=max_age)
+    if not verdicts:
+        return []
+    return [f"  STALE: {verdict.message}" for verdict in verdicts] + \
+        [_STALENESS_ADVICE]
+
+
+def _capture_header(ledger: Any, found: list,
+                    args: argparse.Namespace) -> str:
+    """The one-line header the text format prints above the coverage table."""
+    declared = ledger.declared_categories()
+    emitted = [c for c in declared if ledger.scope_of(c).emitted]
+    return (f"gcp-ground capture-terraform: a PARTIAL, terraform-managed-only "
+            f"view — {len(found)} artifact(s) read under {len(args.paths)} "
+            f"path(s), {len(emitted)} of {len(declared)} declared category(ies) "
+            f"emitted")
+
+
+def _capture_render(args: argparse.Namespace, header: str, lines: list[str],
+                    ledger: Any) -> None:
+    """The coverage summary, printed on EVERY path — successful, dry-run and
+    empty alike. A user must never receive a snapshot without being told what it
+    does not cover.
+
+    ``text`` puts the whole block on stdout; ``json`` puts the ledger document
+    there instead and moves the human lines to stderr, so the summary is
+    pipeable while stdout stays one parseable document.
+    """
+    if args.format == "text":
+        print("\n".join([header, *lines, provenance.summarize(ledger)]))
+        return
+    print("\n".join([header, *lines]), file=sys.stderr)
+    print(json.dumps(ledger.to_dict(), indent=2, sort_keys=True))
+
+
+def _place_sidecar(written: str, wanted: str) -> str:
+    """Move the sidecar ``write_capture`` wrote to where ``--origins-out`` asked
+    for it.
+
+    ``estate.write_capture`` is the ONE writer of the pair — reimplementing it
+    here to honour a flag would be a second place for the two-file contract to
+    drift — so the flag is honoured by relocating the file it produced, which
+    keeps the count at exactly two.
+    """
+    if os.path.abspath(written) == os.path.abspath(wanted):
+        return written
+    os.replace(written, wanted)
+    return wanted
 
 
 # -- compile-requirements ------------------------------------------------------
