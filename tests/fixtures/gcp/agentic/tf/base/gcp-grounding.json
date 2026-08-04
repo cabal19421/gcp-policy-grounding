@@ -1,0 +1,8 @@
+{
+  "schema": "gcp-grounding-config/1",
+  "snapshot": "agentic_snapshot.json",
+  "terraform": {"state": "terraform.tfstate"},
+  "targets": {
+    "main.tf.json": "firewall_rules:projects/acme-prod/global/firewalls/allow-internal-ssh"
+  }
+}
