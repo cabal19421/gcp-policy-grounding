@@ -347,24 +347,78 @@ def _port_bounds(label: str, name: str, port: Any) -> tuple[int, int]:
 
 # -- claim / snapshot access --------------------------------------------------
 
+#: How an envelope abstention names the document it could not read. A plan is
+#: THE widest arm of the applicability table — it matches every domain — so its
+#: reasons have to say WHICH document they are about as well as which key.
+_PLAN_WHAT = "the terraform plan under review"
+
+
+def _plan_envelope(plan) -> None:
+    """Refuse a plan whose two resource-bearing sections are BOTH unreadable.
+
+    ``preflight.detect_kind`` labels ANY mapping carrying one of four top-level
+    keys a plan without validating its shape, and
+    :func:`gcp_grounding.tf_claims.terraform_plan_claims` hands back an EMPTY
+    list for any mapping it cannot walk — no exception, no reason. Trusting that
+    list is how the empty document, and a plan whose ``resource_changes`` is a
+    string and whose ``planned_values`` is an integer, ground every domain
+    ``forall`` over zero records.
+
+    So the envelope is validated FIRST: ``planned_values`` must be a Mapping and
+    ``resource_changes`` a list, and at least one of the two must be present and
+    well formed. A plan carrying only one of them is ordinary terraform output
+    and is accepted (``terraform show -json`` of a plan file omits neither by
+    accident). Both are read through :mod:`gcp_grounding.evidence` so the
+    difference between *unreadable* and *observed empty* reaches the ledger and
+    not only the message, and both reasons are quoted so the abstention names
+    the malformed key rather than just the plan.
+    """
+    problems: list[str] = []
+    try:
+        evidence.scalar(plan, "planned_values", what=_PLAN_WHAT, type=Mapping)
+    except evidence.NotEvaluated as exc:
+        problems.append(exc.reason)
+    try:
+        evidence.rows(plan, "resource_changes", what=_PLAN_WHAT)
+    except evidence.NotEvaluated as exc:
+        problems.append(exc.reason)
+    if len(problems) == 2:
+        raise _Undecidable(
+            f"{_PLAN_WHAT} has neither a readable 'planned_values' mapping nor a "
+            f"readable 'resource_changes' list ({'; '.join(problems)}) — the rule "
+            "was not evaluated")
+
+
 def _document_claims(ctx, module, claim_kind: str, label: str):
     """The claims of *claim_kind* the domain module makes about ``ctx.document``.
 
     Returns ``(claims, None)`` or ``((), missing_reason)``. A terraform plan can
     carry any domain's resources, so it goes through
     :func:`gcp_grounding.tf_claims.terraform_plan_claims` (which reaches the same
-    domain extractor through the registry); every other document kind is looked
-    up in the module's own ``DOCUMENT_EXTRACTORS`` table."""
+    domain extractor through the registry) once :func:`_plan_envelope` has said
+    the plan was understood; every other document kind is looked up in the
+    module's own ``DOCUMENT_EXTRACTORS`` table.
+
+    A READABLE plan that carries no resource of the queried collection is still
+    not a positive: it abstains naming the plan and the collection, because "the
+    plan was understood and mentions no firewall rule" and "the obligation holds
+    over every firewall rule in the plan" are different facts, and only the
+    second one is a pass."""
     if ctx.document is None:
         return (), f"no document under review — the {label} rule was not evaluated"
     kind = ctx.document_kind
     if kind == _TF_PLAN:
-        claims = tf_claims.terraform_plan_claims(ctx.document)
-    else:
-        extractor = getattr(module, "DOCUMENT_EXTRACTORS", {}).get(kind)
-        if extractor is None:
-            return (), f"the document under review is not a {label}"
-        claims = extractor(ctx.document)
+        _plan_envelope(ctx.document)
+        claims = tuple(c for c in tf_claims.terraform_plan_claims(ctx.document)
+                       if c.kind == claim_kind)
+        if not claims:
+            return (), (f"{_PLAN_WHAT} carries no {label} resources — the rule "
+                        "was not evaluated over any record")
+        return claims, None
+    extractor = getattr(module, "DOCUMENT_EXTRACTORS", {}).get(kind)
+    if extractor is None:
+        return (), f"the document under review is not a {label}"
+    claims = extractor(ctx.document)
     return tuple(c for c in claims if c.kind == claim_kind), None
 
 
