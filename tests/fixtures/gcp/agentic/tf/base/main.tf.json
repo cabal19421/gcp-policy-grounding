@@ -1,0 +1,83 @@
+{
+  "resource": {
+    "google_access_context_manager_service_perimeter": {
+      "acme_prod": {
+        "name": "accessPolicies/987654321/servicePerimeters/acme_prod",
+        "parent": "accessPolicies/987654321",
+        "perimeter_type": "PERIMETER_TYPE_REGULAR",
+        "status": [
+          {
+            "access_levels": ["accessPolicies/987654321/accessLevels/trusted_corp"],
+            "resources": ["projects/111111111111"],
+            "restricted_services": ["storage.googleapis.com", "bigquery.googleapis.com"]
+          }
+        ],
+        "title": "acme_prod"
+      }
+    },
+    "google_compute_firewall": {
+      "allow_ssh": {
+        "allow": [{"ports": ["22"], "protocol": "tcp"}],
+        "direction": "INGRESS",
+        "name": "allow-internal-ssh",
+        "network": "projects/acme-prod/global/networks/prod-vpc",
+        "priority": 1000,
+        "project": "acme-prod",
+        "source_ranges": ["10.0.0.0/8"],
+        "target_tags": ["bastion"]
+      },
+      "deny_rdp": {
+        "deny": [{"ports": ["3389"], "protocol": "tcp"}],
+        "direction": "INGRESS",
+        "name": "deny-external-rdp",
+        "network": "projects/acme-prod/global/networks/prod-vpc",
+        "priority": 900,
+        "project": "acme-prod",
+        "source_ranges": ["0.0.0.0/0"]
+      }
+    },
+    "google_compute_security_policy": {
+      "edge_waf": {
+        "name": "acme-edge-waf",
+        "project": "acme-prod",
+        "rule": [
+          {
+            "action": "deny(403)",
+            "match": [
+              {
+                "config": [{"src_ip_ranges": ["0.0.0.0/0"]}],
+                "versioned_expr": "SRC_IPS_V1"
+              }
+            ],
+            "priority": 1000
+          },
+          {
+            "action": "deny(403)",
+            "match": [
+              {
+                "config": [{"src_ip_ranges": ["*"]}],
+                "versioned_expr": "SRC_IPS_V1"
+              }
+            ],
+            "priority": 2147483647
+          }
+        ],
+        "type": "CLOUD_ARMOR"
+      }
+    },
+    "google_org_policy_policy": {
+      "no_sa_keys": {
+        "name": "projects/acme-prod/policies/iam.disableServiceAccountKeyCreation",
+        "parent": "projects/acme-prod",
+        "spec": [{"rules": [{"enforce": "TRUE"}]}]
+      }
+    },
+    "google_project_iam_binding": {
+      "viewer": {
+        "members": ["group:data-eng@acme.example"],
+        "project": "acme-prod",
+        "role": "roles/bigquery.dataViewer"
+      }
+    }
+  }
+}
