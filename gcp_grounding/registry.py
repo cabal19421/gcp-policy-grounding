@@ -28,6 +28,14 @@ module that is not part of this checkout simply does not contribute. Every
 provider callable is then invoked inside a ``try/except Exception`` in the
 ``run_*`` helpers, so a crashing domain module records one honest ``unverified``
 verdict naming it rather than breaking the gate.
+
+:func:`_invoke` is also one of the two funnels the EVIDENCE FLOOR
+(:mod:`gcp_grounding.evidence`) is enforced at — ``ground_policy`` reaches domain
+check code through :func:`run_claim_checks`, :func:`run_document_checks` and
+:func:`run_pair_check`, all of which call it, and nothing bypasses them. It opens
+exactly one :func:`~gcp_grounding.evidence.ledger` per provider call and reads it
+afterwards, so a ``grounded`` (or ``contradicted``) standing on zero examined
+records abstains instead of deciding.
 """
 
 from __future__ import annotations
@@ -36,6 +44,7 @@ import importlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping
 
+from . import evidence
 from .core.log import get_logger
 from .core.report import Verdict
 
@@ -194,24 +203,107 @@ def _as_verdicts(result: Any) -> "list[Verdict]":
     return list(result)
 
 
-def _invoke(fn: Any, ctx: CheckContext, *args: Any) -> "list[Verdict]":
-    """Call ``fn(*args)`` fail-open: a raised exception becomes exactly one
-    honest ``unverified`` verdict naming the provider, never propagated. A
-    crashing domain module must not break the gate."""
+#: The two statuses that DECIDE. ``ungrounded`` and ``unverified`` are already
+#: honest about having found nothing, so the evidence floor leaves them alone.
+_DECIDED = ("grounded", "contradicted")
+
+
+def _stands_on_nothing(led: evidence.Ledger) -> bool:
+    """Did this invocation read collections and examine no rows, unattested?
+
+    The REGISTERED predicate is ``rows_examined == 0``. ``collections_read > 0``
+    is the deliberate BLAST-RADIUS CONTROL — a scalar-only check opens no
+    collection and is therefore never downgraded — and ``dispositive is None``
+    is the one sanctioned escape
+    (:func:`gcp_grounding.evidence.emptiness_is_dispositive`).
+    """
+    return (led.collections_read > 0 and led.rows_examined == 0
+            and led.dispositive is None)
+
+
+def _what_was_empty(led: evidence.Ledger) -> str:
+    """The empty collections this invocation observed, for the abstention.
+
+    A read that ABSTAINED still counted as a collection read without recording
+    an emptiness note, so the fallback says exactly that rather than implying an
+    observation nobody made.
+    """
+    if led.empty_observed:
+        return "; ".join(led.empty_observed)
+    return "no collection it read reported any records"
+
+
+def _floored(verdict: Verdict, led: evidence.Ledger, fn: Any) -> Verdict:
+    """*verdict* as the evidence behind it permits it to be stated.
+
+    A ``grounded`` or ``contradicted`` standing on zero examined rows is
+    rewritten to an ``unverified`` of the SAME kind and target naming the empty
+    collections and the status it replaced — a contradiction manufactured out of
+    an unreadable old side is the same defect wearing the other polarity, so it
+    is downgraded too. A verdict resting on an explicit attestation survives and
+    carries that attestation's reason, which is the whole point of requiring one.
+    """
+    if verdict.status not in _DECIDED:
+        return verdict
+    if _stands_on_nothing(led):
+        logger.warning(
+            "provider %s returned %s for %r after reading %d collection(s) and "
+            "examining no records (%s) — downgraded to unverified",
+            _label(fn), verdict.status, verdict.target, led.collections_read,
+            _what_was_empty(led))
+        return Verdict("unverified", verdict.kind, verdict.target, verdict.lineno,
+                       f"{_label(fn)} returned {verdict.status} after reading "
+                       f"{led.collections_read} collection(s) and examining no "
+                       f"records ({_what_was_empty(led)}) — the {verdict.status} "
+                       f"verdict was replaced by this abstention; nothing was "
+                       f"examined, so nothing was decided",
+                       verdict.suggestions)
+    if led.dispositive is not None:
+        return Verdict(verdict.status, verdict.kind, verdict.target, verdict.lineno,
+                       f"{verdict.message} (deciding over zero examined records is "
+                       f"correct here: {led.dispositive})", verdict.suggestions)
+    return verdict
+
+
+def _invoke(fn: Any, ctx: CheckContext, *args: Any,
+            kind: str = "document") -> "list[Verdict]":
+    """Call ``fn(*args)`` fail-open under exactly one evidence ledger.
+
+    Three post-conditions, in the order they can fire:
+
+    (a) a :class:`gcp_grounding.evidence.NotEvaluated` — the typed abstain — is
+        exactly one ``unverified`` of *kind* naming what could not be evaluated
+        and why. This is a first-class abstain for domain code that cannot be
+        swallowed, and it is caught ABOVE the pre-existing broad arm, which is
+        unchanged in meaning: any other exception is still one honest
+        ``unverified`` naming the provider, never propagated.
+    (b) every decided verdict is put through :func:`_floored`, so a verdict that
+        read collections and examined nothing abstains instead of deciding.
+    (c) a check that read no collection at all is untouched — see
+        :func:`_stands_on_nothing`.
+    """
     try:
-        return _as_verdicts(fn(*args))
+        with evidence.ledger() as led:
+            verdicts = _as_verdicts(fn(*args))
+    except evidence.NotEvaluated as exc:
+        logger.debug("provider %s abstained on %s — %s", _label(fn), exc.what,
+                     exc.reason)
+        return [Verdict("unverified", kind, ctx.source, 0,
+                        f"{_label(fn)} did not evaluate {exc.what}: {exc.reason} "
+                        f"— not decided")]
     except Exception as exc:  # noqa: BLE001 — fail-open by contract
         logger.debug("provider %s raised — abstaining", _label(fn), exc_info=True)
         return [Verdict("unverified", "document", ctx.source, 0,
                         f"{_label(fn)} raised {type(exc).__name__}: {exc} "
                         f"— not decided")]
+    return [_floored(v, led, fn) for v in verdicts]
 
 
 def run_claim_checks(claim: "Claim", ctx: CheckContext) -> "list[Verdict]":
     """Every registered check for *claim*'s kind, run fail-open."""
     verdicts: list[Verdict] = []
     for fn in claim_checks(claim.kind):
-        verdicts.extend(_invoke(fn, ctx, claim, ctx))
+        verdicts.extend(_invoke(fn, ctx, claim, ctx, kind=claim.kind))
     return verdicts
 
 

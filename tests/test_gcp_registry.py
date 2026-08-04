@@ -14,8 +14,13 @@ rather than breaking the gate.
 Environment-honest, exactly like ``test_gcp_preflight``: the ``cel`` expectations
 branch on whether z3 is importable, and the terraform expectations branch on
 whether ``gcp_grounding.tf_claims`` is part of this checkout.
+
+NAMED MUTATION MUST-KILLS PINNED HERE: MK-I01. (MK-I27 and MK-I28, on the
+downgrade predicate ``_invoke`` applies, are pinned in
+``test_gcp_evidence_floor.py``.)
 """
 
+import dataclasses
 import importlib.util
 import json
 import sys
@@ -37,6 +42,14 @@ POLICIES = FIXTURES / "policies"
 
 HAVE_Z3 = get_solver().backend == "z3"
 HAVE_TF = importlib.util.find_spec("gcp_grounding.tf_claims") is not None
+
+#: The resource types the built-in tf extractors own; a provider module must
+#: never register one of these (built-ins win), so the registry's contributed
+#: tf extractors stay disjoint from this set no matter which domains land.
+if HAVE_TF:
+    from gcp_grounding.tf_claims import _EXTRACTORS as _BUILTIN_TF_TYPES
+else:
+    _BUILTIN_TF_TYPES = {}
 
 STUB = "gcp_grounding_stub_provider"
 
@@ -149,10 +162,14 @@ def _tf_full_expected():
     ("tf_plan_full", _tf_full_expected()),
 ])
 def test_no_providers_is_byte_identical(snap, name, expected):
-    # Nothing in the default PROVIDER_MODULES is part of this checkout, so the
-    # registry must contribute nothing at all.
+    # The registry must not contribute anything that changes these baseline
+    # (non-firewall/non-armor/…) fixtures' grounding. As domain modules land in
+    # this checkout (fw_claims, …) they add NEW google resource types, never
+    # shadowing a built-in and never touching these fixtures — so the invariant
+    # relaxes from "registry is empty" to "registry never shadows a built-in tf
+    # type", which keeps the gate byte-identical to before the seam existed.
     assert registry.document_checks() == ()
-    assert registry.tf_extractors() == {}
+    assert set(registry.tf_extractors()).isdisjoint(_BUILTIN_TF_TYPES)
     assert registry.claim_checks("role") == ()
     report = ground_policy(POLICIES / f"{name}.json", snap)
     got = sorted((v.status, v.kind, v.target) for v in report.verdicts)
@@ -325,3 +342,32 @@ def test_load_document_is_called_exactly_once_for_the_baseline(snap, monkeypatch
 
     assert sum(1 for a in calls if a is baseline) == 1
     assert any(v.kind == "subset" for v in report.verdicts)  # _subset_verdict ran
+
+
+# =============================================================================
+# the named mutation must-kill in this file
+#
+# MEASURED to survive the suite as it stood and re-measured ALONE in an isolated
+# copy (house rule 7) before being pinned here.
+# =============================================================================
+
+def test_check_context_is_frozen_and_hashable_by_intent():
+    """MK-I01 (registry.py:77, ``frozen=True`` -> ``frozen=False``).
+
+    The docstring says a check RECEIVES the context and never mutates it, and
+    that it is frozen and hashable by intent — one context is built once and
+    shared by every check in the run, so a check that could scribble on it would
+    be editing the evidence the next check reads. The mutant makes it both
+    mutable and unhashable, and nothing in the suite noticed."""
+    fields = dict(snapshot=GcpSnapshot(captured_at="2026-01-01T00:00:00Z"),
+                  solver=None, document=None, document_kind="iam_policy",
+                  source="<policy object>", claims=())
+    ctx = CheckContext(**fields)
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ctx.document_kind = "org_policy"
+    assert ctx.document_kind == "iam_policy"      # and the scribble did not land
+
+    # hashable-by-intent: usable as a dict key / set member across checks.
+    assert hash(ctx) == hash(CheckContext(**fields))
+    assert len({ctx, CheckContext(**fields)}) == 1
