@@ -9,19 +9,26 @@ pins the driver against the EXISTING toy fixtures, which are already covered by
 ``tests/test_gcp_cli.py`` in-process: if the two ever disagree, one of them is
 wrong and both are red.
 
-Roughly a dozen real spawns. They cost about 0.05s each, so the module runs in
-well under a second; if that ever changes, drop CASES rather than the
-subprocess boundary, which is the entire point of the module.
+Eighteen real spawns, measured off the budget's own per-label breakdown.
+Seventeen are gate children at about 0.05s each; the eighteenth is a pytest
+child, and it costs most of the module's ~1.0s wall clock. It earns that: a
+session-scoped autouse fixture cannot be observed from inside the session it
+governs, so the only way to prove that a module which never imports a budget
+fixture is enrolled anyway is to run such a module in its own session. If the
+cost ever has to come down, drop CASES rather than the subprocess boundary,
+which is the entire point of the module.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 
 import pytest
 
-from tests.agentic import hookrunner
+from tests.agentic import env, hookrunner
 from tests.agentic.asserts import (
     assert_abstained,
     assert_blocked,
@@ -40,6 +47,11 @@ from tests.agentic.hookrunner import (
     run_hook_explain,
     run_hook_raw,
 )
+
+
+#: ``cli._explain_lines``' degraded-world line, verbatim (``cli.py:227-228``).
+NO_Z3_EXPLAIN_NOTE = ("  (z3 is not available — no constraints were generated; "
+                      "cel and subset checks degraded to 'unverified')")
 
 
 def hook_event(path) -> dict:
@@ -180,12 +192,113 @@ def test_a_recognized_document_never_passes_verdictless(good_policy, toy_snapsho
 def test_explain_is_the_visible_channel_on_an_exit_zero_run(
         good_policy, toy_snapshot_path):
     """cli.py:183-184 prints the explain lines before the ``report.ok`` check,
-    so this is the one thing a passing hook run can be asserted on."""
+    so this is the one thing a passing hook run can be asserted on.
+
+    The header alone is NOT the assertion. ``cli._explain_lines`` builds that
+    header unconditionally — an early ``return lines`` right after it leaves
+    this module green while no constraint is ever translated, and in the
+    degraded world the header is printed *precisely* when nothing was
+    generated. So the semantics are asserted instead: the backend tag on the
+    header, and a line naming the constraint this fixture must produce.
+    ``iam_policy_good.json``'s third binding carries the time-window condition
+    ``request.time < timestamp("2027-01-01T00:00:00Z")``, so exactly one
+    ``[cel]`` line for ``bindings[2].condition.expression`` has to appear,
+    carrying a real s-expression over ``request.time``.
+    """
     outcome = run_hook_explain(hook_event(good_policy), snapshot=toy_snapshot_path)
     assert outcome.exit_code == 0, str(outcome)
     assert outcome.stdout == "", str(outcome)
-    assert "z3 constraints generated this run" in outcome.stderr, str(outcome)
     assert "--explain" in outcome.argv
+    lines = outcome.stderr.splitlines()
+    backend = "z3" if env.HAVE_Z3 else "builtin"
+    assert f"z3 constraints generated this run [{backend}]:" in lines, str(outcome)
+    if env.HAVE_Z3:
+        prefix = "  [cel] bindings[2].condition.expression: "
+        translated = [line for line in lines if line.startswith(prefix)]
+        assert len(translated) == 1, str(outcome)
+        constraint = translated[0][len(prefix):]
+        assert constraint.startswith("("), str(outcome)
+        assert "request.time" in constraint, str(outcome)
+    else:
+        assert NO_Z3_EXPLAIN_NOTE in lines, str(outcome)
+
+
+# -- the no-z3 banner: scrubbed at the boundary, never at the assertion -------
+
+
+def test_the_no_z3_fallback_banner_is_scrubbed_from_the_asserted_stream(
+        good_policy, toy_snapshot_path, no_z3_env):
+    """A clean policy through the no-z3 overlay: the ASSERTED stream is
+    byte-empty and the RAW stream carries the banner.
+
+    ``assert_passed``'s byte-empty-both-streams contract is not relaxed for the
+    degraded world; the banner is filtered at the harness boundary and retained
+    verbatim on the outcome, so the failure report still shows it.
+    """
+    outcome = run_hook(hook_event(good_policy), snapshot=toy_snapshot_path,
+                       env=no_z3_env)
+    assert_passed(outcome)
+    assert outcome.stderr == "", str(outcome)
+    assert outcome.stderr_raw == hookrunner.NO_Z3_FALLBACK_BANNER + "\n", str(outcome)
+    assert hookrunner.NO_Z3_FALLBACK_BANNER in str(outcome)  # nothing is hidden
+
+
+def test_the_stderr_allowlist_is_pinned_and_may_only_shrink():
+    """One entry. This number may only go DOWN — a scrub list that grows is a
+    hole in every byte-silence assertion downstream of it."""
+    assert len(hookrunner.STDERR_ALLOWLIST) == 1
+
+
+def test_every_allowlist_entry_matches_a_line_the_product_really_emits(
+        good_policy, toy_snapshot_path, no_z3_env):
+    """An entry that matches nothing is a licence to filter whatever it
+    eventually does match, so every entry is checked against a real child's raw
+    stderr rather than against a copy of the source string."""
+    outcome = run_hook(hook_event(good_policy), snapshot=toy_snapshot_path,
+                       env=no_z3_env)
+    emitted = set(outcome.stderr_raw.split("\n"))
+    assert set(hookrunner.STDERR_ALLOWLIST) <= emitted, str(outcome)
+
+
+def test_any_stderr_byte_outside_the_allowlist_still_fails_assert_passed(
+        good_policy, toy_snapshot_path, no_z3_env):
+    """The same degraded child with ``--explain``: the banner is filtered, the
+    two explain lines are not, and ``assert_passed`` still rejects the run."""
+    outcome = run_hook_explain(hook_event(good_policy), snapshot=toy_snapshot_path,
+                               env=no_z3_env)
+    assert hookrunner.NO_Z3_FALLBACK_BANNER not in outcome.stderr, str(outcome)
+    with pytest.raises(AssertionError, match="byte-silent"):
+        assert_passed(outcome)
+    # And literally one byte, so "any" is not read as "any whole extra line":
+    # the allowlisted banner plus a single stray character.
+    raw = hookrunner.NO_Z3_FALLBACK_BANNER + "\nx"
+    stray = HookOutcome(exit_code=0, stdout="", stderr=hookrunner.scrub_stderr(raw),
+                        argv=("python", "-m", "gcp_grounding"), stderr_raw=raw)
+    assert stray.stderr == "x"
+    with pytest.raises(AssertionError, match="byte-silent"):
+        assert_passed(stray)
+
+
+def test_explain_in_the_no_z3_world_names_the_builtin_backend_and_says_why(
+        good_policy, toy_snapshot_path, no_z3_env):
+    """The degraded branch of the explain channel, asserted in the world that
+    really produces it rather than only on a machine that happens to lack z3."""
+    outcome = run_hook_explain(hook_event(good_policy), snapshot=toy_snapshot_path,
+                               env=no_z3_env)
+    lines = outcome.stderr.splitlines()
+    assert "z3 constraints generated this run [builtin]:" in lines, str(outcome)
+    assert NO_Z3_EXPLAIN_NOTE in lines, str(outcome)
+
+
+def test_the_scrub_matches_whole_lines_not_substrings():
+    """No spawn: the filter's own contract. An entry is an EXACT line — a
+    prefix match would swallow a real finding that quoted the banner."""
+    banner = hookrunner.NO_Z3_FALLBACK_BANNER
+    assert hookrunner.scrub_stderr(banner + "\n") == ""
+    assert hookrunner.scrub_stderr("") == ""
+    assert hookrunner.scrub_stderr(banner + "\nboom\n") == "boom\n"
+    assert hookrunner.scrub_stderr("x" + banner + "\n") == "x" + banner + "\n"
+    assert hookrunner.scrub_stderr(banner + " \n") == banner + " \n"
 
 
 # -- the driver's own bookkeeping (no spawn) ----------------------------------
@@ -204,7 +317,70 @@ def test_outcome_str_renders_everything_a_failure_needs():
 
 def test_every_spawn_was_counted_against_the_session_budget(
         good_policy, toy_snapshot_path, subprocess_budget):
-    before = subprocess_budget.counts.get(hookrunner.BUDGET_LABEL, 0)
+    """Counted under THIS module's name, not the driver's: a breakdown that
+    attributes every spawn to ``tests.agentic.hookrunner`` names the one module
+    that can never be the offender."""
+    before = subprocess_budget.counts.get(__name__, 0)
     run_hook(hook_event(good_policy), snapshot=toy_snapshot_path)
-    assert subprocess_budget.counts[hookrunner.BUDGET_LABEL] == before + 1
+    assert subprocess_budget.counts[__name__] == before + 1
     assert hookrunner.current_budget() is subprocess_budget
+
+
+def test_current_budget_refuses_to_absorb_spawns_when_nothing_is_bound():
+    """No module-level fallback counter. An unbound ``current_budget()`` raises
+    rather than quietly counting into an object whose ``check()`` nobody ever
+    calls — which is how three real spawns were recorded against a ceiling that
+    was never enforced."""
+    previous = hookrunner.bind_budget(None)
+    try:
+        with pytest.raises(RuntimeError, match="no subprocess budget is bound"):
+            hookrunner.current_budget()
+    finally:
+        hookrunner.bind_budget(previous)
+
+
+# A throwaway test module that imports ``run_hook`` and NOTHING about the
+# budget — the exact shape that spawned three uncounted children. Written to a
+# tmp dir and run by a real pytest child so the binding under test is the one
+# in ``tests/conftest.py``, reached without this file's cooperation.
+_UNENROLLED_MODULE = '''\
+"""Imports run_hook. Imports no budget fixture. Opts out of nothing."""
+
+from tests.agentic.hookrunner import current_budget, run_hook
+
+EVENT = {event}
+SNAPSHOT = {snapshot!r}
+
+
+def test_an_unenrolled_module_still_spends_the_session_budget(subprocess_budget):
+    budget = current_budget()
+    assert budget is subprocess_budget
+    before = budget.total
+    run_hook(EVENT, snapshot=SNAPSHOT)
+    assert budget.total == before + 1
+    assert budget.counts[__name__] == 1, budget.counts
+'''
+
+
+def test_a_module_that_imports_only_run_hook_cannot_opt_out_of_the_budget(
+        good_policy, toy_snapshot_path, tmp_path, subprocess_budget):
+    """The binding is session-scoped and autouse in ``tests/conftest.py``, so a
+    module that never imports a budget fixture still has its spawns counted —
+    under its OWN name, so the per-label breakdown can name the offender.
+
+    A real pytest child, because that is the only way to observe a session
+    fixture this module cannot be inside.
+    """
+    module = tmp_path / "test_unenrolled_importer.py"
+    module.write_text(
+        _UNENROLLED_MODULE.format(event=json.dumps(hook_event(good_policy)),
+                                  snapshot=str(toy_snapshot_path)),
+        encoding="utf-8")
+    subprocess_budget.increment(__name__)  # the pytest child is a spawn too
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         "-p", "tests.conftest", str(module)],
+        capture_output=True, text=True, cwd=str(env.REPO_ROOT),
+        env=hookrunner.child_env({"PYTHONPATH": str(env.REPO_ROOT)}),
+        timeout=hookrunner.DEFAULT_TIMEOUT)
+    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
