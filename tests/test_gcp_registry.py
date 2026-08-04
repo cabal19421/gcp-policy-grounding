@@ -64,6 +64,10 @@ DOCUMENT_CHECK_OWNERS = {
     # claim; it stays silent unless a role hits the curated escalation table,
     # which none of these fixtures' roles does.
     "gcp_grounding.iam_checks": {"check_escalation"},
+    # A whole-document check that answered for another domain's document
+    # kind would break the verdict-set equality below; that is what pins
+    # its silence on these fixtures.
+    "gcp_grounding.vpcsc_checks": {"check_perimeter_estate"},
 }
 
 STUB = "gcp_grounding_stub_provider"
