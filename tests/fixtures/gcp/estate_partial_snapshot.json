@@ -1,0 +1,31 @@
+{
+  "captured_at": "2026-07-18T09:30:00Z",
+  "roles": {
+    "roles/compute.securityAdmin": {
+      "title": "Compute Security Admin",
+      "stage": "GA",
+      "included_permissions": [
+        "compute.firewallPolicies.get",
+        "compute.firewalls.get",
+        "compute.firewalls.list"
+      ]
+    }
+  },
+  "permissions": [
+    "compute.firewallPolicies.get",
+    "compute.firewalls.get",
+    "compute.firewalls.list"
+  ],
+  "principals": [
+    "serviceAccount:net-admin@acme-prod.iam.gserviceaccount.com"
+  ],
+  "constraints": {
+    "constraints/compute.vmExternalIpAccess": {
+      "value_type": "list"
+    }
+  },
+  "resource_types": [
+    "compute.googleapis.com/Firewall",
+    "compute.googleapis.com/FirewallPolicy"
+  ]
+}
