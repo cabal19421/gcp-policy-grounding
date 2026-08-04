@@ -18,12 +18,24 @@ fallback otherwise — this module never imports z3 itself):
   works identically with or without z3.
 - :func:`check_policy_subset` — opt-in, only called when a baseline policy
   is provided: does the new IAM policy grant a subset of the old one? The
-  (role, member) grant sets are encoded in z3 and "some new grant is not an
-  old grant" is checked for satisfiability; a witness grant →
-  ``contradicted``. Conditional bindings make the comparison
-  request-time-dependent → ``unverified``; so does any document whose grant
-  set cannot be extracted faithfully (deny policies, no ``bindings`` array,
-  unrecognized binding keys).
+  (role, member, condition) grant triples are encoded in z3 — each binding's
+  CEL condition conjoined into its grant via :class:`_CelToZ3` — and "some
+  new grant is not an old grant" is checked for satisfiability over a shared
+  ``request.time`` / ``resource.name`` world; a witness grant →
+  ``contradicted``. RESIDUAL EVASION: this closes the conditional-binding hole
+  only for the ``request.time`` / ``resource.name`` CEL subset ``_CelToZ3``
+  supports. ANY condition outside it — ``resource.matchTag(...)`` (which
+  ``claims._RUNTIME_ONLY_MARKERS`` already flags runtime-only),
+  ``request.auth.claims[...]``, or anything else the translator cannot
+  represent — still returns the WHOLE check to ``unverified`` (with
+  ``report.ok`` True) NAMING the offending expression, so an agent that
+  appends such a condition to every binding still disables new⊆old exactly as
+  before; the improvement is only that the abstain is now on the record rather
+  than invisible. Closing it fully would need either a translator extension or
+  a policy decision to treat an untranslatable condition as widening — neither
+  is in scope here. A document whose grant set cannot be extracted faithfully
+  (deny policies, no ``bindings`` array, unrecognized binding keys) is
+  likewise ``unverified``.
 
 Where z3 is absent, :func:`check_cel` and :func:`check_policy_subset`
 degrade to ``unverified`` with the reason spelled out;
@@ -366,12 +378,16 @@ class _Undecidable(Exception):
     rather than mint a false subset verdict."""
 
 
-def _grant_pairs(policy: Mapping[str, Any], label: str) -> frozenset[tuple[str, str]]:
-    """The (role, member) grant set of an IAM policy. Every member string
-    counts (allUsers widens the grant surface like any principal does);
-    deny-policy documents ('rules'), documents without a 'bindings' array,
-    malformed fields, unrecognized binding keys and conditional bindings
-    raise :class:`_Undecidable`. Only ``"bindings": []`` is the empty set."""
+def _grant_pairs(policy: Mapping[str, Any], label: str) -> frozenset[tuple[str, str, str | None]]:
+    """The (role, member, condition) grant triples of an IAM policy. Every
+    member string counts (allUsers widens the grant surface like any principal
+    does); the third element is the binding's CEL condition expression, or
+    ``None`` for an unconditional binding. Deny-policy documents ('rules'),
+    documents without a 'bindings' array, malformed fields, unrecognized
+    binding keys, and a ``condition`` present but not shaped as a mapping with
+    a non-empty str ``expression`` all raise :class:`_Undecidable` — an
+    unparseable condition must not be read as unconditional. Only
+    ``"bindings": []`` is the empty set."""
     if "rules" in policy:
         raise _Undecidable(f"the {label} policy has 'rules' — a deny policy's "
                            "access surface is not a (role, member) grant set")
@@ -382,7 +398,7 @@ def _grant_pairs(policy: Mapping[str, Any], label: str) -> frozenset[tuple[str, 
     if not isinstance(bindings, list):
         raise _Undecidable(f"the {label} policy's 'bindings' is "
                            f"{type(bindings).__name__}, not an array")
-    pairs: set[tuple[str, str]] = set()
+    triples: set[tuple[str, str, str | None]] = set()
     for i, binding in enumerate(bindings):
         if not isinstance(binding, Mapping):
             raise _Undecidable(f"the {label} policy's bindings[{i}] is not an object")
@@ -392,9 +408,19 @@ def _grant_pairs(policy: Mapping[str, Any], label: str) -> frozenset[tuple[str, 
             raise _Undecidable(f"the {label} policy's bindings[{i}] has "
                                f"unrecognized key(s) {', '.join(unrecognized)} — "
                                "the grant set cannot be extracted faithfully")
-        if "condition" in binding:
-            raise _Undecidable(f"the {label} policy's bindings[{i}] is conditional — "
-                               "grant comparison is request-time-dependent")
+        condition = binding.get("condition")
+        if condition is None:
+            expression: str | None = None
+        elif not isinstance(condition, Mapping):
+            raise _Undecidable(f"the {label} policy's bindings[{i}].condition is "
+                               f"{type(condition).__name__}, not an object — an "
+                               "unparseable condition must not be read as unconditional")
+        else:
+            expression = condition.get("expression")
+            if not isinstance(expression, str) or not expression.strip():
+                raise _Undecidable(f"the {label} policy's bindings[{i}].condition has no "
+                                   "non-empty 'expression' string — an unparseable "
+                                   "condition must not be read as unconditional")
         role = binding.get("role")
         if not isinstance(role, str) or not role:
             raise _Undecidable(f"the {label} policy's bindings[{i}].role is not a role name")
@@ -405,17 +431,38 @@ def _grant_pairs(policy: Mapping[str, Any], label: str) -> frozenset[tuple[str, 
             if not isinstance(member, str) or not member:
                 raise _Undecidable(f"the {label} policy's bindings[{i}].members[{j}] "
                                    "is not a member id")
-            pairs.add((role, member))
-    return frozenset(pairs)
+            triples.add((role, member, expression))
+    return frozenset(triples)
+
+
+def _condition_formula(z3, expr: Optional[str], cache: dict):
+    """The z3 boolean a binding's CEL condition contributes to its grant.
+
+    ``None`` (an unconditional binding) is ``BoolVal(True)``. Every other
+    expression is translated exactly once via :class:`_CelToZ3` and memoized
+    by its string in *cache*, so an identical condition in the old and new
+    policies produces the SAME z3 term — which is what lets the subset solver
+    cancel a grant that is present under the same condition on both sides.
+    """
+    if expr is None:
+        return z3.BoolVal(True)
+    if expr not in cache:
+        cache[expr] = _CelToZ3(z3, expr).translate()
+    return cache[expr]
 
 
 def check_policy_subset(new_policy: Mapping[str, Any], old_policy: Mapping[str, Any],
                         solver: Optional[ConstraintSolver] = None) -> Verdict:
     """Does the new IAM policy grant a subset of the old (baseline) one?
 
-    Encodes both (role, member) grant sets in z3 and asks whether "some new
-    grant is not an old grant" is satisfiable: unsat → new⊆old (grounded);
-    a model → that witness grant contradicts the subset claim.
+    Encodes both (role, member, condition) grant sets in z3 — each binding's
+    CEL condition conjoined into its grant — and asks whether "some new grant
+    is not an old grant" is satisfiable over a shared ``request.time`` /
+    ``resource.name`` world: unsat → new⊆old (grounded); a model → that witness
+    grant (with any request time / resource name a condition pinned it to)
+    contradicts the subset claim. A condition ``_CelToZ3`` cannot represent in
+    EITHER policy returns ``unverified`` naming it — never silently treated as
+    ``True`` (which would fabricate a widening) nor ``False`` (a false proof).
     """
     for label, policy in (("new", new_policy), ("old", old_policy)):
         if not isinstance(policy, Mapping):
@@ -436,14 +483,39 @@ def check_policy_subset(new_policy: Mapping[str, Any], old_policy: Mapping[str, 
         return Verdict("unverified", "subset", "iam-policy", 0,
                        f"z3 is not available (solver backend {solver.backend!r}) — "
                        "new⊆old was not decided")
+
+    # Translate every distinct condition once, up front, so an untranslatable
+    # one names itself in the abstain instead of surfacing as a bare grant.
+    # The shared request.time/resource.name free variables the supported subset
+    # references drive the witness, so track which the conditions actually use.
+    cond_cache: dict = {}
+    uses_time = uses_name = False
+    for expr in sorted({c for grants in (new_grants, old_grants)
+                        for (_, _, c) in grants if c is not None}):
+        try:
+            _condition_formula(z3, expr, cond_cache)
+        except UnsupportedCel as exc:
+            logger.debug("subset check unverified (unsupported condition): %s", exc)
+            return Verdict("unverified", "subset", "iam-policy", 0,
+                           f"new⊆old was not decided: condition {expr!r} is CEL "
+                           f"outside the supported subset ({exc})")
+        except RecursionError:
+            logger.debug("subset check unverified: condition too deeply nested")
+            return Verdict("unverified", "subset", "iam-policy", 0,
+                           f"new⊆old was not decided: condition {expr!r} is too "
+                           "deeply nested to translate")
+        uses_time = uses_time or "request.time" in expr
+        uses_name = uses_name or "resource.name" in expr
+
     role = z3.String("role")
     member = z3.String("member")
 
-    def granted(pairs: frozenset[tuple[str, str]]):
-        if not pairs:
+    def granted(grants: frozenset[tuple[str, str, str | None]]):
+        if not grants:
             return z3.BoolVal(False)
-        return z3.Or([z3.And(role == z3.StringVal(r), member == z3.StringVal(m))
-                      for r, m in sorted(pairs)])
+        return z3.Or([z3.And(role == z3.StringVal(r), member == z3.StringVal(m),
+                             _condition_formula(z3, c, cond_cache))
+                      for r, m, c in sorted(grants, key=lambda t: (t[0], t[1], t[2] or ""))])
 
     s = z3.Solver()
     s.add(granted(new_grants), z3.Not(granted(old_grants)))
@@ -458,6 +530,24 @@ def check_policy_subset(new_policy: Mapping[str, Any], old_policy: Mapping[str, 
     model = s.model()
     extra_role = model.eval(role, model_completion=True).as_string()
     extra_member = model.eval(member, model_completion=True).as_string()
+    witness = [f"the new policy grants {extra_role} to {extra_member}"]
+    if uses_time:
+        micros = model.eval(z3.Real("request.time"), model_completion=True)
+        witness.append(f"at request.time {_iso_from_micros(micros)}")
+    if uses_name:
+        extra_name = model.eval(z3.String("resource.name"), model_completion=True).as_string()
+        witness.append(f"with resource.name {extra_name!r}")
     return Verdict("contradicted", "subset", "iam-policy", 0,
-                   f"new⊈old: the new policy grants {extra_role} to {extra_member}, "
-                   "which the old policy does not")
+                   f"new⊈old: {', '.join(witness)}, which the old policy does not")
+
+
+def _iso_from_micros(value) -> str:
+    """A z3 model value for ``request.time`` (microseconds since the epoch, a
+    Real) rendered back to an ISO-8601 instant via the module's :data:`_EPOCH`.
+    Falls back to the raw z3 rendering if the value is not a plain rational or
+    is too far from the epoch for :class:`~datetime.datetime` to represent."""
+    try:
+        micros = value.as_fraction()
+        return (_EPOCH + timedelta(microseconds=float(micros))).isoformat()
+    except (AttributeError, OverflowError, ValueError, OSError):
+        return str(value)

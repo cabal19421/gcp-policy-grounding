@@ -1,0 +1,279 @@
+{
+  "access_levels": [
+    "accessPolicies/987654321/accessLevels/trusted_corp",
+    "accessPolicies/987654321/accessLevels/mfa_required"
+  ],
+  "cloud_armor_policies": {
+    "projects/acme-prod/global/securityPolicies/acme-edge-waf": {
+      "rules": [
+        {
+          "action": "deny(403)",
+          "match": {
+            "expr": null,
+            "src_ip_ranges": [
+              "0.0.0.0/0"
+            ],
+            "versioned_expr": "SRC_IPS_V1"
+          },
+          "preview": false,
+          "priority": 1000
+        },
+        {
+          "action": "deny(403)",
+          "match": {
+            "expr": null,
+            "src_ip_ranges": [
+              "*"
+            ],
+            "versioned_expr": "SRC_IPS_V1"
+          },
+          "preview": false,
+          "priority": 2147483647
+        }
+      ],
+      "type": "CLOUD_ARMOR"
+    }
+  },
+  "firewall_rules": {
+    "projects/acme-prod/global/firewalls/allow-internal-ssh": {
+      "action": "allow",
+      "destination_ranges": [],
+      "direction": "INGRESS",
+      "disabled": false,
+      "layer4": [
+        {
+          "ports": [
+            "22"
+          ],
+          "protocol": "tcp"
+        }
+      ],
+      "network": "projects/acme-prod/global/networks/prod-vpc",
+      "priority": 1000,
+      "source_ranges": [
+        "10.0.0.0/8"
+      ],
+      "source_service_accounts": [],
+      "source_tags": [],
+      "target_service_accounts": [],
+      "target_tags": [
+        "bastion"
+      ]
+    },
+    "projects/acme-prod/global/firewalls/default-deny-ingress": {
+      "action": "deny",
+      "destination_ranges": [],
+      "direction": "INGRESS",
+      "disabled": false,
+      "layer4": [
+        {
+          "ports": [],
+          "protocol": "all"
+        }
+      ],
+      "network": "projects/acme-prod/global/networks/prod-vpc",
+      "priority": 65534,
+      "source_ranges": [
+        "0.0.0.0/0"
+      ],
+      "source_service_accounts": [],
+      "source_tags": [],
+      "target_service_accounts": [],
+      "target_tags": []
+    },
+    "projects/acme-prod/global/firewalls/deny-external-rdp": {
+      "action": "deny",
+      "destination_ranges": [],
+      "direction": "INGRESS",
+      "disabled": false,
+      "layer4": [
+        {
+          "ports": [
+            "3389"
+          ],
+          "protocol": "tcp"
+        }
+      ],
+      "network": "projects/acme-prod/global/networks/prod-vpc",
+      "priority": 900,
+      "source_ranges": [
+        "0.0.0.0/0"
+      ],
+      "source_service_accounts": [],
+      "source_tags": [],
+      "target_service_accounts": [],
+      "target_tags": []
+    }
+  },
+  "hierarchical_firewall_policies": {
+    "organizations/123456789012/locations/global/firewallPolicies/org-baseline": {
+      "attachments": [
+        "organizations/123456789012"
+      ],
+      "rules": [
+        {
+          "action": "deny",
+          "direction": "INGRESS",
+          "disabled": false,
+          "match": {
+            "dest_ip_ranges": [],
+            "layer4": [
+              {
+                "ports": [
+                  "3389"
+                ],
+                "protocol": "tcp"
+              }
+            ],
+            "src_ip_ranges": [
+              "0.0.0.0/0"
+            ]
+          },
+          "priority": 1000,
+          "target_resources": [],
+          "target_secure_tags": [],
+          "target_service_accounts": []
+        }
+      ]
+    }
+  },
+  "iam_bindings": {
+    "//cloudresourcemanager.googleapis.com/projects/acme-prod": {
+      "bindings": [
+        {
+          "condition": null,
+          "members": [
+            "group:platform-sre@acme.example"
+          ],
+          "role": "roles/owner"
+        },
+        {
+          "condition": null,
+          "members": [
+            "group:data-eng@acme.example",
+            "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com"
+          ],
+          "role": "roles/bigquery.dataViewer"
+        },
+        {
+          "condition": null,
+          "members": [
+            "serviceAccount:ci-deployer@acme-prod.iam.gserviceaccount.com"
+          ],
+          "role": "projects/acme-prod/roles/ciDeployer"
+        }
+      ]
+    }
+  },
+  "network_tags": [
+    "prod-web",
+    "prod-db",
+    "bastion",
+    "ssh-allowed"
+  ],
+  "networks": [
+    "projects/acme-prod/global/networks/prod-vpc",
+    "projects/acme-prod/global/networks/mgmt-vpc"
+  ],
+  "org_policies": {
+    "projects/acme-prod|constraints/iam.allowedPolicyMemberDomains": {
+      "constraint": "constraints/iam.allowedPolicyMemberDomains",
+      "inherit_from_parent": false,
+      "node": "projects/acme-prod",
+      "reset": false,
+      "rules": [
+        {
+          "allow_all": null,
+          "allowed_values": [
+            "C01acme42"
+          ],
+          "condition": null,
+          "denied_values": [],
+          "deny_all": null,
+          "enforce": null
+        }
+      ]
+    },
+    "projects/acme-prod|constraints/iam.disableServiceAccountKeyCreation": {
+      "constraint": "constraints/iam.disableServiceAccountKeyCreation",
+      "inherit_from_parent": false,
+      "node": "projects/acme-prod",
+      "reset": false,
+      "rules": [
+        {
+          "allow_all": null,
+          "allowed_values": [],
+          "condition": null,
+          "denied_values": [],
+          "deny_all": null,
+          "enforce": true
+        }
+      ]
+    }
+  },
+  "resource_hierarchy": {
+    "folders/2222": {
+      "display_name": "Production",
+      "number": "2222",
+      "parent": "organizations/123456789012",
+      "type": "folder"
+    },
+    "organizations/123456789012": {
+      "display_name": "Acme Corp",
+      "number": "123456789012",
+      "parent": null,
+      "type": "organization"
+    },
+    "projects/acme-dr": {
+      "display_name": "Acme Disaster Recovery",
+      "number": "222222222222",
+      "parent": "folders/2222",
+      "type": "project"
+    },
+    "projects/acme-prod": {
+      "display_name": "Acme Production",
+      "number": "111111111111",
+      "parent": "folders/2222",
+      "type": "project"
+    }
+  },
+  "restricted_services": [
+    "storage.googleapis.com",
+    "bigquery.googleapis.com",
+    "sqladmin.googleapis.com",
+    "pubsub.googleapis.com"
+  ],
+  "service_accounts": [
+    "ci-deployer@acme-prod.iam.gserviceaccount.com",
+    "etl-runner@acme-prod.iam.gserviceaccount.com",
+    "terraform@acme-prod.iam.gserviceaccount.com",
+    "app-frontend@acme-prod.iam.gserviceaccount.com",
+    "break-glass@acme-prod.iam.gserviceaccount.com"
+  ],
+  "subnetworks": [
+    "projects/acme-prod/regions/us-central1/subnetworks/prod-web",
+    "projects/acme-prod/regions/us-central1/subnetworks/prod-db",
+    "projects/acme-prod/regions/us-central1/subnetworks/mgmt-bastion"
+  ],
+  "vpc_sc_perimeters": {
+    "accessPolicies/987654321/servicePerimeters/acme_prod": {
+      "perimeter_type": "PERIMETER_TYPE_REGULAR",
+      "spec": null,
+      "status": {
+        "access_levels": [
+          "accessPolicies/987654321/accessLevels/trusted_corp"
+        ],
+        "egress_policies": [],
+        "ingress_policies": [],
+        "resources": [
+          "projects/111111111111"
+        ],
+        "restricted_services": [
+          "storage.googleapis.com",
+          "bigquery.googleapis.com"
+        ]
+      },
+      "use_explicit_dry_run_spec": false
+    }
+  }
+}
