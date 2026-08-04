@@ -8,6 +8,14 @@ Three subcommands, exposed both as the ``gcp-ground`` console script and as
                              [--format text|json] [--explain] [--hook]
                              [--bash-policy block|warn|off] [--abstain-notes]
                              [--requirements PATH]
+                             [--origins PATH] [--merge-source PATH ...]
+                             [--terraform-state PATH ...] [--terraform-plan PATH ...]
+                             [--terraform-dir PATH ...] [--precedence SPEC]
+                             [--drift-policy annotate|block|abstain]
+                             [--max-age DURATION] [--completeness SCOPE]
+                             [--as-of ISO8601] [--target DOMAIN:KEY ...]
+                             [--no-auto-baseline] [--config PATH] [--no-config]
+                             [--state-explain [DOMAIN:KEY]]
     gcp-ground scan-command --command STR|- [--format text|json]
     gcp-ground compile-requirements [DIR] [--snapshot PATH] [--out DIR]
                              [--check] [--format text|json]
@@ -38,14 +46,126 @@ Exit codes carry the gate's honesty contract:
 ``--snapshot`` falls back to the :data:`SNAPSHOT_ENV` environment variable —
 a hook or CI job configures the estate snapshot once instead of per call.
 
+THE THREE INPUTS
+----------------
+
+``verify-policy`` grounds a PROPOSAL against the CURRENT state under a set of
+RULES:
+
+- the PROPOSAL is ``FILE`` (or, in ``--hook`` mode, the edited file the
+  PostToolUse event names);
+- the CURRENT state is whatever the state flags below configure — additional
+  estate snapshots, terraform state, terraform plan JSON and terraform
+  configuration directories, reconciled by
+  :func:`gcp_grounding.sources.load_current` into ONE view with a source
+  ledger;
+- the RULES are the built-in claim/document/pair checks plus the compiled
+  requirements ``--requirements`` picks up, handed to
+  :func:`gcp_grounding.engine.evaluate` as a
+  :class:`~gcp_grounding.engine.RuleSet`. The engine loads no rules of its own,
+  so building the rule set HERE is what keeps ``sec_requirements/`` reachable
+  from both the CLI and the hook once a run routes through the engine.
+
+**WITH NO STATE SOURCE CONFIGURED NOTHING CHANGES.** ``--snapshot`` alone is
+the VOCABULARY, not a current-state source: a run that configures no state
+source takes exactly the pre-existing path — ``ground_policy(FILE, snapshot,
+baseline=..., rules=...)`` — and its stdout is byte-identical to what it has
+always been, in both formats. The state machinery engages when, and only when,
+one of ``--merge-source``, ``--terraform-state``, ``--terraform-plan``,
+``--terraform-dir``, ``--origins``, ``--completeness`` or ``--target`` (or the
+same settings from the environment or a config file) says the run has a current
+state to reason about. That predicate also decides whether ``--format json``
+grows its ``state`` key.
+
+THE STATE FLAGS, all optional and all defaulting to today's behaviour:
+
+============================== ================================================
+``--origins PATH``             the primary snapshot's sidecar, when it does not
+                               live beside it
+``--merge-source PATH``        an additional estate snapshot (repeatable)
+``--terraform-state PATH``     a terraform state file (repeatable)
+``--terraform-plan PATH``      ``terraform show -json`` plan output (repeatable)
+``--terraform-dir PATH``       a directory of terraform configuration (repeatable)
+``--precedence SPEC``          a :func:`gcp_grounding.merge.parse_policy` spec:
+                               a bare mode name or a mode plus
+                               ``<category>=<mode>`` assignments
+``--drift-policy MODE``        what a disagreement costs (default ``annotate``)
+``--max-age DURATION``         the staleness ceiling (``7d``, ``36h``, ``off``)
+``--completeness SCOPE``       the primary snapshot's coverage when it has NO
+                               sidecar — the only way to license absence
+                               reasoning over an estate table whose
+                               ``.origins.json`` is missing
+``--as-of ISO8601``            pin the clock (testing and CI reproducibility)
+``--target DOMAIN:KEY``        which estate row this document is a proposal for
+``--no-auto-baseline``         do not derive a current counterpart at all
+``--config PATH`` ``--no-config`` name, or suppress, the config file
+``--state-explain [DOMAIN:KEY]`` print the provenance block (or one target's
+                               drill-down) to stderr
+============================== ================================================
+
+``--completeness`` is the explicit, auditable override and is deliberately NOT
+an environment variable: a snapshot that travels without its sidecar is
+``undeclared``, and licensing an absence must be something an operator said,
+never something a shell inherited.
+
+ENV FALLBACKS. Every variable :mod:`gcp_grounding.sources` documents is
+honoured, read by that module's own :func:`~gcp_grounding.sources.from_env` in
+its one legitimate role — ``resolve_settings``' ENVIRONMENT LAYER — rather than
+by a second reader here: :data:`~gcp_grounding.sources.PRIMARY_ENV`
+(the same name as :data:`SNAPSHOT_ENV`), ``ORIGINS_ENV``, ``MERGE_SOURCES_ENV``,
+``TF_STATE_ENV``, ``TF_PLAN_ENV``, ``TF_DIR_ENV``, ``PRECEDENCE_ENV``,
+``DRIFT_POLICY_ENV``, ``MAX_AGE_ENV``, ``NOW_ENV`` and ``SALT_ENV``, plus
+:data:`gcp_grounding.discovery.CONFIG_ENV` for the config file and
+:data:`REQUIREMENTS_ENV` for the rules. PRECEDENCE IS flags over environment
+over config file over auto-detection over defaults, and it is implemented by
+handing all four layers to :func:`gcp_grounding.discovery.resolve_settings`
+rather than by or-chains here, so ``Settings.origins`` — what ``--state-explain``
+prints — stays truthful about which layer supplied each value.
+
+:func:`_load_snapshot` takes its options from
+``discovery.to_source_options(discovery.resolve_settings(...))`` and NEVER from
+``sources.SourceOptions.from_env``: ``from_env`` resolves the environment and
+explicit overrides only, so building the primary through it would silently
+bypass the config-file and auto-detect layers and ignore a snapshot path the
+user wrote in a discovered config — with no error, no note, and a
+successful-looking run against the wrong state.
+
+A TFSTATE HANDED IN AS THE DOCUMENT IS NOT A PROPOSAL. ``verify-policy
+estate.tfstate`` would otherwise route through
+:func:`~gcp_grounding.preflight.detect_kind`, which reads a state file as a
+plan (its key set carries ``terraform_version``), extract zero claims and print
+a clean-looking pass over a file describing the whole estate. So
+:func:`gcp_grounding.tfsource.discover.is_v4_state` — the same predicate the
+capture gate uses, not a second sniff — runs BEFORE the detector, and on a hit
+the document is not grounded at all: one verdict carrying
+:data:`gcp_grounding.tfsource.discover.STATE_NOT_A_PROPOSAL`, exit 1 because the
+run produced no grounding, and fail-open (exit 0, one stderr note) in ``--hook``
+mode.
+
 ``--hook`` reads a Claude-Code PostToolUse event (JSON on stdin), pulls the
 edited file out of ``tool_input.file_path``, and grounds it when it looks
 like a policy document (``.tf``/``.json``, case-insensitive, matching the
 gate's suffix rules). Everything else — unparsable
 events, missing paths, non-policy files, an unavailable snapshot — exits 0:
 a broken hook setup must never block an edit. A raw ``.tf`` file is not
-``terraform show -json`` output, so it lands in ``unverified`` via the
-preflight fail-open contract and passes, honestly unjudged.
+``terraform show -json`` output, so no CLAIM is ever extracted from it and it
+still contributes nothing but ``unverified`` verdicts of its own — but it no
+longer follows that such a run is unjudged end to end: with a state source
+configured the run still resolves settings, assembles the current state and
+reports drift, and under ``--drift-policy block`` a material disagreement makes
+the report not ok and the hook exits 2.
+
+``--hook`` RESOLVES ITS SETTINGS PER EDITED FILE, rooting config discovery at
+that file and walking up. That is what makes one fixed hook command line
+correct for a repo with several terraform roots: one command, per-file state.
+EVERY state problem in hook mode is fail-open — one prefixed stderr note and
+exit 0 — and never a usage error, exactly as an unusable command line already
+is. ``--baseline`` keeps working alongside it. Drift, staleness and provenance
+notes are all ``unverified``, so they are INVISIBLE in hook mode unless
+``--abstain-notes`` is on; that is deliberate, because the hook's default
+contract is silence on a passing run. ``--drift-policy block`` is how material
+drift is made to block: it turns the material drift verdict into a
+``contradicted``, so the report is not ok and the hook exits 2.
 
 ``--hook`` also inspects ``tool_input.command`` — the largest bypass around a
 file-based guardrail is to stop writing files and run ``gcloud`` instead. The
@@ -164,25 +284,57 @@ happened to load would make the document shape depend on whether a compile
 succeeded. With no requirements source configured the output is byte-identical
 to what it has always been.
 
+``--state-explain`` prints :func:`gcp_grounding.explain_state.state_lines` — the
+sources, the settings and where each came from, the per-target baseline outcomes
+and the drift — to STDERR, keeping stdout parseable under ``--format json``.
+With an argument it prints that one target's drill-down
+(:func:`~gcp_grounding.explain_state.fact_lines`) instead. It works in both
+modes, and ``--explain`` appends the same lines after its solver block and after
+the compiled-requirements block.
+
+``--format json`` grows a top-level ``state`` key holding
+:func:`gcp_grounding.explain_state.state_document` under exactly the same
+discipline the ``sec`` key uses: it appears whenever a state source was
+CONFIGURED, even when every one of them failed to load (its ``sources`` list is
+then empty), so a consumer can tell sources-configured-but-none-loaded from
+state-is-off. With nothing configured the document is byte-identical to today's.
+
+ONE OPERATOR NOTICE, on every run in both modes, when a state source was
+configured and any of them contributed nothing while the derivation was left
+with an unqueried baseline or a failed source: a single prefixed line naming how
+many configured sources contributed nothing and saying the current-state
+comparison was incomplete. Like the not-enforcing notice above it is NOT gated
+on ``--abstain-notes`` — a silently inert baseline is indistinguishable from a
+passing one — and it NEVER changes an exit code. Nothing is printed when every
+configured source loaded.
+
 stdlib ``argparse`` only — no third-party CLI framework.
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import importlib
 import importlib.util
 import inspect
 import json
 import os
 import sys
+from dataclasses import dataclass
 from typing import Any, Mapping
 
+from . import discovery, drift, engine, explain_state, freshness, merge, provenance, redact, sources
+# Imported by NAME rather than as the module, because ``baseline`` is also the
+# name of a CLI flag and of more than one local here — a shadowed module is a
+# NameError waiting for the one branch nobody exercised.
+from .baseline import Hints, TargetRef
 from .claims import iam_policy_claims, org_policy_claims
 # Explain reuses the constraint layer's own encoders (private to the package,
 # not the world) — re-implementing the CEL translation here would let the
 # dumped formulas drift from the ones actually decided.
 from .constraints import (
+    check_policy_subset,
     UnsupportedCel,
     _CelToZ3,
     _condition_formula,
@@ -225,6 +377,33 @@ REQUIREMENTS_ENV = "GCP_GROUNDING_REQUIREMENTS"
 #: Where ``compile-requirements`` looks when DIR is omitted, resolved against
 #: the cwd.
 _DEFAULT_REQUIREMENTS_DIR = "sec_requirements"
+
+#: The ``--completeness`` choices: every scope an operator can DECLARE.
+#: ``uncaptured`` is excluded because it is what a category nobody captured
+#: already is, not something a snapshot in hand can be declared to be.
+_COMPLETENESS = tuple(scope for scope in provenance.SCOPES if scope != "uncaptured")
+
+#: The settings whose presence means this run has a CURRENT STATE to reason
+#: about. ``primary`` is deliberately NOT among them: ``--snapshot`` alone is
+#: the vocabulary and has always been, so a run that names only a snapshot takes
+#: the pre-existing path and its output stays byte-identical. See
+#: :func:`_state_configured`.
+_STATE_OPTIONS = ("extra", "terraform_state", "terraform_plan", "terraform_dir",
+                  "origins", "completeness")
+
+#: The verdict kinds :func:`gcp_grounding.sources.load_current` gives a
+#: configured source that contributed NOTHING — the incomplete-coverage signal
+#: :func:`_incomplete_notice` fires on. Read from the module that defines them
+#: so a renamed kind cannot leave that channel silently inert. (The other
+#: incomplete-coverage kind, ``baseline:unqueried``, is deliberately not here;
+#: see :func:`_incomplete_notice`.)
+_SOURCE_FAILED_KINDS = frozenset(k for k in sources.PROVENANCE_KINDS
+                                 if k != "provenance")
+
+#: The kind of the one verdict a terraform STATE file handed in as the document
+#: earns. A new kind, not a new status: kinds are in neither ``report.SCHEMA``
+#: nor ``gate.GATE_SCHEMA``.
+_STATE_DOCUMENT_KIND = "state:not-a-proposal"
 
 #: Environment values that mean "on", case-insensitively, mirroring the
 #: harness's truthy set. ANYTHING else is False — including ``"off"``,
@@ -347,6 +526,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"compiled requirements to run alongside the built-in checks: a "
              f"directory of *.promises.json or a single one (default: "
              f"${REQUIREMENTS_ENV}; unset means no rules load)")
+    _add_state_flags(verify)
     verify.set_defaults(handler=_cmd_verify_policy)
     scan = sub.add_parser(
         "scan-command",
@@ -405,6 +585,103 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _add_state_flags(verify: argparse.ArgumentParser) -> None:
+    """THE ONE state-flag set — the second input, on ``verify-policy``.
+
+    Every flag is optional and every default is today's behaviour, which is what
+    makes the no-flag invocation byte-identical. ``--snapshot`` stays
+    single-valued: a repeatable primary would be a second way to spell
+    ``--merge-source``, and the shape is pinned by a frozen test module.
+    """
+    verify.add_argument(
+        "--origins", metavar="PATH",
+        help=f"the --snapshot sidecar (its coverage ledger) when it does not "
+             f"live beside the snapshot (default: ${sources.ORIGINS_ENV})")
+    verify.add_argument(
+        "--merge-source", metavar="PATH", action="append", default=None,
+        help=f"an additional estate snapshot to reconcile with --snapshot "
+             f"(repeatable; default: ${sources.MERGE_SOURCES_ENV}, "
+             f"{os.pathsep!r}-separated)")
+    verify.add_argument(
+        "--terraform-state", metavar="PATH", action="append", default=None,
+        help=f"a terraform state file to read as a current-state source "
+             f"(repeatable; default: ${sources.TF_STATE_ENV})")
+    verify.add_argument(
+        "--terraform-plan", metavar="PATH", action="append", default=None,
+        help=f"`terraform show -json` plan output, read for its PRIOR state "
+             f"(repeatable; default: ${sources.TF_PLAN_ENV})")
+    verify.add_argument(
+        "--terraform-dir", metavar="PATH", action="append", default=None,
+        help=f"a directory of terraform configuration (.tf/.tf.json) to read as "
+             f"a current-state source (repeatable; default: "
+             f"${sources.TF_DIR_ENV})")
+    verify.add_argument(
+        "--precedence", metavar="SPEC", default=None,
+        help=f"which source wins where two disagree: a bare mode "
+             f"({'/'.join(merge.PRECEDENCE)}) or a mode plus "
+             f"'<category>=<mode>' assignments, comma- or space-separated "
+             f"(default: {merge.DEFAULT_PRECEDENCE}, falling back to "
+             f"${sources.PRECEDENCE_ENV}). THE LOSING VALUE IS REPORTED "
+             f"WHATEVER WINS: precedence decides which document is primary, "
+             f"never which finding is true")
+    verify.add_argument(
+        "--drift-policy", choices=drift.DRIFT_POLICIES, default=None,
+        help=f"what a disagreement between sources costs: 'annotate' reports "
+             f"every drift and never blocks; 'block' turns a material "
+             f"disagreement into a gate failure (exit 1, or 2 in --hook mode); "
+             f"'abstain' additionally downgrades a finding whose evidence is "
+             f"itself disputed (default: {drift.DEFAULT_DRIFT_POLICY}, falling "
+             f"back to ${sources.DRIFT_POLICY_ENV})")
+    verify.add_argument(
+        "--max-age", metavar="DURATION", default=None,
+        help=f"how old a source may be before its facts stop justifying a pass "
+             f"— '7d', '36h', a bare integer of seconds, or 'off' for no limit "
+             f"(default: {int(freshness.MAX_AGE_DEFAULT.total_seconds()) // 86400}d, "
+             f"falling back to ${sources.MAX_AGE_ENV})")
+    verify.add_argument(
+        "--completeness", choices=_COMPLETENESS, default=None,
+        help="the --snapshot's coverage when it has NO .origins.json sidecar. "
+             "THE ONLY WAY to license absence reasoning for an estate table "
+             "whose sidecar is missing: a snapshot that travels without its "
+             "sidecar is 'undeclared', and this flag is the explicit, auditable "
+             "override rather than an accident (default: unset, so the "
+             "shape-based fallback in sources.load_source applies)")
+    verify.add_argument(
+        "--as-of", metavar="ISO8601", default=None,
+        help=f"pin the clock every staleness answer is measured against, as an "
+             f"AWARE ISO-8601 instant — a testing and CI-reproducibility aid, "
+             f"so an age assertion cannot drift with the wall clock (default: "
+             f"${sources.NOW_ENV}, else now)")
+    verify.add_argument(
+        "--target", metavar="DOMAIN:KEY", action="append", default=None,
+        help=f"which estate row this document proposes to change, when the "
+             f"document does not name it (an IAM allow policy never does): one "
+             f"of the estate domains {list(provenance.CATEGORIES)} and that "
+             f"row's canonical key. NO domain is ever guessed from the key. "
+             f"Repeatable; the last one wins for this document, and the "
+             f"per-path map form lives in the config file")
+    verify.add_argument(
+        "--no-auto-baseline", action="store_true",
+        help="do not derive a current counterpart for the changed rows at all; "
+             "every pair check then abstains with a stated reason")
+    verify.add_argument(
+        "--config", metavar="PATH", default=None,
+        help=f"the config file to read, instead of walking up from the document "
+             f"(default: ${discovery.CONFIG_ENV}, else the first "
+             f"{discovery.CONFIG_NAMES[0]} found walking up)")
+    verify.add_argument(
+        "--no-config", action="store_true",
+        help="do not look for a config file and do not auto-detect a sibling "
+             "terraform state; the flags and the environment are the whole "
+             "configuration")
+    verify.add_argument(
+        "--state-explain", metavar="DOMAIN:KEY", nargs="?", const="", default=None,
+        help="print to stderr which current-state sources were read, how old "
+             "they are, where every setting came from and what each changed row "
+             "was compared against; with a DOMAIN:KEY argument, print that one "
+             "row's full drill-down instead")
+
+
 def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     try:
@@ -443,26 +720,57 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
     if args.file is None:
         return _usage("FILE is required (only --hook mode reads the file from "
                       "a PostToolUse event instead)")
-    snapshot, problem = _load_snapshot(args.snapshot)
+    # NORMAL MODE ONLY: a malformed state flag is a usage error naming the
+    # token, never a silent fall back to the default — a typo that quietly
+    # restored the default would change what the gate enforces with nothing
+    # saying so.
+    problem = _state_flag_problem(args)
+    if problem is not None:
+        return _usage(problem)
+    settings, notes = _resolve_settings(args, start=args.file)
+    snapshot, more, problem = _load_snapshot(args, settings=settings)
     if snapshot is None:
         return _usage(problem)
-    source = _requirements_source(args)
+    notes += more
+    refusal = _not_a_proposal(args.file)
+    if refusal is not None:
+        # NOT GROUNDED AT ALL. Grading a state file would report the whole
+        # estate as if an agent had just written it; exit 1 because the run
+        # produced no grounding, which is not a pass.
+        report = GroundingReport()
+        report.backend = get_solver().backend
+        report.add(refusal)
+        _finish_report(report, snapshot, notes)
+        print(PolicyReport(report, captured_at=snapshot.captured_at,
+                           source=args.file).render(_FORMATS[args.format]))
+        return EXIT_FAILED
+    source = _requirements_source(args, settings)
     rules, carried = _load_requirements(source, hook=False)
-    report = ground_policy(args.file, snapshot, baseline=args.baseline,
-                           rules=rules)
-    # The carry verdicts are what keeps a rejected or unverified promise
-    # visible: without them a requirement that did not run is indistinguishable
-    # from one that passed.
-    for verdict in carried:
-        report.add(verdict)
-    policy_report = PolicyReport(report, captured_at=snapshot.captured_at,
+    ground = _ground(args, settings, snapshot, notes, path=args.file,
+                     rules=rules, carried=carried)
+    if ground.problem is not None:
+        return _usage(ground.problem)
+    # THE HEADER'S captured-at STAYS THE SNAPSHOT'S. It is pinned by frozen
+    # tests, and the per-source capture times live in the provenance block
+    # (--state-explain) where several ages can be told apart, which one header
+    # stamp structurally cannot do.
+    policy_report = PolicyReport(ground.report, captured_at=snapshot.captured_at,
                                  source=args.file)
-    print(_render_policy(policy_report, args.format, source, rules))
+    # The state document is BUILT only where it is rendered: it is the json
+    # format's key, and the human render carries the same content through
+    # --state-explain.
+    state = _state_document(ground, settings) if args.format == "json" else None
+    print(_render_policy(policy_report, args.format, source, rules, state=state))
     if args.explain:
         lines = _explain_lines(args.file, args.baseline)
         lines.extend(_sec_explain_lines(source, rules))
+        lines.extend(_state_explain_lines(ground, settings, ""))
         print("\n".join(lines), file=sys.stderr)
-    return EXIT_OK if report.ok else EXIT_FAILED
+    if args.state_explain is not None:
+        print("\n".join(_state_explain_lines(ground, settings, args.state_explain)),
+              file=sys.stderr)
+    _incomplete_notice(ground, settings, hook=False)
+    return EXIT_OK if ground.report.ok else EXIT_FAILED
 
 
 def _usage(problem: str, *, hook: bool = False,
@@ -478,18 +786,464 @@ def _usage(problem: str, *, hook: bool = False,
     return EXIT_BLOCK
 
 
-def _load_snapshot(flag: str | None) -> tuple[GcpSnapshot | None, str | None]:
-    """→ (snapshot, problem) — exactly one is meaningful; never raises."""
-    path = flag or os.environ.get(SNAPSHOT_ENV)
+def _load_snapshot(args: argparse.Namespace, *,
+                   settings: discovery.Settings | None = None,
+                   start: str = "") -> tuple[GcpSnapshot | None,
+                                             tuple[Verdict, ...], str | None]:
+    """→ (snapshot, notes, problem) — exactly one of snapshot/problem is
+    meaningful; never raises.
+
+    THE PRIMARY COMES FROM ``discovery.to_source_options(resolve_settings(...))``
+    AND NEVER FROM ``sources.SourceOptions.from_env``, and the distinction is the
+    whole point: ``from_env`` resolves the environment and explicit overrides
+    ONLY, so building the primary through it silently bypasses the config-file
+    and auto-detect layers this command promises — a snapshot path the user
+    wrote in a discovered config file would be ignored with no error, no note
+    and a successful-looking run against the wrong state. ``from_env`` is the
+    library and no-CLI path; this is not it.
+
+    *settings* is the already-resolved four-layer answer when the caller has one
+    (``verify-policy`` resolves it once and reuses it); otherwise they are
+    resolved here from *start*, and the discovery problems come back as the
+    notes.
+    """
+    notes: tuple[Verdict, ...] = ()
+    if settings is None:
+        settings, notes = _resolve_settings(args, start=start)
+    options = discovery.to_source_options(settings, as_of=None)
+    path = options.primary
     if not path:
-        return None, (f"an estate snapshot is required: pass --snapshot PATH "
-                      f"or set ${SNAPSHOT_ENV}")
+        return None, notes, (f"an estate snapshot is required: pass --snapshot "
+                             f"PATH or set ${SNAPSHOT_ENV}")
     try:
-        return GcpSnapshot.load(path), None
+        return GcpSnapshot.load(path), notes, None
     except OSError as exc:
-        return None, f"snapshot {path}: could not be read ({exc})"
+        return None, notes, f"snapshot {path}: could not be read ({exc})"
     except ValueError as exc:
-        return None, str(exc)  # GcpSnapshot.load already names the path
+        return None, notes, str(exc)  # GcpSnapshot.load already names the path
+
+
+# -- the second input: settings, current state, and the three-input engine -----
+
+
+@dataclass(frozen=True)
+class _Ground:
+    """One grounding pass, plus everything the surfaces around it need.
+
+    ``current`` and ``result`` are ``None`` on the no-state path, where nothing
+    was assembled and there is nothing to explain — which is exactly what
+    :func:`gcp_grounding.explain_state.state_lines` renders as "none
+    configured".
+    """
+
+    report: GroundingReport
+    current: Any = None
+    result: Any = None
+    problem: str | None = None
+
+
+def _state_configured(settings: discovery.Settings) -> bool:
+    """Whether this run has a CURRENT STATE to reason about.
+
+    ``primary`` is deliberately not counted: ``--snapshot`` alone has always
+    been the VOCABULARY, and a run that names only a snapshot must keep taking
+    the pre-existing path so its output stays byte-identical. Everything in
+    :data:`_STATE_OPTIONS` — and a target, which is a statement about which
+    estate row the document changes — says the operator asked for current-state
+    work, whichever layer said it.
+    """
+    options = settings.options
+    return bool(settings.targets
+                or any(getattr(options, name, None) for name in _STATE_OPTIONS))
+
+
+def _parse_target(raw: str) -> tuple[TargetRef | None, str | None]:
+    """``DOMAIN:KEY`` as a :class:`~gcp_grounding.baseline.TargetRef`.
+
+    NO DOMAIN IS GUESSED from the key and no key from the path: a near-miss
+    target silently redefines what the widening check compares against, which is
+    worse than having no target at all.
+    """
+    domain, sep, key = str(raw).partition(":")
+    domain, key = domain.strip(), key.strip()
+    if not sep or not domain or not key:
+        return None, (f"--target {raw!r} is not a '<domain>:<key>' pair; the "
+                      f"domain is one of {list(provenance.CATEGORIES)} and NO "
+                      f"domain is guessed from the key")
+    if domain not in provenance.CATEGORIES:
+        return None, (f"--target {raw!r} names domain {domain!r}, which is not "
+                      f"an estate category; expected one of "
+                      f"{list(provenance.CATEGORIES)}")
+    try:
+        return TargetRef(category=domain, key=key, how="explicit-flag"), None
+    except ValueError as exc:
+        return None, f"--target {raw!r}: {exc}"
+
+
+def _state_flag_problem(args: argparse.Namespace) -> str | None:
+    """The first malformed state flag, named with its token — or ``None``.
+
+    NORMAL MODE ONLY. In hook mode every one of these is fail-open: see
+    :func:`_run_hook`.
+    """
+    precedence = getattr(args, "precedence", None)
+    if precedence:
+        try:
+            merge.parse_policy(precedence)
+        except ValueError as exc:
+            return f"--precedence {precedence!r}: {exc}"
+    max_age = getattr(args, "max_age", None)
+    if max_age is not None:
+        try:
+            freshness.parse_duration(max_age)
+        except ValueError as exc:
+            return f"--max-age {max_age!r}: {exc}"
+    as_of = getattr(args, "as_of", None)
+    if as_of is not None:
+        try:
+            freshness.resolve_now(as_of)
+        except ValueError as exc:
+            return f"--as-of {as_of!r}: {exc}"
+    for raw in getattr(args, "target", None) or ():
+        _ref, problem = _parse_target(raw)
+        if problem is not None:
+            return problem
+    return None
+
+
+def _cli_layer(args: argparse.Namespace, start: str) -> dict[str, Any]:
+    """THE FLAG LAYER, keyed by :data:`gcp_grounding.discovery.SETTINGS_FIELDS`.
+
+    Only flags the user actually gave appear: an absent key is what lets the
+    environment, then the config file, then auto-detection, then the defaults
+    answer. Nothing is or-chained here — the layering is
+    :func:`gcp_grounding.discovery.resolve_settings`' job, and doing it twice is
+    how ``Settings.origins`` starts lying about where a value came from.
+    """
+    layer: dict[str, Any] = {}
+    for flag, field in (("snapshot", "primary"), ("origins", "origins"),
+                        ("precedence", "precedence"),
+                        ("drift_policy", "drift_policy"), ("max_age", "max_age"),
+                        ("as_of", "now"), ("completeness", "completeness")):
+        value = getattr(args, flag, None)
+        if value:
+            layer[field] = value
+    for flag, field in (("merge_source", "extra"),
+                        ("terraform_state", "terraform_state"),
+                        ("terraform_plan", "terraform_plan"),
+                        ("terraform_dir", "terraform_dir")):
+        value = getattr(args, flag, None)
+        if value:
+            layer[field] = tuple(value)
+    targets: dict[str, TargetRef] = {}
+    for raw in getattr(args, "target", None) or ():
+        ref, problem = _parse_target(raw)
+        if ref is not None:
+            # Keyed by the document this invocation grounds — the same key shape
+            # the config file's ``targets`` map uses, so one lookup serves both.
+            targets[os.path.abspath(start)] = ref
+        else:
+            logger.debug("ignoring unusable --target %r: %s", raw, problem)
+    if targets:
+        layer["targets"] = targets
+    # ``requirements`` has no slot in discovery's env layer — ``from_env``
+    # resolves SourceOptions fields alone — so the CLI's own flag-then-
+    # $GCP_GROUNDING_REQUIREMENTS resolution IS this layer's contribution, and
+    # both therefore report the ``cli`` origin.
+    requirements = _requirements_flag_or_env(args)
+    if requirements:
+        layer["requirements"] = requirements
+    return layer
+
+
+def _resolve_settings(args: argparse.Namespace, *, start: str
+                      ) -> tuple[discovery.Settings, tuple[Verdict, ...]]:
+    """The four layers — flags, environment, config file, auto-detection — as
+    ONE :class:`~gcp_grounding.discovery.Settings`, plus every problem found
+    along the way as a note.
+
+    Discovery is rooted at *start* and walks UP from it, which is what gives a
+    hook per-edited-file settings from one fixed command line. ``--no-config``
+    suppresses both the config file and auto-detection: with it, the flags and
+    the environment are the whole configuration.
+    """
+    env = os.environ
+    config: discovery.Config | None = None
+    auto: discovery.Auto | None = None
+    problems: tuple[str, ...] = ()
+    if not getattr(args, "no_config", False):
+        named = getattr(args, "config", None)
+        if named:
+            # A NAMED config never falls through to auto-detection, even when it
+            # fails to parse: the operator has said which file describes their
+            # sources, and guessing one after theirs was refused would ground
+            # against a source they never named.
+            config, problems = discovery.load_config(named)
+        else:
+            config, problems = discovery.discover(start, env=env)
+            if config is None:
+                # Same rule one layer down: an operator who wrote a config has
+                # already said what the sources are.
+                auto, detected = discovery.auto_detect(start)
+                problems += detected
+    settings = discovery.resolve_settings(cli=_cli_layer(args, start), env=env,
+                                          config=config, auto=auto)
+    notes = tuple(Verdict("unverified", "provenance", start or "<settings>", 0,
+                          problem) for problem in problems)
+    return settings, notes
+
+
+def _eval_options(args: argparse.Namespace, settings: discovery.Settings,
+                  path: str) -> engine.EvalOptions:
+    """Everything :func:`gcp_grounding.engine.evaluate` decides with.
+
+    ``drift`` crosses one vocabulary boundary here and nowhere else: the loading
+    side speaks :data:`gcp_grounding.drift.DRIFT_POLICIES` (annotate / block /
+    abstain) and the engine speaks :data:`gcp_grounding.engine.DRIFT_MODES`
+    (report / block). Only ``block`` means the same thing in both.
+    """
+    options = settings.options
+    max_age = freshness.parse_duration(options.max_age) \
+        if options.max_age is not None else freshness.MAX_AGE_DEFAULT
+    policy = options.drift_policy or drift.DEFAULT_DRIFT_POLICY
+    return engine.EvalOptions(
+        as_of=options.now,
+        max_age_seconds=None if max_age is None else int(max_age.total_seconds()),
+        drift="block" if policy == "block" else engine.DEFAULT_DRIFT_MODE,
+        auto_baseline=not getattr(args, "no_auto_baseline", False),
+        hints=_hints(settings, path))
+
+
+def _hints(settings: discovery.Settings, path: str) -> Hints:
+    """The baseline hints for *path*: which estate row this document changes.
+
+    An explicit ``--target`` is an ``explicit-flag`` identification and a config
+    entry is a ``config-map`` one, so only a CLI target is put in ``target`` —
+    the explain surface must be able to say WHICH of the two identified a
+    counterpart, and collapsing them would make a config entry read as
+    something a human typed on this command line.
+    """
+    refs = settings.targets
+    absolute = os.path.abspath(path)
+    ref = refs.get(absolute) or refs.get(path)
+    from_flag = settings.origin_of("targets") == "cli"
+    return Hints(
+        target=(ref.key if ref is not None and from_flag else ""),
+        category=(ref.category if ref is not None else ""),
+        targets={key: value.key for key, value in refs.items()},
+        source=absolute)
+
+
+def _ground(args: argparse.Namespace, settings: discovery.Settings,
+            snapshot: GcpSnapshot, notes: tuple[Verdict, ...], *, path: str,
+            rules: Any, carried: Any) -> _Ground:
+    """Ground *path* on whichever route this run's configuration chose.
+
+    NO STATE CONFIGURED is the pre-existing path, unchanged, so a run that names
+    only a snapshot is byte-identical to what it has always been. With a state
+    source configured the three inputs meet in ``engine.evaluate``: the current
+    state is assembled ONCE by ``sources.load_current``, every state-source
+    verdict is added to the report, and the rule set carries the compiled
+    requirements the engine will not load for itself.
+    """
+    if not _state_configured(settings):
+        report = ground_policy(path, snapshot, baseline=args.baseline, rules=rules)
+        # The carry verdicts are what keeps a rejected or unverified promise
+        # visible: without them a requirement that did not run is
+        # indistinguishable from one that passed.
+        for verdict in carried:
+            report.add(verdict)
+        return _Ground(report=_finish_report(report, snapshot, notes))
+
+    # THE CLOCK IS RESOLVED ONCE, HERE, and injected downward; nothing below
+    # this boundary reads the wall clock.
+    try:
+        now = freshness.resolve_now(settings.options.now)
+    except ValueError as exc:
+        return _Ground(report=GroundingReport(), problem=str(exc))
+    options = discovery.to_source_options(settings, as_of=now)
+    settings = dataclasses.replace(settings, options=options)
+    current = sources.load_current(options)
+    if current.problem:
+        return _Ground(report=GroundingReport(), current=current,
+                       problem=current.problem)
+    notes = notes + tuple(current.notes)
+
+    document, error = _read_json(path)
+    if error is not None:
+        # There is no proposal to prepare. The one loader's fail-open shape is
+        # still the honest answer, and it already says what could not be read.
+        report = ground_policy(path, snapshot, baseline=args.baseline, rules=rules)
+        for verdict in carried:
+            report.add(verdict)
+        return _Ground(report=_finish_report(report, current.snapshot or snapshot,
+                                             notes),
+                       current=current)
+
+    proposal = engine.prepare_proposal(document, detect_kind(document), source=path)
+    result = engine.evaluate(
+        proposal, current, engine.RuleSet(compiled=tuple(rules),
+                                          carry_verdicts=tuple(carried)),
+        options=_eval_options(args, settings, path))
+    report = result.report
+    if args.baseline is not None:
+        report.add(_explicit_baseline_verdict(document, args.baseline))
+    return _Ground(report=_finish_report(report, current.snapshot or snapshot, notes),
+                   current=current, result=result)
+
+
+def _explicit_baseline_verdict(document: Any, path: str) -> Verdict:
+    """``--baseline`` on the state route: the SAME new⊆old comparison the pair
+    tier runs, against the document a human named.
+
+    The flag keeps working here rather than being silently superseded by the
+    derived baseline — an explicit path is the highest-fidelity statement about
+    what the current policy is, so its answer is reported alongside the derived
+    one and attributed to the file it came from.
+    """
+    old, error = _read_json(path)
+    if error is not None:
+        return Verdict("unverified", "subset", "iam-policy", 0,
+                       f"the explicit baseline {path}: {error} — new⊆old was not "
+                       f"decided")
+    if not isinstance(old, Mapping) or not isinstance(document, Mapping):
+        return Verdict("unverified", "subset", "iam-policy", 0,
+                       f"new⊆old was not decided against the explicit baseline "
+                       f"{path}: an IAM policy comparison needs two policy "
+                       f"objects")
+    try:
+        verdict = check_policy_subset(document, old, get_solver())
+    except ValueError as exc:
+        return Verdict("unverified", "subset", "iam-policy", 0,
+                       f"new⊆old was not decided against the explicit baseline "
+                       f"{path}: {exc}")
+    return Verdict(verdict.status, verdict.kind, verdict.target, verdict.lineno,
+                   f"{verdict.message} [explicit baseline {path}]",
+                   suggestions=verdict.suggestions)
+
+
+def _finish_report(report: GroundingReport, snapshot: Any,
+                   notes: tuple[Verdict, ...],
+                   policy: str = drift.DEFAULT_DRIFT_POLICY) -> GroundingReport:
+    """THE ONE finishing pass, so the normal and hook paths cannot drift apart.
+
+    Adds the state notes, re-grades the existence verdicts the reasoner minted
+    outside any check (:func:`gcp_grounding.drift.postpass` — an ``ungrounded``
+    on a category no source enumerated completely is not a hallucination
+    finding), re-attaches the secret filter to the live handler set and scrubs
+    the report.
+
+    Every step is a NO-OP on the no-state path — ``postpass`` returns unless
+    *snapshot* is a reconciled one, and a vault that collected nothing scrubs
+    nothing — which is what lets one helper serve both routes without the
+    no-flag output moving by a byte.
+    """
+    for verdict in notes:
+        report.add(verdict)
+    drift.postpass(report, snapshot, policy)
+    vault = sources.vault()
+    redact.ensure_log_filter(vault)
+    redact.scrub_report(vault, report)
+    return report
+
+
+def _state_document(ground: _Ground, settings: discovery.Settings) -> Any:
+    """The ``state`` key's document, or ``None`` when state is off.
+
+    Keyed on CONFIGURATION and not on load outcome, exactly as the ``sec`` key
+    is: a consumer must be able to tell "every configured source failed"
+    (``state.sources == []``) from "no state source is configured" (no ``state``
+    key at all), which it cannot do if a failed load silently changes the shape.
+    """
+    if not _state_configured(settings):
+        return None
+    ledger = getattr(ground.current, "ledger", None)
+    return explain_state.state_document(ground.result, ledger, settings)
+
+
+def _state_explain_lines(ground: _Ground, settings: discovery.Settings,
+                         argument: str) -> list[str]:
+    """``--state-explain``'s stderr block: the four provenance blocks, or one
+    target's drill-down when the flag carried a ``DOMAIN:KEY``."""
+    ledger = getattr(ground.current, "ledger", None)
+    if argument:
+        domain, _, key = argument.partition(":")
+        return explain_state.fact_lines(ground.result, ledger, domain.strip(),
+                                        key.strip())
+    return explain_state.state_lines(ground.result, ledger, settings)
+
+
+def _incomplete_notice(ground: _Ground, settings: discovery.Settings, *,
+                       hook: bool) -> None:
+    """THE ONE LINE saying the current-state comparison was incomplete.
+
+    A configured source that contributed nothing leaves the run comparing
+    against less than it was told to, and every verdict that would have read the
+    missing category answers from less evidence. That is invisible otherwise:
+    every state verdict is ``unverified``, so the exit code is unchanged and the
+    abstain channel defaults off — a silently inert baseline looks exactly like
+    a passing one.
+
+    NOT gated on ``--abstain-notes``, and it NEVER changes an exit code. Silent
+    when every configured source loaded: a channel that fires on a healthy setup
+    is noise, and noise is what gets a guardrail switched off — which is why the
+    test is the FAILED sources and not the wider "any unqueried counterpart".
+    A failed source is itself one of the incomplete-coverage kinds, so this is
+    the stronger half of that condition and implies it; the weaker half alone
+    fires on a perfectly healthy multi-source run, where a merged view withholds
+    the existence licence and every counterpart is honestly unqueried.
+    """
+    if ground.current is None or not _state_configured(settings):
+        return
+    failed = [v for v in ground.report.verdicts if v.kind in _SOURCE_FAILED_KINDS]
+    if not failed:
+        return
+    configured = settings.options.configured()
+    print(f"{_prefix(hook)}: {len(failed)} of {len(configured)} configured state "
+          f"source(s) contributed nothing, so the current-state comparison was "
+          f"INCOMPLETE — every check reading a category they would have supplied "
+          f"answered from less evidence (the exit code is unchanged)",
+          file=sys.stderr)
+
+
+def _not_a_proposal(path: str) -> Verdict | None:
+    """One verdict when *path* is terraform STATE, or ``None`` to ground it.
+
+    Runs BEFORE ``preflight.detect_kind``, which classifies a v4 state file as a
+    plan — its key set carries ``terraform_version`` — extracts zero claims and
+    prints a clean-looking pass over a file describing the whole estate.
+
+    The sniff and the message are BOTH the shared ones
+    (:func:`gcp_grounding.tfsource.discover.is_v4_state`,
+    :data:`~gcp_grounding.tfsource.discover.STATE_NOT_A_PROPOSAL`), resolved
+    lazily behind the established ImportError fail-open idiom: two hand-written
+    sniffs and two message templates in two files with no shared owner will
+    drift, and a drifted sniff is exactly the zero-claim clean pass this arm and
+    the capture gate both exist to close.
+    """
+    document, error = _read_json(path)
+    if error is not None:
+        return None
+    try:
+        from .tfsource import discover
+    except ImportError:
+        # A DUPLICATE OF LAST RESORT, for the import-unavailable path ONLY: the
+        # shared predicate and the shared message are both out of reach here, so
+        # the alternative is grounding a state file as a plan.
+        if not (isinstance(document, Mapping) and document.get("version") == 4
+                and isinstance(document.get("resources"), list)
+                and document.get("lineage")):
+            return None
+        logger.debug("gcp_grounding.tfsource.discover is not part of this "
+                     "checkout — falling back to the inline state sniff")
+        return Verdict("ungrounded", _STATE_DOCUMENT_KIND, path, 0,
+                       f"{path}: this is Terraform state, not a proposed change "
+                       f"— it was NOT graded as a proposal. Pass it with the "
+                       f"terraform-state flag to use it as a baseline.")
+    if not discover.is_v4_state(document):
+        return None
+    return Verdict("ungrounded", _STATE_DOCUMENT_KIND, path, 0,
+                   discover.STATE_NOT_A_PROPOSAL.format(path=path))
 
 
 # -- compiled requirements: pickup, notice, render -----------------------------
@@ -501,19 +1255,35 @@ def _prefix(hook: bool) -> str:
     return "gcp-ground --hook" if hook else "gcp-ground verify-policy"
 
 
-def _requirements_source(args: argparse.Namespace) -> str | None:
-    """The CONFIGURED requirements location, or ``None`` when requirements are
-    off. The flag wins, then :data:`REQUIREMENTS_ENV`.
+def _requirements_flag_or_env(args: argparse.Namespace) -> str | None:
+    """``--requirements``, then :data:`REQUIREMENTS_ENV` — the CLI's own two
+    layers, which is what :func:`_cli_layer` contributes to the settings.
 
-    This answers "did the operator turn requirements on?", NOT "did any rule
-    load" — the distinction is what keeps the ``--format json`` shape stable
-    across a failed compile (see :func:`_render_policy`).
+    They are resolved together because ``discovery``'s environment layer is
+    ``sources.from_env``, which knows the ``SourceOptions`` fields alone and has
+    no slot for a settings-only field like ``requirements``.
     """
     flag = getattr(args, "requirements", None)
     if flag:
         return flag
     raw = os.environ.get(REQUIREMENTS_ENV)
     return raw.strip() if raw and raw.strip() else None
+
+
+def _requirements_source(args: argparse.Namespace,
+                         settings: discovery.Settings | None = None) -> str | None:
+    """The CONFIGURED requirements location, or ``None`` when requirements are
+    off: the flag, then :data:`REQUIREMENTS_ENV`, then a config file's
+    ``requirements`` — the same precedence every other setting follows, read off
+    the resolved settings rather than re-layered here.
+
+    This answers "did the operator turn requirements on?", NOT "did any rule
+    load" — the distinction is what keeps the ``--format json`` shape stable
+    across a failed compile (see :func:`_render_policy`).
+    """
+    if settings is not None and settings.requirements:
+        return settings.requirements
+    return _requirements_flag_or_env(args)
 
 
 def _load_requirements(source: str | None, *, hook: bool) -> tuple[tuple, tuple]:
@@ -615,7 +1385,7 @@ def _witness_table(sec_evidence: Any, sec_rules: Any, rules) -> Any:
 
 
 def _render_policy(policy_report: PolicyReport, format: str,
-                   source: str | None, rules) -> str:
+                   source: str | None, rules, state: Any = None) -> str:
     """The stdout render, one document.
 
     ``--format json`` becomes :func:`sec_evidence.sec_document` whenever a
@@ -626,23 +1396,34 @@ def _render_policy(policy_report: PolicyReport, format: str,
     make the document shape depend on whether a compile succeeded, which is
     exactly the ambiguity the always-present nested key removes.
 
-    With no source configured this is byte-identical to what it has always been.
+    ``state`` is added under the SAME discipline: present whenever a state
+    source was configured, even when every one of them failed to load. With
+    neither configured this is byte-identical to what it has always been.
     """
-    if source is None or format != "json":
+    if format != "json" or (source is None and state is None):
         return policy_report.render(_FORMATS[format])
+    document: Any = policy_report.to_dict()
+    if source is not None:
+        document = _sec_document(policy_report, rules, document)
+    if state is not None:
+        document["state"] = state
+    # Rendered exactly as report.py renders its own JSON, so the two documents
+    # differ only by the added key(s).
+    return json.dumps(document, indent=2, ensure_ascii=False)
+
+
+def _sec_document(policy_report: PolicyReport, rules, fallback: Any) -> Any:
+    """The ``sec``-bearing document, or *fallback* where the evidence channel is
+    not part of this checkout — the same fail-open as the pickup: the base
+    document is still true, it just carries no evidence table."""
     try:
         sec_evidence = importlib.import_module("gcp_grounding.sec_evidence")
         sec_rules = importlib.import_module("gcp_grounding.sec_rules")
     except ImportError:
-        # Same fail-open as the pickup: the base document is still true, it just
-        # carries no evidence table.
         logger.debug("the sec evidence channel is unavailable", exc_info=True)
-        return policy_report.render(_FORMATS[format])
-    document = sec_evidence.sec_document(
+        return fallback
+    return sec_evidence.sec_document(
         policy_report, _witness_table(sec_evidence, sec_rules, rules), rules)
-    # Rendered exactly as report.py renders its own JSON, so the two documents
-    # differ only by the added key.
-    return json.dumps(document, indent=2, ensure_ascii=False)
 
 
 def _sec_explain_lines(source: str | None, rules) -> list[str]:
@@ -707,23 +1488,44 @@ def _run_hook(args: argparse.Namespace) -> int:
     if path is None or not path.casefold().endswith(_HOOK_SUFFIXES):
         logger.debug("--hook: nothing to ground (path=%r)", path)
         return EXIT_OK
-    snapshot, problem = _load_snapshot(args.snapshot)
+    # EVERY STATE PROBLEM IN HOOK MODE IS FAIL-OPEN: one prefixed note and exit
+    # 0, never a usage error. A misconfigured hook must degrade to checking
+    # nothing, never to blocking every edit.
+    problem = _state_flag_problem(args)
+    if problem is not None:
+        return _usage(problem, hook=True)
+    # ROOTED AT THE EDITED FILE, so discovery walks up from it: one hook command
+    # line, per-file state. That is what makes auto-baseline work for an agent
+    # moving between terraform roots in one repo.
+    settings, notes = _resolve_settings(args, start=path)
+    snapshot, more, problem = _load_snapshot(args, settings=settings)
     if snapshot is None:
         print(f"gcp-ground --hook: {problem} — nothing was checked (fail-open)",
               file=sys.stderr)
         return EXIT_OK
+    notes += more
+    refusal = _not_a_proposal(path)
+    if refusal is not None:
+        return _usage(refusal.message, hook=True)
     # Requirements are resolved only once this event is genuinely being
     # grounded: an out-of-scope or non-policy event must stay byte-silent, so
     # the not-enforcing notice rides along with a real run, never with a skip.
-    source = _requirements_source(args)
+    source = _requirements_source(args, settings)
     rules, carried = _load_requirements(source, hook=True)
-    report = ground_policy(path, snapshot, baseline=args.baseline, rules=rules)
-    for verdict in carried:
-        report.add(verdict)
+    ground = _ground(args, settings, snapshot, notes, path=path, rules=rules,
+                     carried=carried)
+    if ground.problem is not None:
+        return _usage(ground.problem, hook=True)
+    report = ground.report
     if args.explain:
         lines = _explain_lines(path, args.baseline)
         lines.extend(_sec_explain_lines(source, rules))
+        lines.extend(_state_explain_lines(ground, settings, ""))
         print("\n".join(lines), file=sys.stderr)
+    if args.state_explain is not None:
+        print("\n".join(_state_explain_lines(ground, settings, args.state_explain)),
+              file=sys.stderr)
+    _incomplete_notice(ground, settings, hook=True)
     if report.ok:
         if _abstain_notes(args):
             notes = _abstain_note_lines(report, snapshot.captured_at)
@@ -1014,9 +1816,15 @@ def _cmd_compile_requirements(args: argparse.Namespace) -> int:
     compile clean and ship as a rule that can never fire. Unlike hook mode there
     is no edit to unblock here, so there is nothing to trade the honesty for.
     """
-    snapshot, problem = _load_snapshot(args.snapshot)
+    # Same four-layer resolution as ``verify-policy``, rooted at the requirement
+    # directory: a checkout that names its snapshot in a config file must not
+    # have to name it again here. The notes are discarded rather than added to a
+    # report, because this command's report is about the COMPILE.
+    snapshot, notes, problem = _load_snapshot(args, start=str(args.directory))
     if snapshot is None:
         return _usage(problem, prog="compile-requirements")
+    for note in notes:
+        logger.debug("compile-requirements: %s", note.message)
     try:
         sec_compile = importlib.import_module("gcp_grounding.sec_compile")
     except ImportError as exc:
