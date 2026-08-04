@@ -1,0 +1,4 @@
+{
+  "captured_at": "2026-07-17T12:00:00Z",
+  "firewall_rules": {"projects/acme-prod/global/firewalls/allow-ssh-world": {"action": "allow", "destination_ranges": [], "direction": "INGRESS", "disabled": false, "layer4": [{"ports": ["22"], "protocol": "tcp"}], "network": "projects/acme-prod/global/networks/vpc-main", "priority": 1000, "source_ranges": ["0.0.0.0/0"], "source_service_accounts": [], "source_tags": [], "target_service_accounts": [], "target_tags": []}, "projects/acme-prod/global/firewalls/deny-ssh-external": {"action": "deny", "destination_ranges": [], "direction": "INGRESS", "disabled": true, "layer4": [{"ports": ["22"], "protocol": "tcp"}], "network": "projects/acme-prod/global/networks/vpc-main", "priority": 900, "source_ranges": ["0.0.0.0/0"], "source_service_accounts": [], "source_tags": [], "target_service_accounts": [], "target_tags": []}}
+}
