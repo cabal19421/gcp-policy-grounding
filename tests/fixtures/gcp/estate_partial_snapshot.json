@@ -42,6 +42,7 @@
     "iam.roles.get",
     "iam.roles.list",
     "iam.roles.update",
+    "iam.serviceAccountKeys.create",
     "iam.serviceAccounts.actAs",
     "iam.serviceAccounts.get",
     "iam.serviceAccounts.getAccessToken",
