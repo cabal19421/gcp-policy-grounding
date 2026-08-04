@@ -223,6 +223,7 @@ def detect_kind(doc: Any) -> str | None:
         return "security_policy"
     if any(key in doc for key in _ORG_V1_KEYS):
         return "org_policy"
+    name = doc.get("name")
     if isinstance(name, str) and "/policies/" in name:
         return "org_policy"
     spec = doc.get("spec")

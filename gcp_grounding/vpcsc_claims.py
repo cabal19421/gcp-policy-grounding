@@ -103,15 +103,34 @@ def _obj(value: Any) -> Mapping[str, Any] | None:
     return None
 
 
-def _obj_list(value: Any) -> list[Mapping[str, Any]]:
-    """Every object of a repeated block / list: REST and terraform both encode
-    these as a list of objects. A bare mapping is accepted as a one-element
-    list; anything else is empty."""
+def _blocks(obj: Any, snake: str) -> list[Mapping[str, Any]]:
+    """Every object of the repeated block / list *snake* on *obj*.
+
+    REST and terraform both encode these as a list of objects; a bare mapping is
+    accepted as a one-element list. An ABSENT key legitimately declares no
+    blocks. Anything else is a value nobody could read — the claims layer still
+    over-approximates it to "no blocks", because the direction that matters (an
+    unreadable PREVIOUS permission set, which can only hide a widening) is
+    decided in :mod:`gcp_grounding.vpcsc_checks` against the RAW record — but
+    every dropped entry is logged at debug, so no drop is silent.
+    """
+    value = _get(obj, snake)
+    if value is None:
+        return []
     if isinstance(value, Mapping):
         return [value]
-    if isinstance(value, list):
-        return [item for item in value if isinstance(item, Mapping)]
-    return []
+    if not isinstance(value, list):
+        logger.debug("%r is %s, not a list of objects — no blocks read from it",
+                     snake, type(value).__name__)
+        return []
+    blocks: list[Mapping[str, Any]] = []
+    for i, item in enumerate(value):
+        if isinstance(item, Mapping):
+            blocks.append(item)
+        else:
+            logger.debug("%s[%d] is %s, not an object — dropped",
+                         snake, i, type(item).__name__)
+    return blocks
 
 
 def _str_list(value: Any) -> list[str]:
@@ -155,9 +174,9 @@ def _normalize_config(raw: Any) -> dict[str, Any] | None:
         "restricted_services": _str_list(_get(obj, "restricted_services")),
         "access_levels": _str_list(_get(obj, "access_levels")),
         "ingress_policies": [_normalize_ingress(p)
-                             for p in _obj_list(_get(obj, "ingress_policies"))],
+                             for p in _blocks(obj, "ingress_policies")],
         "egress_policies": [_normalize_egress(p)
-                            for p in _obj_list(_get(obj, "egress_policies"))],
+                            for p in _blocks(obj, "egress_policies")],
     }
 
 
@@ -182,7 +201,7 @@ def _normalize_from(raw: Any) -> dict[str, Any]:
     return {
         "identity_type": _scalar(_get(obj, "identity_type")),
         "identities": _str_list(_get(obj, "identities")),
-        "sources": [_normalize_source(s) for s in _obj_list(_get(obj, "sources"))],
+        "sources": [_normalize_source(s) for s in _blocks(obj, "sources")],
     }
 
 
@@ -203,7 +222,7 @@ def _normalize_to(raw: Any, *, external: bool) -> dict[str, Any]:
     to: dict[str, Any] = {
         "resources": _str_list(_get(obj, "resources")),
         "operations": [_normalize_operation(o)
-                       for o in _obj_list(_get(obj, "operations"))],
+                       for o in _blocks(obj, "operations")],
     }
     if external:
         to["external_resources"] = _str_list(_get(obj, "external_resources"))
@@ -215,7 +234,7 @@ def _normalize_operation(raw: Any) -> dict[str, Any]:
     return {
         "service_name": _scalar(_get(obj, "service_name")),
         "method_selectors": [_normalize_selector(s)
-                             for s in _obj_list(_get(obj, "method_selectors"))],
+                             for s in _blocks(obj, "method_selectors")],
     }
 
 
@@ -240,39 +259,46 @@ def _at(prefix: str, path: str) -> str:
 
 def _perimeter_claims(perimeter: Mapping[str, Any], prefix: str) -> list[Claim]:
     """Every claim a whole perimeter (already normalized) makes; *prefix* is the
-    location root ("" for a REST document, the resource address for terraform)."""
-    name = perimeter.get("name") or ""
+    location root ("" for a REST document, the resource address for terraform).
+
+    Every field read below is subscripted, not ``.get``-with-a-default:
+    :func:`_normalize_perimeter` and :func:`_normalize_config` write all of them
+    unconditionally, so a ``KeyError`` here would mean the perimeter was never
+    normalized — which the fail-open extraction funnel must record as an
+    abstention, not paper over with an empty list nobody read.
+    """
+    name = perimeter["name"] or ""
     claims: list[Claim] = [Claim.of(
         "perimeter_config", name, prefix or (name or "servicePerimeter"),
-        name=perimeter.get("name"),
-        perimeter_type=perimeter.get("perimeter_type"),
-        use_explicit_dry_run_spec=perimeter.get("use_explicit_dry_run_spec"),
-        status=perimeter.get("status"),
-        spec=perimeter.get("spec"),
+        name=perimeter["name"],
+        perimeter_type=perimeter["perimeter_type"],
+        use_explicit_dry_run_spec=perimeter["use_explicit_dry_run_spec"],
+        status=perimeter["status"],
+        spec=perimeter["spec"],
     )]
     for kind in ("status", "spec"):
-        config = perimeter.get(kind)
-        if not config:
+        config = perimeter[kind]
+        if config is None:
             continue
         base = _at(prefix, kind)
-        for i, resource in enumerate(config.get("resources") or []):
+        for i, resource in enumerate(config["resources"]):
             if resource == "*":
                 continue  # a wildcard is not a groundable hierarchy node
             claims.append(Claim("hierarchy_node_ref", resource,
                                 f"{base}.resources[{i}]"))
-        for i, service in enumerate(config.get("restricted_services") or []):
+        for i, service in enumerate(config["restricted_services"]):
             if service == "*":
                 continue
             claims.append(Claim("restricted_service_ref", service,
                                 f"{base}.restricted_services[{i}]"))
         if kind == "status":
-            for i, level in enumerate(config.get("access_levels") or []):
+            for i, level in enumerate(config["access_levels"]):
                 claims.append(Claim("access_level_ref", level,
                                     f"{base}.access_levels[{i}]"))
-        for i, policy in enumerate(config.get("ingress_policies") or []):
+        for i, policy in enumerate(config["ingress_policies"]):
             claims.extend(_policy_claims(policy, "ingress", name, i,
                                          f"{base}.ingress_policies[{i}]"))
-        for i, policy in enumerate(config.get("egress_policies") or []):
+        for i, policy in enumerate(config["egress_policies"]):
             claims.extend(_policy_claims(policy, "egress", name, i,
                                          f"{base}.egress_policies[{i}]"))
     return claims
@@ -280,18 +306,23 @@ def _perimeter_claims(perimeter: Mapping[str, Any], prefix: str) -> list[Claim]:
 
 def _policy_claims(policy: Mapping[str, Any], direction: str, perimeter: str,
                    index: int, prefix: str) -> list[Claim]:
-    """Claims for one normalized ingress/egress policy at location *prefix*."""
+    """Claims for one normalized ingress/egress policy at location *prefix*.
+
+    Subscripted for the same reason as :func:`_perimeter_claims`:
+    :func:`_normalize_ingress` / :func:`_normalize_egress` and
+    :func:`_normalize_from` write every key read here unconditionally.
+    """
     from_key = f"{direction}_from"
     claims: list[Claim] = [Claim.of(
         f"perimeter_{direction}", perimeter, prefix,
         perimeter=perimeter, index=index, **policy)]
-    frm = policy.get(from_key) or {}
-    for i, source in enumerate(frm.get("sources") or []):
+    frm = policy[from_key]
+    for i, source in enumerate(frm["sources"]):
         level = source.get("access_level")
         if level:
             claims.append(Claim("access_level_ref", level,
                                 f"{prefix}.{from_key}.sources[{i}].access_level"))
-    for i, identity in enumerate(frm.get("identities") or []):
+    for i, identity in enumerate(frm["identities"]):
         claims.extend(_identity_claims(
             identity, f"{prefix}.{from_key}.identities[{i}]"))
     return claims
