@@ -4,6 +4,7 @@ budget, and the degraded-world import blocker driven through a real child
 process boundary.
 """
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -137,16 +138,23 @@ def test_domain_probes_are_behavioural_not_kind_lookups():
     # Measured: each family's flag is what a real ``ground_policy`` run
     # measured, never a vocabulary lookup — the kinds above are all present
     # while these capabilities may be dead or live independently of that.
-    for name, cap, kind in (
-            ("HAVE_FIREWALL_DOMAIN", capabilities.FIREWALL, "firewall_rule"),
-            ("HAVE_VPCSC_DOMAIN", capabilities.VPCSC, "perimeter_config"),
+    for name, cap, kind, owner in (
+            ("HAVE_FIREWALL_DOMAIN", capabilities.FIREWALL, "firewall_rule",
+             "gcp_grounding.fw_checks"),
+            ("HAVE_VPCSC_DOMAIN", capabilities.VPCSC, "perimeter_config",
+             "gcp_grounding.vpcsc_checks"),
             ("HAVE_ORG_ENFORCEMENT", capabilities.ORG_ENFORCEMENT,
-             "constraint_enforcement")):
+             "constraint_enforcement", "gcp_grounding.org_checks")):
         measured = capabilities.probe(cap)
         assert getattr(env, name) is measured.live, name
         if measured.live:
-            # A family that really decides must own its claim kind.
+            # A family that really decides must own BOTH conjuncts: its claim
+            # kind in the vocabulary and its checker module in the checkout.
+            # (The conjunction is the fact agent/tx-cli-state-flags pinned for
+            # org-enforcement; it holds for every family, so it is asserted for
+            # all three.)
             assert kind in KINDS, name
+            assert importlib.util.find_spec(owner) is not None, name
         else:
             # A dead family names itself and the report that killed it.
             assert cap.family in measured.reason, name
