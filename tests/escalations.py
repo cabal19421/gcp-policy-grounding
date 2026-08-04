@@ -74,6 +74,28 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_spec_assertions.py::"
                  "test_every_awaiting_owner_is_a_task_in_this_document"),
     ),
+    Escalation(
+        id="ESC-GX-SEXPR-001",
+        clause="the same instance works as a dict key and a set member",
+        unsatisfiable=(
+            "`CompiledRule` IS frozen and its generated `__hash__` delegates to "
+            "its one field, but `sec_artifact.Promise` carries the ast as a "
+            "plain `dict`, so hashing an admitted rule raises `TypeError: "
+            "unhashable type: 'dict'` on CLEAN, unmutated source — the instance "
+            "enters neither a dict nor a set however the dataclass is declared, "
+            "and no assertion inside this task's declared path can make it. "
+            "Giving `Promise` a hashable ast (a canonical JSON string, or a "
+            "frozen mapping) in `gcp_grounding/sec_artifact.py` is what would "
+            "close it, and that module is outside the one path this task "
+            "declares, `gcp_grounding/sec_rules.py`. MK-S01 itself is NOT parked "
+            "and needs no amendment: its killing test still reports FAILED under "
+            "the `frozen=False` mutant, on the immutability arm and on the "
+            "which-type-refuses arm alike."
+        ),
+        owner_task="gx-sexpr-one-form",
+        node_id=("tests/test_gcp_sec_rules.py::"
+                 "test_compiled_rule_instance_is_usable_as_a_dict_key"),
+    ),
 )
 
 

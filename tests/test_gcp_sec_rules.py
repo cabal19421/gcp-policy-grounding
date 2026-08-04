@@ -11,6 +11,7 @@ suite depends on no ``sx-sec-compile`` stage-1 code, plus ``tmp_path`` artifacts
 for the loader and anti-tamper pins.
 """
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -160,6 +161,8 @@ def ctx(document=None, kind=None, *, baseline=None, solver=None, estate=None):
 _POLICIES = Path(__file__).parent / "fixtures" / "gcp" / "policies"
 IAM_GOOD = json.loads((_POLICIES / "iam_policy_good.json").read_text())
 IAM_ALLUSERS = {"bindings": [{"role": "roles/owner", "members": ["allUsers"]}]}
+ORG_GOOD = json.loads((_POLICIES / "org_policy_good.json").read_text())
+ORG_CONSTRAINT = "iam.disableServiceAccountKeyCreation"
 
 
 # =============================================================================
@@ -259,6 +262,84 @@ def test_register_extractor_makes_estate_collection_evaluable():
         assert v.status == "unverified" and "z3 is not available" in v.message
         return
     assert v.status == "grounded"
+
+
+# =============================================================================
+# the org-policy extractor's kind guard (MK-S02)
+# =============================================================================
+
+def test_org_policy_rules_requires_the_org_policy_kind_in_both_directions():
+    """The kind guard, pinned in BOTH directions — one direction cannot tell a
+    guard from its own inversion.
+
+    An ``org_policy`` context carrying a well-formed policy must yield RECORDS
+    and no reason; a context of any OTHER kind must yield the refusal pair. The
+    non-org_policy contexts here deliberately carry a NON-``None`` document,
+    because ``ctx.document is None`` refuses on its own and would answer the
+    guard and its inverse alike — a refusal obtained that way pins nothing.
+    """
+    records, reason = sec_rules.org_policy_rules(ctx(ORG_GOOD, "org_policy"))
+    assert reason is None
+    assert records == ({"constraint": ORG_CONSTRAINT, "is_list": False,
+                        "enforce": True, "value": ""},)
+
+    listed = {"name": f"projects/p/policies/{ORG_CONSTRAINT}",
+              "spec": {"rules": [{"enforce": True,
+                                  "values": {"allowedValues": ["b", "a"]}}]}}
+    records, reason = sec_rules.org_policy_rules(ctx(listed, "org_policy"))
+    assert reason is None
+    assert [r["value"] for r in records] == ["a", "b"]
+    assert all(r["is_list"] and r["constraint"] == ORG_CONSTRAINT for r in records)
+
+    refusal = ((), "the document under review is not an Org Policy")
+    for kind in ("iam_policy", "firewall_rule", "tf_plan", "security_policy", None):
+        assert sec_rules.org_policy_rules(ctx(ORG_GOOD, kind)) == refusal, kind
+
+    # the guard's second disjunct: the right kind with nothing to read.
+    assert sec_rules.org_policy_rules(ctx(None, "org_policy")) == refusal
+
+
+# =============================================================================
+# the admitted-rule record (MK-S01)
+# =============================================================================
+
+def test_compiled_rule_is_frozen_and_hashable():
+    """An admitted rule is IMMUTABLE, and its type participates in hashing.
+
+    ``frozen=False`` would silently let a compiled rule be REWRITTEN AFTER
+    ADMISSION — the artifact-tier version of the widening this task reverses —
+    and would set the type's ``__hash__`` to ``None``.
+    """
+    r = rule(placeholder_promise("frozen-pin", "refute", AST_OWNER))
+    swapped = placeholder_promise("swapped", "refute", AST_VIEWER_EXISTS)
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        r.promise = swapped
+    assert r.promise.id == "frozen-pin"      # admission survived the attempt
+
+    # HASHING. The frozen record's generated ``__hash__`` DELEGATES to its one
+    # field, and that field's ast is a plain dict, so the rule cannot really
+    # enter a dict or a set here (ESC-GX-SEXPR-001, and the strict-xfailed
+    # spec-literal below). What is observable — and what an unfrozen rule
+    # changes — is WHICH type refuses: the dict inside the promise, never the
+    # rule type itself, whose ``__hash__`` would be ``None``.
+    with pytest.raises(TypeError, match="unhashable type: 'dict'"):
+        {r: "admitted"}
+    with pytest.raises(TypeError, match="unhashable type: 'dict'"):
+        {r}
+
+
+@pytest.mark.xfail(strict=True, reason="ESC-GX-SEXPR-001: Promise carries its ast as a plain dict")
+def test_compiled_rule_instance_is_usable_as_a_dict_key():
+    """SPEC-LITERAL under house rule 4, for the half of MK-S01's killing-test
+    clause this task's declared path cannot satisfy: "the same instance works as
+    a dict key and a set member". It does not, on CLEAN source, because
+    ``sec_artifact.Promise`` stores the ast as a plain ``dict`` — see
+    ESC-GX-SEXPR-001 for what would close it. Landed strict, so the day
+    ``Promise`` grows a hashable ast this XPASSes and says so."""
+    r = rule(placeholder_promise("hash-pin", "refute", AST_OWNER))
+    assert {r: "admitted"}[r] == "admitted"
+    assert len({r, r}) == 1
 
 
 # =============================================================================
