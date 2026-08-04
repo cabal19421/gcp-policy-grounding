@@ -1,0 +1,6 @@
+{
+  "categories": {"firewall_rules": {"keys": 1, "scope": "partial", "source_kinds": ["tfstate"]}, "network_tags": {"keys": 2, "scope": "partial", "source_kinds": ["tfstate"]}},
+  "facts": {"firewall_rules": {"projects/acme-prod/global/firewalls/allow-internal": {"locator": "google_compute_firewall.allow_internal", "source_id": "tf-state"}}, "network_tags": {"db": {"locator": "google_compute_firewall.allow_internal", "source_id": "tf-state"}, "web": {"locator": "google_compute_firewall.allow_internal", "source_id": "tf-state"}}},
+  "schema": "gcp-source-ledger/1",
+  "sources": {"tf-state": {"captured_at": "2026-05-01T00:00:00Z", "kind": "tfstate", "lineage": "8b1a0000-0000-4000-8000-000000000001", "origin": "envs/prod/terraform.tfstate", "scope": "partial", "serial": 7, "source_id": "tf-state"}}
+}
