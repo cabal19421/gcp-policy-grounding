@@ -116,8 +116,17 @@ into ``--out`` (default ``<DIR>/compiled``). Its exit codes are the gate's,
 read over the compile:
 
 - ``0`` — every promise compiled, or was honestly ``unverified``;
-- ``1`` — a promise was ``rejected``, or ``--check`` found artifact drift;
-- ``2`` — a usage error, including a missing or unreadable ``--snapshot``.
+- ``1`` — a promise was ``rejected``, ``--check`` found artifact drift, NOTHING
+  was compiled, or the output directory holds an artifact this compile did not
+  produce (an orphan whose source document was deleted, which the pickup still
+  loads and enforces);
+- ``2`` — a usage error, including a missing or unreadable ``--snapshot``, a
+  ``DIR`` that is not a directory, and an unwritable ``--out``.
+
+COMPILING NOTHING IS NOT A PASS. An empty walk used to render a report over zero
+verdicts, which is trivially ``ok``, so a renamed corpus directory exited 0 with
+byte-empty stderr — including in ``--check``, the mode whose whole purpose is
+keeping committed artifacts honest.
 
 The snapshot is REQUIRED here, unlike in hook mode: compiling without one
 cannot ground a requirement's vocabulary, so a promise naming a hallucinated
@@ -138,10 +147,13 @@ otherwise be invisible in the mode operators actually run:
 carry verdict, so ``report.ok`` stays True, and the abstain channel defaults
 off — a typo'd requirement would yield exit 0 with byte-empty stderr and zero
 enforcement, indistinguishable from the rule working. So whenever a requirements
-source resolves and any loaded promise is not enforcing, ONE line goes to stderr
-on every run, in both hook and normal mode, naming the artifact directory. The
-exit code is unchanged in every case: this is a notice, never a block, so it
-cannot resurrect the fail-closed hole ``--hook``'s fail-open contract closed.
+source resolves and any loaded promise is not enforcing — OR the source resolved
+and no rules loaded AT ALL, which is what a clean checkout or a fresh CI
+container reaches by simply not having run the compiler yet — ONE line goes to
+stderr on every run, in both hook and normal mode, naming the artifact
+directory. The exit code is unchanged in every case: this is a notice, never a
+block, so it cannot resurrect the fail-closed hole ``--hook``'s fail-open
+contract closed.
 When every loaded promise is enforcing, nothing is printed — a channel that
 fires on a healthy configuration is noise, and noise gets guardrails switched
 off.
@@ -572,6 +584,15 @@ def _requirements_notice(rules, verdicts, *, source: str, hook: bool) -> None:
     Silence when every loaded promise enforces: a channel that fires on a
     healthy configuration is noise, and noise is what gets a guardrail switched
     off.
+
+    ZERO RULES FIRES REGARDLESS OF THE VERDICTS. The stalled set is derived from
+    the carry verdicts, so a source that RESOLVED and produced no artifact at all
+    produced no verdicts either, an empty stalled set, and — before this branch —
+    no notice: byte-identical to the rule working, which is the one state this
+    channel exists to make impossible. It is also the likeliest one in the field,
+    because compiled artifacts are GENERATED: a clean checkout or a fresh CI
+    container leaves the directory present and empty while the environment
+    variable stays exported. The exit code is untouched here as everywhere else.
     """
     enforcing = {rule.promise.id for rule in rules}
     # A non-compiled promise exists ONLY as a carry verdict — there is no
@@ -579,6 +600,11 @@ def _requirements_notice(rules, verdicts, *, source: str, hook: bool) -> None:
     # verdicts that do not belong to a registered rule.
     stalled = {verdict.target for verdict in verdicts
                if verdict.target not in enforcing}
+    if not enforcing:
+        print(f"{_prefix(hook)}: 0 compiled requirement(s) loaded from {source} "
+              f"— nothing is being enforced (see compile-requirements)",
+              file=sys.stderr)
+        return
     if not stalled:
         return
     print(f"{_prefix(hook)}: {len(stalled)} of {len(enforcing) + len(stalled)} "
@@ -1013,26 +1039,54 @@ def _cmd_compile_requirements(args: argparse.Namespace) -> int:
     requirement's vocabulary, so a promise naming a hallucinated role would
     compile clean and ship as a rule that can never fire. Unlike hook mode there
     is no edit to unblock here, so there is nothing to trade the honesty for.
+
+    COMPILING NOTHING DOES NOT PASS. The walker never raises on a missing
+    directory and returns an empty tuple, a report over zero verdicts is
+    trivially ``ok`` and ``any`` over an empty sequence is False — so a renamed
+    corpus directory used to exit 0 printing PASSED with every count zero and
+    byte-empty stderr, in ``--check`` mode too, whose whole purpose is keeping
+    committed artifacts honest. :func:`_compile_floor` turns "nothing was
+    compiled" and "an artifact nobody's document produced" into explicit
+    verdicts, and a DIR that is not a directory into a usage error, which is
+    what exit 2 is reserved for.
     """
     snapshot, problem = _load_snapshot(args.snapshot)
     if snapshot is None:
         return _usage(problem, prog="compile-requirements")
+    if not os.path.isdir(args.directory):
+        # A regular file, and a path that is not there at all: both are the
+        # operator naming the wrong thing, which is a usage error and not a
+        # finding about any requirement. A CI job whose corpus directory was
+        # renamed now fails here instead of passing over an empty walk.
+        return _usage(f"{args.directory} is not a directory — there is no "
+                      f"requirement corpus to compile", prog="compile-requirements")
     try:
         sec_compile = importlib.import_module("gcp_grounding.sec_compile")
+        sec_parse = importlib.import_module("gcp_grounding.sec_parse")
     except ImportError as exc:
         return _usage(f"the requirements compiler is not available in this "
                       f"checkout ({exc})", prog="compile-requirements")
     _llm_note(args.llm, sec_compile)
     out_dir = args.out or os.path.join(args.directory, "compiled")
-    results = sec_compile.compile_directory(
-        args.directory, snapshot, out_dir=out_dir, check_only=args.check,
-        independence=not args.no_independence)
+    try:
+        results = sec_compile.compile_directory(
+            args.directory, snapshot, out_dir=out_dir, check_only=args.check,
+            independence=not args.no_independence)
+    except OSError as exc:
+        # An unwritable --out used to escape as a PermissionError traceback and
+        # exit 1, colliding with the documented meaning of exit 1 (a rejected
+        # promise). Where the artifacts go is a usage decision, so it reports as
+        # one, on one line.
+        return _usage(f"the artifacts could not be written to {out_dir} ({exc})",
+                      prog="compile-requirements")
     # One report for the whole directory: a per-document render would make the
     # exit code and the printed evidence disagree about what "the compile" was.
     merged = GroundingReport(backend=get_solver().backend)
     for result in results:
         for verdict in result.report.verdicts:
             merged.add(verdict)
+    for verdict in _compile_floor(sec_parse, args.directory, out_dir, results):
+        merged.add(verdict)
     print(PolicyReport(merged, captured_at=snapshot.captured_at,
                        source=str(args.directory)).render(_FORMATS[args.format]))
     # ``_emit`` already records drift as a contradicted sec:artifact verdict, so
@@ -1040,6 +1094,93 @@ def _cmd_compile_requirements(args: argparse.Namespace) -> int:
     # holds even if a future drift becomes verdict-free.
     drifted = any(result.drifted for result in results)
     return EXIT_OK if merged.ok and not drifted else EXIT_FAILED
+
+
+#: The marker :func:`gcp_grounding.sec_compile._repo_relative` anchors a
+#: recorded source path against. Named here rather than imported because the
+#: compiler is resolved dynamically and may be absent from a checkout.
+_REPO_MARKER = "pyproject.toml"
+
+
+def _compile_floor(sec_parse: Any, directory: str, out_dir: str,
+                   results) -> list[Verdict]:
+    """The verdicts a compile owes about ITSELF, not about any one promise.
+
+    Three of them, and none can be expressed as a promise status because each is
+    about the set of documents rather than about a document:
+
+    * NOTHING WAS COMPILED — no result at all, or every result yielded zero
+      promises. A report over an empty verdict set passes, so without this the
+      one mode that exists to keep committed artifacts honest is green forever
+      on a corpus directory that no longer holds requirements.
+    * AN ORPHAN ARTIFACT — a ``*.promises.json`` in *out_dir* that this compile
+      did not produce, i.e. whose source document is gone. ``--check`` never
+      looked at the directory listing, while
+      :func:`gcp_grounding.sec_rules.load_directory` globs and loads exactly
+      that file, so a deleted requirement kept being enforced with CI clean.
+    * NO REPO ANCHOR — *directory* has no ``pyproject.toml`` ancestor, so
+      ``_repo_relative`` falls back to a path relative to the CWD and the bytes
+      of the artifact depend on where the compile ran from. That is an
+      abstention, not a failure: the compile is honest, its recorded paths are
+      merely not portable. RESIDUAL RISK, out of scope per the design's
+      Non-goals and recorded as ESC-GX-SECCLI-001 — running ``--check`` from a
+      different working directory than the compile still reports drift on a
+      byte-identical corpus. Anchoring the recorded path to the corpus
+      directory itself is what would close it.
+    """
+    verdicts: list[Verdict] = []
+    compiled = sum(len(result.doc.promises) for result in results
+                   if result.doc is not None)
+    if not compiled:
+        verdicts.append(Verdict(
+            "ungrounded", "sec:compile", str(directory), 0,
+            f"{directory}: nothing was compiled — no requirement document under "
+            f"it yielded a promise, so this run checked nothing and a green exit "
+            f"would mean only that there was nothing to look at"))
+    expected = {f"{document.stem}.promises.json"
+                for document in sec_parse.discover(directory)}
+    for orphan in sorted(_artifact_names(out_dir) - expected):
+        verdicts.append(Verdict(
+            "ungrounded", "sec:compile", os.path.join(out_dir, orphan), 0,
+            f"{orphan}: an orphan artifact — this compile did not produce it, so "
+            f"the document it came from is gone while --requirements still loads "
+            f"and enforces it; delete it or restore its source"))
+    if _repo_anchor(directory) is None:
+        verdicts.append(Verdict(
+            "unverified", "sec:compile", str(directory), 0,
+            f"{directory}: no {_REPO_MARKER} ancestor — the source path recorded "
+            f"in each artifact is relative to the current working directory, so "
+            f"--check reports drift when it runs from a different one "
+            f"(ESC-GX-SECCLI-001)"))
+    return verdicts
+
+
+def _artifact_names(out_dir: str) -> set[str]:
+    """The ``*.promises.json`` basenames already in *out_dir*.
+
+    An unreadable or absent directory is an empty set, never a raise: this
+    channel exists to ADD a finding, and it must not become a new way for the
+    compile to crash.
+    """
+    try:
+        return {name for name in os.listdir(out_dir)
+                if name.endswith(".promises.json")}
+    except OSError:
+        logger.debug("the artifact directory %s could not be listed", out_dir,
+                     exc_info=True)
+        return set()
+
+
+def _repo_anchor(directory: str) -> str | None:
+    """The nearest ancestor of *directory* carrying :data:`_REPO_MARKER`."""
+    current = os.path.abspath(directory)
+    while True:
+        if os.path.exists(os.path.join(current, _REPO_MARKER)):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
 
 
 def _llm_note(enabled: bool, sec_compile: Any) -> None:
