@@ -70,17 +70,6 @@ ALLOWLIST: tuple[Allowed, ...] = (
         "Same _iterable laundering, in the port-value builder.",
     ),
     Allowed(
-        "gcp_grounding/sec_domains.py", 451, '_iterable(record.get("rules"))',
-        "This is the measured defect the evidence channel was built for — an "
-        "unreadable 'rules' key folds to zero rules from a level that was never "
-        "read — and its repair is the sec-domains task's.",
-    ),
-    Allowed(
-        "gcp_grounding/sec_domains.py", 523, "_iterable(block.get(source))",
-        "Same read shape over a perimeter's spec/status block, owned by the "
-        "sec-domains task.",
-    ),
-    Allowed(
         "gcp_grounding/tf_claims.py", 136,
         '_module_resources(planned.get("root_module"))',
         "A plan whose root_module is unreadable yields no resources and so no "

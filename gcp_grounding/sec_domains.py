@@ -438,17 +438,39 @@ def _estate_firewall_rules(ctx):
 def _estate_hier_firewall_rules(ctx):
     """``hier_firewall_rules``: one row per (policy, attachment, rule, range,
     protocol/port) — the attachment is what makes a hierarchical rule reachable
-    from a node, so it is a scalar dimension like any other."""
+    from a node, so it is a scalar dimension like any other.
+
+    Both of a policy record's own collections are read through
+    :mod:`gcp_grounding.evidence`, so an absent or wrong-typed ``rules`` /
+    ``attachments`` key ABSTAINS naming the policy and the key instead of folding
+    to zero rows: a policy that contributes nothing lets a ``forall`` promise
+    pass over rules nobody read. Three consequences follow:
+
+    * the unsupported-payload rejector runs on the POLICY record too, before the
+      rules loop — dropping the whole policy is the same vacuous pass, one level
+      up from dropping one of its rules;
+    * ``attachments`` is a SCOPE SELECTOR, not a tag. The empty string is
+      reserved for a genuinely captured empty list ("attached nowhere", a fact
+      about the estate), so an unreadable one may not be spelled that way: it
+      would judge a policy attached to an organization as attached NOWHERE, and
+      a node-scoped ``forall`` would pass over a rule that violates it;
+    * a table that was captured NON-EMPTY and yielded no rows abstains rather
+      than returning an empty tuple, which would encode to a trivially true
+      ``forall``.
+    """
     table = _estate_table(ctx.snapshot, "hierarchical_firewall_policies")
     label = "hierarchical firewall rule"
     records: list[dict] = []
     for policy in sorted(table):
         record = table[policy]
+        what = f"hierarchical firewall policy {policy!r}"
         if not isinstance(record, Mapping):
             raise _Undecidable(f"hierarchical firewall policy {policy!r} is not a "
                                "record — the rule was not evaluated")
-        nodes = _str_dimension("node", record.get("attachments"))
-        for index, rule in enumerate(_iterable(record.get("rules"))):
+        _reject_unsupported("hierarchical firewall policy", policy, record)
+        nodes = _str_dimension(
+            "node", evidence.scalar(record, "attachments", what=what, type=list))
+        for index, rule in enumerate(evidence.rows(record, "rules", what=what)):
             name = f"{policy}[{index}]"
             if not isinstance(rule, Mapping):
                 raise _Undecidable(f"{label} {name!r} is not a record — the rule was "
@@ -466,6 +488,11 @@ def _estate_hier_firewall_rules(ctx):
                 _cidr_dimension(label, name, "src_range", match.get("src_ip_ranges")),
                 _layer4_dimension(label, name, match.get("layer4")),
             )))
+    if table and not records:
+        raise _Undecidable(
+            f"the captured hierarchical_firewall_policies table holds "
+            f"{len(table)} policy record(s) and none of them yielded a rule — the "
+            "estate-tier rule was not evaluated")
     return _sorted(records, _HIER_FIELDS), None
 
 
@@ -505,7 +532,19 @@ def _perimeter_entries(module, collection: str, field: str, source: str,
                        fields: Mapping[str, str]) -> Callable:
     """``perimeter_resources`` / ``perimeter_restricted_services`` from the
     document's ``perimeter_config`` claims — one row per (perimeter, entry,
-    section), where the section is "status" (enforced) or "spec" (dry-run)."""
+    section), where the section is "status" (enforced) or "spec" (dry-run).
+
+    The shape is PINNED rather than sniffed. Skipping a section block that is not
+    a Mapping, and reading one hard-coded entry key out of the ones that are, made
+    every payload drift look like a perimeter that restricts nothing: zero rows,
+    no reason, and a ``forall`` promise passing over entries nobody read. So a
+    payload carrying NEITHER a ``spec`` nor a ``status`` Mapping abstains naming
+    the perimeter and both sections, a section whose entry key is absent or not a
+    list abstains naming the perimeter and THAT section (through
+    :func:`gcp_grounding.evidence.rows`, which tells a present empty list apart
+    from an unreadable one), and a non-empty claim list that yielded no rows
+    abstains rather than returning an empty tuple.
+    """
     def extract(ctx):
         claims, missing = _document_claims(ctx, module, "perimeter_config",
                                            "VPC Service Controls perimeter")
@@ -516,14 +555,24 @@ def _perimeter_entries(module, collection: str, field: str, source: str,
             payload = claim.fields()
             perimeter = _claim_name(payload, claim)
             _reject_unsupported("perimeter", perimeter, payload)
-            for section in ("spec", "status"):
-                block = payload.get(section)
-                if not isinstance(block, Mapping):
-                    continue
-                for value in _iterable(block.get(source)):
+            blocks = {section: payload[section] for section in ("spec", "status")
+                      if section in payload
+                      and isinstance(payload[section], Mapping)}
+            if not blocks:
+                raise _Undecidable(
+                    f"perimeter {perimeter!r} carries neither a 'spec' nor a "
+                    f"'status' section, so its {collection} were never captured "
+                    "— the rule was not evaluated")
+            for section in sorted(blocks):
+                what = f"perimeter {perimeter!r} {section!r} section"
+                for value in evidence.rows(blocks[section], source, what=what):
                     if isinstance(value, str) and value:
                         records.append({"perimeter": perimeter, field: value,
                                         "section": section})
+        if claims and not records:
+            raise _Undecidable(
+                f"{len(claims)} perimeter claim(s) were read and none of them "
+                f"yielded a {collection} entry — the rule was not evaluated")
         return _sorted(records, fields), None
     extract.__doc__ = f"Records for the {collection} collection."
     return extract
@@ -537,10 +586,20 @@ def _guarded(collection: str, fn: Callable) -> Callable:
     :class:`gcp_grounding.evidence.NotEvaluated` — the shared typed abstain —
     goes through the SAME channel, so a domain extractor may raise either, and
     any other exception becomes a missing_reason naming the extractor: a crashing
-    domain module abstains, it never breaks the gate."""
+    domain module abstains, it never breaks the gate.
+
+    It is also where THE evidence ledger for one extraction is opened, because
+    :func:`gcp_grounding.evidence.rows` refuses to read without one."""
     def extract(ctx):
         try:
-            return fn(ctx)
+            if evidence._LEDGER.get() is not None:
+                # An invoker already opened THE ledger for this invocation, and
+                # evidence.ledger() refuses to NEST — nesting would hide one
+                # check's evidence inside another's. Reuse the open one, so these
+                # reads are counted against the check that asked for them.
+                return fn(ctx)
+            with evidence.ledger():
+                return fn(ctx)
         except (_Undecidable, evidence.NotEvaluated) as exc:
             return (), str(exc)
         except Exception as exc:  # noqa: BLE001 - a broken domain must not crash
