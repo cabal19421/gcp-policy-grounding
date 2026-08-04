@@ -232,8 +232,23 @@ def _parse_hierarchical_firewall_policies(value: Any) -> dict[str, dict[str, Any
         record["attachments"] = _str_tuple(
             record.get("attachments"),
             f"hierarchical_firewall_policies[{key!r}].attachments")
-        record["rules"] = _rule_list(record.get("rules"),
-                                     "hierarchical_firewall_policies", key)
+        rules = _rule_list(record.get("rules"),
+                           "hierarchical_firewall_policies", key)
+        # The same two field checks _parse_firewall_rules already applies. A
+        # non-int priority or a non-bool 'disabled' cannot be encoded, and
+        # bool("false") is True — passing one through deletes a live DENY from
+        # the evaluation order and mints a clean bill of health for the rule it
+        # was preempting.
+        for i, rule in enumerate(rules):
+            priority = rule.get("priority", 1000)
+            if not isinstance(priority, int) or isinstance(priority, bool):
+                _reject("hierarchical_firewall_policies", key,
+                        f"rules[{i}] 'priority' must be an int, got {priority!r}")
+            disabled = rule.get("disabled", False)
+            if not isinstance(disabled, bool):
+                _reject("hierarchical_firewall_policies", key,
+                        f"rules[{i}] 'disabled' must be a bool, got {disabled!r}")
+        record["rules"] = rules
         table[key] = _tuplify(record)
     return table
 
