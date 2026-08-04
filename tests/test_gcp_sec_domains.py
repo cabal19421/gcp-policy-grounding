@@ -12,9 +12,16 @@ The estate cases are ALSO checkout-branched. The estate snapshot tables
 :class:`~gcp_grounding.knowledge.GcpSnapshot` when those fields exist and a
 stand-in object with the same attributes when they do not, so the extractor's
 ``getattr``-and-compare-with-``is`` contract is exercised either way.
+
+NAMED MUTATION MUST-KILLS PINNED HERE: MK-I02 through MK-I13 — the IANA protocol
+table, the ragged-record sort rank, the string dimension, the all-protocols test,
+the protocol-number and port bounds, the wide-range flag, and the traceback of
+the extractor-failed log. Each was measured to survive this suite as it stood and
+re-measured ALONE in an isolated copy before being pinned (house rule 7).
 """
 
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -582,3 +589,232 @@ def test_perimeter_extractors_flatten_by_section_when_vpcsc_is_present():
     assert missing is None
     assert {(r["service"], r["section"]) for r in services} == {
         ("storage.googleapis.com", "status"), ("bigquery.googleapis.com", "spec")}
+
+
+# =============================================================================
+# the named mutation must-kills (MK-I02 .. MK-I13)
+#
+# Every entry below is a mutation that was MEASURED to survive this suite as it
+# stood, re-measured ALONE in an isolated copy of the tree (house rule 7), and is
+# killed here by an assertion about BEHAVIOUR — a wrong protocol number, a
+# reordered witness, a port that stops being enumerated — never by mirroring the
+# mutated literal. Each one changes WHICH promise matches a rule, with no verdict
+# text to give it away: RC1 in the packet axis.
+# =============================================================================
+
+#: ``(name, its IANA number, the neighbouring number the mutant substitutes)``.
+#: The table mutants slide a name onto its neighbour's number, so each name is
+#: pinned twice: by the number a rule ENCODES, and by a promise about the
+#: neighbour protocol that must NOT match that rule.
+PROTOCOL_PINS = (("icmp", 1, 2), ("udp", 17, 18), ("ipv6-icmp", 58, 59))
+
+
+@pytest.mark.parametrize("name, iana, neighbour", PROTOCOL_PINS)
+def test_a_protocol_name_encodes_its_own_iana_number(name, iana, neighbour):
+    """MK-I02 / MK-I03 / MK-I04 (sec_domains.py:171-172).
+
+    The table IS the mapping from what a rule says to what a promise reasons
+    over: ``icmp`` -> 1, ``udp`` -> 17, ``ipv6-icmp`` -> 58. Move one entry onto
+    its neighbour and an icmp rule starts answering an igmp promise — silently,
+    because no verdict text ever mentions a protocol number."""
+    assert sec_domains.PROTOCOL_NUMBERS[name] == iana
+
+    doc = dict(two_by_two(), allowed=[{"IPProtocol": name}])
+    records, missing = extract("proposed_firewall_rules", ctx(doc, "firewall_rule"))
+    assert missing is None
+    assert {r["protocol"] for r in records} == {iana}
+
+    # end-to-end: "no rule speaks the NEIGHBOUR protocol" holds over a document
+    # whose only rule speaks THIS one.
+    about_neighbour = sec_rules.CompiledRule(
+        promise=promise(f"no-proto-{neighbour}", "refute",
+                        exists(cmp("eq", fld("protocol"), lit("Proto", neighbour)))))
+    verdict = about_neighbour.evaluate(ctx(doc, "firewall_rule"))
+    if not HAVE_Z3:
+        assert verdict.status == "unverified"
+        return
+    assert verdict.status == "grounded" and verdict.kind == "sec:vpc_firewall"
+
+
+def normalized_rule(**overrides):
+    """A normalized VPC firewall rule — the shape a claim payload hands the
+    flattener, built here rather than parsed so one dimension can be varied."""
+    rule = {"network": "projects/acme-prod/global/networks/vpc-main",
+            "direction": "INGRESS", "action": "allow", "priority": 1000,
+            "disabled": False, "source_ranges": ["10.0.0.0/8"],
+            "layer4": [{"protocol": "tcp", "ports": ["22"]}]}
+    rule.update(overrides)
+    return rule
+
+
+def test_a_row_missing_a_field_sorts_after_every_row_that_carries_it():
+    """MK-I05 (sec_domains.py:225): the rank that puts a PRESENT field first.
+
+    Rows are deliberately ragged, so the sort key must be total. The docstring
+    promises an absent key sorts AFTER every present one; the mutant collapses
+    the two ranks, so an absent key sorts BEFORE every present one and silently
+    reorders the records a witness is drawn from."""
+    ragged = normalized_rule(layer4=[{"protocol": "tcp", "ports": ["22"]},
+                                     {"protocol": "tcp"}])
+    records = sec_domains._firewall_records([("fw-ragged", ragged)], "firewall rule")
+
+    assert len(records) == 2
+    assert records[0]["port"] == 22
+    assert "port" not in records[-1]
+
+    # the same rank, stated directly and independent of every other field
+    assert sec_domains._sorted([{}, {"port": 22}], {"port": "Port"}) == (
+        {"port": 22}, {})
+
+
+def test_a_string_dimension_takes_real_strings_and_nothing_else():
+    """MK-I06 (sec_domains.py:254): ``isinstance(v, str) and v``.
+
+    The module RESERVES the empty string for an honest "no tag". Under the mutant
+    an empty string and any truthy non-string enter the dimension, so a rule with
+    no tags grows rows claiming a tag it does not have."""
+    assert sec_domains._str_dimension("source_tag", ["", "web", 7]) == [
+        {"source_tag": "web"}]
+    # the reserved fallback applies only when NOTHING survives the filter
+    assert sec_domains._str_dimension("source_tag", []) == [{"source_tag": ""}]
+    assert sec_domains._str_dimension("source_tag", ["", 7]) == [{"source_tag": ""}]
+
+    tagged = normalized_rule(source_tags=["", "web"])
+    records = sec_domains._firewall_records([("fw-tags", tagged)], "firewall rule")
+    assert {r["source_tag"] for r in records} == {"web"}
+
+
+def test_an_all_protocols_rule_omits_the_protocol_key_and_still_evaluates():
+    """MK-I07 (sec_domains.py:290): ``protocol is None or protocol == "all"``.
+
+    Both spellings of "every protocol" omit the key, so a protocol-free promise
+    still judges the rule and a protocol-mentioning one abstains loudly. Under
+    the mutant BOTH fall through to the undecidable, so every all-protocols rule
+    makes its whole collection abstain instead."""
+    for block in ({"protocol": "all", "ports": ["22"]}, {"ports": ["22"]}):
+        assert sec_domains._layer4_dimension("firewall rule", "fw-all",
+                                             [block]) == [{"port": 22}]
+
+    records = sec_domains._firewall_records(
+        [("fw-all", normalized_rule(layer4=[{"protocol": "all", "ports": ["22"]}]))],
+        "firewall rule")
+    assert records and all("protocol" not in r for r in records)
+    assert {r["port"] for r in records} == {22}    # the rule was still evaluated
+
+
+def test_protocol_zero_is_hopopt_and_is_a_legal_value():
+    """MK-I08 (sec_domains.py:302): the lower protocol-number bound.
+
+    0 is HOPOPT, a real IANA protocol. The mutant rejects it, so a rule naming it
+    abstains for a reason that is not true."""
+    assert sec_domains._protocol_number("firewall rule", "fw-hop", 0) == 0
+    assert sec_domains._protocol_number("firewall rule", "fw-hop", "0") == 0
+    assert sec_domains._layer4_dimension(
+        "firewall rule", "fw-hop", [{"protocol": 0, "ports": ["22"]}]) == [
+            {"protocol": 0, "port": 22}]
+
+
+def test_a_range_of_exactly_the_maximum_span_is_still_enumerated():
+    """MK-I09 (sec_domains.py:321): ``high - low + 1 > MAX_PORT_SPAN``.
+
+    A REAL BOUNDARY. A range spanning exactly the maximum is enumerable by
+    definition; the mutant treats it as wide and stops enumerating it, so every
+    port in it silently drops out of the instance."""
+    span = sec_domains.MAX_PORT_SPAN
+    exact = sec_domains._port_values("firewall rule", "fw-span", [f"0-{span - 1}"])
+    assert len(exact) == span
+    assert exact[0] == 0 and exact[-1] == span - 1
+    assert None not in exact                       # nothing was omitted
+
+    wider = sec_domains._port_values("firewall rule", "fw-span", [f"0-{span}"])
+    assert wider == [None]                         # one port wider IS omitted
+
+
+def test_a_wide_port_range_omits_the_port_key_so_a_port_promise_abstains():
+    """MK-I10 (sec_domains.py:324): the ``wide`` flag.
+
+    THE HIGHEST-VALUE ENTRY IN EITHER LIST. With the flag never set the
+    port-key-omitted row is never appended, so a promise about a specific port
+    UNDER-MATCHES a wide range: it reads the enumerated ports, never sees the
+    65 000 that were dropped, and grounds. Omitting the key is what makes it
+    abstain loudly instead."""
+    mixed = sec_domains._port_values("firewall rule", "fw-wide", ["22", "0-65535"])
+    assert mixed == [22, None]
+
+    doc = dict(two_by_two(), allowed=[{"IPProtocol": "tcp",
+                                       "ports": ["22", "0-65535"]}])
+    records, missing = extract("proposed_firewall_rules", ctx(doc, "firewall_rule"))
+    assert missing is None
+    assert [r for r in records if "port" not in r], "a wide range yields a portless row"
+
+    about_port_80 = sec_rules.CompiledRule(
+        promise=promise("no-port-80", "refute",
+                        exists({"node": "port_in", "term": fld("port"),
+                                "lo": 80, "hi": 80})))
+    wide = about_port_80.evaluate(ctx(doc, "firewall_rule"))
+    narrow = about_port_80.evaluate(
+        ctx(dict(two_by_two(), allowed=[{"IPProtocol": "tcp", "ports": ["22"]}]),
+            "firewall_rule"))
+    if not HAVE_Z3:
+        assert wide.status == "unverified" and narrow.status == "unverified"
+        return
+    # the control: with every port enumerated the SAME promise decides
+    assert narrow.status == "grounded"
+    # and over the wide range it abstains loudly instead of under-matching
+    assert wide.status == "unverified" and wide.status != "grounded"
+    assert "port is missing from the record" in wide.message
+
+
+def test_port_zero_is_a_legal_port():
+    """MK-I11 (sec_domains.py:342): the FIRST comparison of the port bound.
+
+    The mutant makes port 0 abstain, so a rule mentioning it stops being
+    evaluated at all."""
+    assert sec_domains._port_bounds("firewall rule", "fw-zero", "0") == (0, 0)
+    assert sec_domains._port_bounds("firewall rule", "fw-zero", "0-10") == (0, 10)
+    assert sec_domains._port_values("firewall rule", "fw-zero", ["0"]) == [0]
+
+
+def test_the_last_port_is_65535_and_one_past_it_abstains_by_name():
+    """MK-I12 (sec_domains.py:342): the port upper bound.
+
+    Relaxing it accepts an impossible port and encodes it as though it were
+    real, instead of naming it in an abstention."""
+    assert sec_domains._port_bounds("firewall rule", "fw-top", "65535") == (65535,
+                                                                            65535)
+    with pytest.raises(sec_domains._Undecidable) as excinfo:
+        sec_domains._port_bounds("firewall rule", "fw-top", "65536")
+    assert "65536" in str(excinfo.value)
+    assert "outside" in str(excinfo.value) and "not evaluated" in str(excinfo.value)
+
+
+def test_a_crashing_domain_extractor_logs_its_traceback(caplog):
+    """MK-I13 (sec_domains.py:548): the ``exc_info=True`` of the extractor-failed
+    debug log.
+
+    The broad arm swallows the exception BY CONTRACT — a crashing domain module
+    must not break the gate — so the traceback in the log is the only record of
+    where it actually broke. NOTE THE TRAP: ``exc_info=False`` leaves a record
+    whose ``exc_info`` is ``False``, which passes an ``is not None`` check while
+    printing no traceback at all. So the assertion is on TRUTH, and on the
+    exception the record carries."""
+    def boom(_ctx):
+        raise ValueError("the payload shape changed under us")
+
+    log = logging.getLogger(sec_domains.logger.name)
+    log.addHandler(caplog.handler)
+    propagate = log.propagate
+    log.propagate = False       # exactly one copy, whatever the embedder set up
+    try:
+        with caplog.at_level(logging.DEBUG, logger=log.name):
+            records, missing = sec_domains._guarded("armor_rules", boom)(None)
+    finally:
+        log.propagate = propagate
+        log.removeHandler(caplog.handler)
+
+    assert records == ()
+    assert "armor_rules" in missing and "the payload shape changed under us" in missing
+
+    [record] = [r for r in caplog.records if r.name == log.name]
+    assert record.exc_info                      # TRUTHY, never `is not None`
+    assert record.exc_info[0] is ValueError

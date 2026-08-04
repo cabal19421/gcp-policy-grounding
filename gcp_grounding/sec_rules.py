@@ -70,7 +70,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional
 
-from . import constraints, sec_artifact, sec_ast, sec_encode, sec_probes, solve
+from . import (constraints, evidence, sec_artifact, sec_ast, sec_encode,
+               sec_probes, solve)
 from .core.log import get_logger
 from .core.report import Verdict
 from .core.solver import get_solver
@@ -158,8 +159,17 @@ class CompiledRule:
     # -- inputs ---------------------------------------------------------------
 
     def _collect(self, ctx: RuleContext):
-        """``[(collection, records, missing_reason)]`` for every collection the
-        AST quantifies over, in :func:`sec_ast.collections_used` order."""
+        """``[(collection, records, missing_reason, empty_because)]`` for every
+        collection the AST quantifies over, in :func:`sec_ast.collections_used`
+        order.
+
+        Every extractor result goes through :func:`_normalize_extraction`, which
+        is where the EVIDENCE FLOOR lives for this funnel: an extractor that
+        produced no records and said nothing about why is rewritten to a
+        missing_reason, so the vacuous path — a ``forall`` over an empty instance
+        encoding to a trivially true formula and grounding — is unreachable
+        without an explicit attestation.
+        """
         out = []
         for name in sec_ast.collections_used(self.promise.ast):
             fn = EXTRACTORS.get(name)
@@ -168,17 +178,17 @@ class CompiledRule:
                 # snapshot did not capture (mirrors reasoner.py's captured-bit).
                 out.append((name, (),
                             f"snapshot did not capture {name} — the estate-tier "
-                            "rule was not evaluated"))
+                            "rule was not evaluated", None))
                 continue
-            records, missing = fn(ctx)
-            out.append((name, records, missing))
+            records, missing, empty_because = _normalize_extraction(name, fn(ctx))
+            out.append((name, records, missing, empty_because))
         return out
 
     def missing_inputs(self, ctx: RuleContext) -> tuple:
         """The missing_reasons of every collection the AST uses (empty if all
         resolved). A non-empty result makes :meth:`evaluate` abstain loudly —
         never skip a rule silently."""
-        return tuple(m for (_name, _records, m) in self._collect(ctx) if m)
+        return tuple(m for (_name, _records, m, _empty) in self._collect(ctx) if m)
 
     # -- evaluation -----------------------------------------------------------
 
@@ -196,10 +206,11 @@ class CompiledRule:
         mode = self.promise.mode
 
         collected = self._collect(ctx)
-        missing = tuple(m for (_name, _records, m) in collected if m)
+        missing = tuple(m for (_name, _records, m, _empty) in collected if m)
         if missing:
             return Verdict("unverified", f"sec:{domain}", pid, 0,
                            f"{pid}: not evaluated — " + "; ".join(missing))
+        observed_empty = tuple(e for (_name, _records, _m, e) in collected if e)
 
         solver = ctx.solver if ctx.solver is not None else get_solver()
         z3 = constraints._z3_module(solver)
@@ -209,13 +220,14 @@ class CompiledRule:
                            f"{pid}: z3 is not available (solver backend {backend!r}) — "
                            "the rule was not decided")
 
-        instance = {name: list(records) for (name, records, _m) in collected}
+        instance = {name: list(records) for (name, records, _m, _e) in collected}
         try:
             f = sec_encode.ground(z3, ast, instance)
             obl = sec_probes.obligation(z3, f, mode)
             if _free_vars(z3, f):
                 return self._decide_open(z3, obl, domain, pid)
-            return self._decide_closed(z3, obl, instance, domain, pid)
+            return self._decide_closed(z3, obl, instance, domain, pid,
+                                       observed_empty)
         except sec_encode.UnsupportedTerm as exc:
             return Verdict("unverified", f"sec:{domain}", pid, 0, f"{pid}: {exc}")
         except RecursionError:
@@ -225,12 +237,18 @@ class CompiledRule:
 
     # -- the closed (sound) path ----------------------------------------------
 
-    def _decide_closed(self, z3, obl, instance, domain, pid) -> Verdict:
+    def _decide_closed(self, z3, obl, instance, domain, pid,
+                       observed_empty=()) -> Verdict:
         result = solve.decide(z3, obl)
         if result is True:
             _LAST_WITNESS.pop(pid, None)
+            # A genuinely-empty-but-KNOWN collection still grounds, and says so:
+            # the attestation that made grounding-over-nothing reachable never
+            # travels silently.
+            note = ("; " + "; ".join(observed_empty)) if observed_empty else ""
             return Verdict("grounded", f"sec:{domain}", pid, 0,
-                           f"{pid}: the obligation holds over the document — grounded")
+                           f"{pid}: the obligation holds over the document — "
+                           f"grounded{note}")
         if result is None:
             return Verdict("unverified", f"sec:{domain}", pid, 0,
                            f"{pid}: the solver returned unknown (timeout) — not decided")
@@ -336,10 +354,37 @@ def last_witness(rule_id: str) -> Optional[dict]:
 
 # -- instance extractors ------------------------------------------------------
 #
-# Each extractor returns ``(records, missing_reason)``: the tuple of record
+# Each extractor returns either an :class:`gcp_grounding.evidence.Extraction` or
+# the legacy ``(records, missing_reason)`` two-tuple: the tuple of record
 # mappings the encoder unrolls over, and ``None`` (or a reason string naming the
 # missing input). Estate collections are NOT registered here — a domain section
 # installs its own via ``register_extractor``.
+
+def _normalize_extraction(name: str, result: Any) -> tuple:
+    """One extractor result as ``(records, missing_reason, empty_because)``.
+
+    THE EVIDENCE FLOOR for the compiled-rule funnel. Three cases:
+
+    * an :class:`~gcp_grounding.evidence.Extraction` passes through — it has
+      already been forced to carry one of the two reasons when it has no records;
+    * a legacy two-tuple of records and missing_reason is accepted unchanged;
+    * the FORCED case is records empty with BOTH reasons unset, which is an
+      extractor that did not say whether it looked. It becomes a missing_reason,
+      and :meth:`CompiledRule.missing_inputs` / :meth:`CompiledRule.evaluate`
+      already turn any non-empty reason into one ``unverified sec:<domain>`` — so
+      a ``forall`` over an empty instance can no longer encode to a trivially
+      true formula and ground on nobody's authority.
+    """
+    if isinstance(result, evidence.Extraction):
+        return result.records, result.missing_reason, result.empty_because
+    records, missing = result
+    records = tuple(records)
+    if not records and missing is None:
+        return (), (f"the {name} extractor produced no records and did not say "
+                    f"whether {name} is empty or unreadable — the rule was not "
+                    f"evaluated"), None
+    return records, missing, None
+
 
 def _iam_records(policy: Any, label: str):
     """Extract ``iam_bindings``-shaped records from an IAM allow policy.
