@@ -60,11 +60,46 @@ one bad requirement file would fail every unrelated policy run.
 Every solve in this module goes through :func:`gcp_grounding.solve.decide` /
 :func:`gcp_grounding.solve.solver`, so a pathological formula abstains
 (``unknown`` -> ``unverified``) instead of hanging the hook.
+
+DRIFT ADJUDICATION, AND WHY IT MATTERS MOST HERE.  A user-authored promise
+evaluates OUTSIDE the check registry — ``preflight`` calls
+:meth:`CompiledRule.evaluate` directly — so without the two guards below a
+promise that reads a disputed estate fact would still return ``grounded``. A
+``sec_requirements/`` promise is the one rule a human wrote down and expects to
+be enforced, which is exactly why the silent pass is worst here.
+
+* :func:`_adjudicate_one` re-grades the decided verdict against the estate facts
+  the rule ACTUALLY read, through :func:`gcp_grounding.drift.adjudicate`. Because
+  this module never produces ``ungrounded`` at evaluation time (the invariant
+  stated above), the only adjudications reachable from here are drift's rule 1 —
+  a ``grounded`` resting on a tainted fact downgraded to ``unverified`` — and its
+  rule 2/3 annotation of a ``contradicted``, which keeps its status under
+  ``annotate`` and flips only under ``abstain`` or the phantom carve-out. Rule 4
+  (the ``ungrounded`` rewrite) is unreachable and rule 5 is a no-op.
+* :meth:`CompiledRule._incomplete_estate` is the ESTATE-TIER COMPLETENESS GATE. A
+  terraform capture emits ``firewall_rules`` at scope ``partial`` — captured, not
+  UNKNOWN — so the estate extractors' captured-bit check passes and a promise of
+  the form "no ingress firewall rule may allow tcp/22 from 0.0.0.0/0" would find
+  nothing and return ``grounded``: a confident estate-wide clean bill of health
+  from a view that sees only what terraform manages. Before the solve, every
+  ESTATE collection the AST uses is resolved to its snapshot category through
+  :data:`gcp_grounding.provenance.COLLECTION_CATEGORIES` and put through
+  :func:`gcp_grounding.provenance.require_complete`; the first refusal abstains.
+
+THE CARVE-OUT: a verdict of kind :data:`ARTIFACT_KIND` is never adjudicated. The
+two artifact-integrity verdicts are statements about a COMMITTED FILE, not about
+the estate, and tainting them would let estate drift mask a hand-edited promise.
+
+Both guards resolve their modules with the lazy try-import-except-``ImportError``
+idiom ``preflight`` and ``registry`` use, so a checkout without the
+reconciliation spine degrades to exactly today's behaviour.
 """
 
 from __future__ import annotations
 
+import contextlib
 import glob
+import importlib
 import os
 from collections import defaultdict
 from dataclasses import dataclass
@@ -83,8 +118,12 @@ __all__ = [
     "EXTRACTORS", "register_extractor",
     "iam_bindings", "new_iam_bindings", "old_iam_bindings", "org_policy_rules",
     "RULES", "load_rules", "load_directory", "by_state", "by_domain",
-    "last_witness",
+    "last_witness", "ARTIFACT_KIND",
 ]
+
+#: The kind the two artifact-integrity verdicts carry — and the one kind drift
+#: adjudication never touches. See the module docstring's carve-out.
+ARTIFACT_KIND = "sec:artifact"
 
 
 # -- applicability table ------------------------------------------------------
@@ -117,6 +156,14 @@ class RuleContext:
     :data:`gcp_grounding.preflight.DOCUMENT_KINDS` or ``None``; ``baseline`` is
     the parsed old document for the pair tier; ``estate`` and ``solver`` are
     optional overrides a domain extractor / the evaluator may use.
+
+    ``drift_policy`` is the one drift policy of
+    :data:`gcp_grounding.drift.DRIFT_POLICIES` this evaluation runs under, empty
+    meaning :data:`gcp_grounding.drift.DEFAULT_DRIFT_POLICY`. It is carried here
+    rather than read from a global because the caller that resolved the current
+    state is the caller that knows what a disagreement should cost; an
+    unrecognised value costs the default and a debug line, never a raise (see
+    ``drift._policy``).
     """
 
     snapshot: GcpSnapshot
@@ -126,6 +173,7 @@ class RuleContext:
     baseline: Any = None
     estate: Optional[Mapping[str, Any]] = None
     solver: Any = None
+    drift_policy: str = ""
 
 
 @dataclass(frozen=True)
@@ -184,7 +232,17 @@ class CompiledRule:
 
     def evaluate(self, ctx: RuleContext) -> Optional[Verdict]:
         """Decide this rule against ``ctx`` — or return ``None`` (adding nothing)
-        when the rule is not applicable to the document under review."""
+        when the rule is not applicable to the document under review.
+
+        The estate reads are TAPPED and the decided verdict is adjudicated: see
+        the module docstring. The tap opens around the region that touches estate
+        data — the instance extractors plus the solve — and NOT around the
+        applicability gate, so a rule that is simply not applicable is still
+        silently skipped and leaks no read context. The missing-input and
+        estate-completeness gates return from INSIDE the tap and are therefore
+        never re-graded either: a rule with a missing baseline emits its own
+        ``unverified`` rather than one rewritten with the drift suffix.
+        """
         if not self.applies_to(ctx):
             logger.debug("rule %s is not applicable to document_kind=%r; the caller "
                          "adds nothing", self.promise.id, ctx.document_kind)
@@ -195,33 +253,89 @@ class CompiledRule:
         ast = self.promise.ast
         mode = self.promise.mode
 
-        collected = self._collect(ctx)
-        missing = tuple(m for (_name, _records, m) in collected if m)
-        if missing:
-            return Verdict("unverified", f"sec:{domain}", pid, 0,
-                           f"{pid}: not evaluated — " + "; ".join(missing))
+        with _read_tap(pid) as read_set:
+            # The extractors ARE the estate reads, so they run inside the tap;
+            # their missing_reason still returns unadjudicated.
+            collected = self._collect(ctx)
+            missing = tuple(m for (_name, _records, m) in collected if m)
+            if missing:
+                return Verdict("unverified", f"sec:{domain}", pid, 0,
+                               f"{pid}: not evaluated — " + "; ".join(missing))
 
-        solver = ctx.solver if ctx.solver is not None else get_solver()
-        z3 = constraints._z3_module(solver)
-        if z3 is None:
-            backend = getattr(solver, "backend", "builtin")
-            return Verdict("unverified", f"sec:{domain}", pid, 0,
-                           f"{pid}: z3 is not available (solver backend {backend!r}) — "
-                           "the rule was not decided")
+            incomplete = self._incomplete_estate(ctx)
+            if incomplete is not None:
+                return incomplete
 
-        instance = {name: list(records) for (name, records, _m) in collected}
-        try:
-            f = sec_encode.ground(z3, ast, instance)
-            obl = sec_probes.obligation(z3, f, mode)
-            if _free_vars(z3, f):
-                return self._decide_open(z3, obl, domain, pid)
-            return self._decide_closed(z3, obl, instance, domain, pid)
-        except sec_encode.UnsupportedTerm as exc:
-            return Verdict("unverified", f"sec:{domain}", pid, 0, f"{pid}: {exc}")
-        except RecursionError:
-            return Verdict("unverified", f"sec:{domain}", pid, 0,
-                           f"{pid}: the formula was too deeply nested to decide — "
-                           "not decided")
+            solver = ctx.solver if ctx.solver is not None else get_solver()
+            z3 = constraints._z3_module(solver)
+            if z3 is None:
+                backend = getattr(solver, "backend", "builtin")
+                return Verdict("unverified", f"sec:{domain}", pid, 0,
+                               f"{pid}: z3 is not available (solver backend {backend!r}) — "
+                               "the rule was not decided")
+
+            instance = {name: list(records) for (name, records, _m) in collected}
+            try:
+                f = sec_encode.ground(z3, ast, instance)
+                obl = sec_probes.obligation(z3, f, mode)
+                if _free_vars(z3, f):
+                    verdict = self._decide_open(z3, obl, domain, pid)
+                else:
+                    verdict = self._decide_closed(z3, obl, instance, domain, pid)
+            except sec_encode.UnsupportedTerm as exc:
+                return Verdict("unverified", f"sec:{domain}", pid, 0, f"{pid}: {exc}")
+            except RecursionError:
+                return Verdict("unverified", f"sec:{domain}", pid, 0,
+                               f"{pid}: the formula was too deeply nested to decide — "
+                               "not decided")
+        return _adjudicate_one(verdict, ctx, read_set)
+
+    # -- the estate-tier completeness gate ------------------------------------
+
+    def _incomplete_estate(self, ctx: RuleContext) -> Optional[Verdict]:
+        """One ``unverified`` when this rule reasons over an estate collection
+        whose snapshot category may not be read as complete — else ``None``.
+
+        THE UNIVERSAL-NEGATIVE ABSTENTION. An estate extractor honours only the
+        CAPTURED bit, and a terraform capture emits e.g. ``firewall_rules`` at
+        scope ``partial`` — captured, not UNKNOWN. Without this gate a promise
+        asserting a universally-quantified negative would sweep a partial table,
+        find nothing, and return ``grounded``: an estate-wide clean bill of
+        health from a view that sees only what terraform manages.
+
+        The gate lives here rather than in ``sec_domains``, which is owned
+        elsewhere and which predates :mod:`gcp_grounding.provenance` and
+        therefore cannot call it. Only ESTATE collections are checked — a
+        proposal- or pair-tier collection describes the document under review and
+        not the estate — so a rule whose derived tier is weaker than ``estate``
+        never enters the loop body at all.
+        """
+        provenance = _optional("provenance")
+        if provenance is None:
+            return None                      # no provenance in this checkout
+        pid = self.promise.id
+        domain = self.promise.domain
+        for name in sec_ast.collections_used(self.promise.ast):
+            spec = sec_ast.COLLECTIONS.get(name)
+            if spec is None or spec.tier != "estate":
+                continue
+            category = provenance.COLLECTION_CATEGORIES.get(name)
+            if category is None:
+                # A collection nobody mapped to a snapshot category: there is no
+                # coverage record to consult, so there is nothing to refuse on.
+                logger.debug("rule %s: estate collection %r maps to no snapshot "
+                             "category; completeness was not checked", pid, name)
+                continue
+            reason = _require_complete(ctx.snapshot, category, pid, provenance)
+            if reason is not None:
+                return Verdict(
+                    "unverified", f"sec:{domain}", pid, 0,
+                    f"{pid}: not evaluated over the estate collection {name!r} "
+                    f"(snapshot category {category!r}): {reason} — a promise that "
+                    f"reasons over an estate collection abstains over an "
+                    f"incomplete view rather than reporting a clean bill of "
+                    f"health from a view that sees only part of the estate")
+        return None
 
     # -- the closed (sound) path ----------------------------------------------
 
@@ -283,6 +397,81 @@ class CompiledRule:
                 if solve.decide(z3, obl_i) is False:
                     return name, index, record
         return None
+
+
+# -- the reconciliation spine, resolved lazily --------------------------------
+#
+# The three modules below are part of the current-state spine and may be absent
+# from a checkout. Every use goes through ``_optional``, the same lazy
+# try-import-except-ImportError idiom as ``preflight._tf_plan_extractor`` and
+# ``registry._providers``, so a checkout without them degrades to exactly the
+# behaviour this module shipped with rather than failing to import.
+
+def _optional(name: str):
+    """``gcp_grounding.<name>``, or ``None`` where it is not in this checkout."""
+    try:
+        return importlib.import_module(f"gcp_grounding.{name}")
+    except ImportError:
+        logger.debug("sec_rules: gcp_grounding.%s is not part of this checkout; "
+                     "the rules run without it", name)
+        return None
+
+
+def _read_tap(label: str):
+    """The estate read collector for one evaluation.
+
+    :func:`gcp_grounding.reconciled.reads` where the spine is present, and an
+    inert context yielding no reads where it is not — so
+    :meth:`CompiledRule.evaluate` is written once. Either way the set is popped
+    in a ``finally``, so an early return or an exception mid-rule leaks nothing.
+    """
+    reconciled = _optional("reconciled")
+    if reconciled is None:
+        return contextlib.nullcontext(())
+    return reconciled.reads(label)
+
+
+def _require_complete(snapshot: Any, category: str, rule: str,
+                      provenance: Any) -> Optional[str]:
+    """Why absence in *category* may not be read as non-existence, or ``None``.
+
+    Asks the SNAPSHOT's own predicate when it has one, because that is what
+    consults its ledger: a reconciled snapshot built from a terraform capture
+    holds a very much captured ``firewall_rules`` field at scope ``partial``, and
+    :func:`gcp_grounding.provenance.require_complete` over the OBJECT would read
+    that captured field as complete and license the negative this gate exists to
+    refuse. A plain :class:`~gcp_grounding.knowledge.GcpSnapshot` has no such
+    method and goes to ``provenance`` directly, where a captured category reads
+    as complete — today's semantics, unchanged.
+    """
+    own = getattr(snapshot, "require_complete", None)
+    if callable(own):
+        return own(category, rule=rule)
+    return provenance.require_complete(snapshot, category, rule=rule)
+
+
+def _adjudicate_one(verdict: Optional[Verdict], ctx: RuleContext,
+                    read_set: Any = ()) -> Optional[Verdict]:
+    """*verdict*, re-graded against the estate facts the rule actually read.
+
+    Unchanged when :mod:`gcp_grounding.drift` is not part of this checkout, when
+    ``ctx.snapshot`` is not a
+    :class:`~gcp_grounding.reconciled.ReconciledSnapshot` (it then carries no
+    provenance to adjudicate against), and — THE CARVE-OUT — for a verdict of
+    kind :data:`ARTIFACT_KIND`, which is a statement about a committed file
+    rather than about the estate: tainting it would let estate drift mask a
+    hand-edited promise.
+    """
+    if verdict is None or verdict.kind == ARTIFACT_KIND:
+        return verdict
+    drift = _optional("drift")
+    if drift is None:
+        return verdict
+    if not isinstance(ctx.snapshot, drift.ReconciledSnapshot):
+        return verdict
+    policy = ctx.drift_policy or drift.DEFAULT_DRIFT_POLICY
+    graded = drift.adjudicate((verdict,), read_set, ctx.snapshot, policy)
+    return graded[0] if graded else verdict
 
 
 # -- free-symbol detection (the closed-formula guard) -------------------------
