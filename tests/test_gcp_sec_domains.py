@@ -19,6 +19,14 @@ answer UNKNOWN for the same reason — so its absence is a missing dependency to
 escalate, never to paper over. For the same reason the extractor count below is
 the exact knowable one (see :data:`EXTRACTOR_DEPENDENCIES`) and not a floor.
 
+The TERRAFORM PLAN ENVELOPE has its own section, because a plan is the widest
+arm of the applicability table — ``applies_to`` says a plan reaches every
+domain, and ``detect_kind`` labels any mapping carrying one of four top-level
+keys a plan without checking its shape. Its tests replace an
+``assert missing is None or ... in missing`` disjunction that accepted every
+outcome the path has; each new case now pins the exact reason string, and the
+plan that really does carry a firewall rule is the honest control beside them.
+
 The last section pins the RECORD-SHAPE GUARDS: for each measured shape that
 produced zero records and NO reason, the extractor now abstains naming the
 record and the key, and the end-to-end verdict is ``unverified`` rather than a
@@ -41,8 +49,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from gcp_grounding import (sec_artifact, sec_ast, sec_domains, sec_encode,
-                           sec_probes, sec_rules, solve)
+from gcp_grounding import (evidence, sec_artifact, sec_ast, sec_domains,
+                           sec_encode, sec_probes, sec_rules, solve)
 from gcp_grounding.claims import Claim
 from gcp_grounding.constraints import _z3_module
 from gcp_grounding.core.solver import get_solver
@@ -457,12 +465,131 @@ def test_a_non_firewall_document_reports_the_missing_input():
     assert records == () and "no document under review" in missing
 
 
+# -----------------------------------------------------------------------------
+# the terraform plan envelope — the widest arm of the applicability table
+# -----------------------------------------------------------------------------
+#
+# ``CompiledRule.applies_to`` returns True for a plan in EVERY domain, and
+# ``preflight.detect_kind`` calls any mapping carrying one of four top-level keys
+# a plan without looking at its shape. The plan walker returns an empty claim
+# list for a mapping it cannot walk, with no reason — so an unvalidated envelope
+# is the one input that can ground every domain at once over zero records.
+
+#: The empty document. ``detect_kind`` would not label it, but nothing stops a
+#: caller passing ``document_kind="tf_plan"`` — the gate's own kind argument is
+#: how a plan reaches these extractors.
+EMPTY_PLAN: dict = {}
+
+#: MEASURED: ``resource_changes`` a string and ``planned_values`` an integer.
+#: ``detect_kind`` says "tf_plan" on the strength of the top-level keys alone.
+GARBAGE_PLAN = {"format_version": "1.2", "planned_values": 3,
+                "resource_changes": "google_compute_firewall.web"}
+
+#: A plan that IS understood — a well-formed ``resource_changes`` list — and
+#: simply carries no firewall rule. "The plan was understood and mentions no
+#: firewall rule" is a different fact from "every firewall rule in the plan
+#: complies", and only the second one is a pass.
+NO_FIREWALL_PLAN = {
+    "format_version": "1.2",
+    "resource_changes": [{
+        "address": "google_storage_bucket.assets", "mode": "managed",
+        "type": "google_storage_bucket",
+        "provider_name": "registry.terraform.io/hashicorp/google",
+        "change": {"actions": ["create"], "after": {"name": "acme-assets"}},
+    }],
+}
+
+
+def plan_rule(pid):
+    """A ``forall`` over the proposal-tier firewall rules — the shape that reads
+    an empty instance as a trivially true formula and grounds on it."""
+    return sec_rules.CompiledRule(promise=promise(
+        pid, "assert_satisfiable",
+        forall(cmp("eq", fld("action"), lit("Str", "deny")))))
+
+
 def test_a_terraform_plan_reaches_the_firewall_claims_through_the_registry():
+    """THE HONEST CONTROL for the three abstentions below: a plan that really
+    does carry a ``google_compute_firewall`` still yields rows and NO reason.
+
+    Replaces an ``assert missing is None or ... in missing`` disjunction that
+    could not fail: it accepted both a plan that grounded and a plan that
+    abstained, which is every outcome this path has."""
     plan = json.loads((_POLICIES / "fw_tf_plan.json").read_text())
     records, missing = extract("proposed_firewall_rules", ctx(plan, "tf_plan"))
-    assert missing is None or "was not fully understood" in missing
-    if missing is None:
-        assert records, "a plan carrying a google_compute_firewall yields rows"
+    assert missing is None
+    assert [r["name"] for r in records] == ["fw-allow-web"]
+    assert records[0]["port"] == 443 and records[0]["source_range"] == "10.0.0.0/8"
+
+
+def test_the_empty_document_typed_as_a_plan_abstains_naming_both_sections():
+    records, missing = extract("proposed_firewall_rules", ctx(EMPTY_PLAN, "tf_plan"))
+    assert records == ()
+    assert missing == (
+        "the terraform plan under review has neither a readable 'planned_values' "
+        "mapping nor a readable 'resource_changes' list (has no 'planned_values' "
+        "key, so its value was never captured; has no 'resource_changes' key, so "
+        "its records were never captured) — the rule was not evaluated")
+
+    verdict = plan_rule("plan-empty").evaluate(ctx(EMPTY_PLAN, "tf_plan"))
+    assert verdict.status == "unverified"
+    assert "terraform plan under review" in verdict.message
+    assert "'planned_values'" in verdict.message
+    assert "'resource_changes'" in verdict.message
+
+
+def test_a_garbage_shaped_plan_abstains_naming_the_malformed_keys():
+    records, missing = extract("proposed_firewall_rules",
+                               ctx(GARBAGE_PLAN, "tf_plan"))
+    assert records == ()
+    assert missing == (
+        "the terraform plan under review has neither a readable 'planned_values' "
+        "mapping nor a readable 'resource_changes' list (has a 'planned_values' "
+        "that is not a Mapping, got int; has no readable 'resource_changes' list, "
+        "got str) — the rule was not evaluated")
+
+    verdict = plan_rule("plan-garbage").evaluate(ctx(GARBAGE_PLAN, "tf_plan"))
+    assert verdict.status == "unverified"
+    assert "terraform plan under review" in verdict.message
+    assert "'planned_values' that is not a Mapping, got int" in verdict.message
+    assert "no readable 'resource_changes' list, got str" in verdict.message
+
+
+def test_a_readable_plan_with_no_firewall_resource_is_unverified_not_grounded():
+    """The envelope is READABLE here and the walker understood it — it simply
+    found a storage bucket. That is not a firewall rule that complies."""
+    records, missing = extract("proposed_firewall_rules",
+                               ctx(NO_FIREWALL_PLAN, "tf_plan"))
+    assert records == ()
+    assert missing == ("the terraform plan under review carries no VPC firewall "
+                       "rule resources — the rule was not evaluated over any "
+                       "record")
+
+    verdict = plan_rule("plan-no-firewall").evaluate(ctx(NO_FIREWALL_PLAN,
+                                                         "tf_plan"))
+    assert verdict.status == "unverified"
+    assert "terraform plan under review" in verdict.message
+    assert "carries no VPC firewall rule resources" in verdict.message
+
+
+def test_the_plan_envelope_is_read_through_the_evidence_ledger():
+    """The distinction reaches the LEDGER as well as the message: a present and
+    empty ``resource_changes`` is a POSITIVE observation of emptiness, recorded
+    as one, while the unreadable envelopes above are counted as a collection
+    somebody tried to read and never as an observation."""
+    plan = {"planned_values": {"root_module": {}}, "resource_changes": []}
+    with evidence.ledger() as observed:
+        records, missing = extract("proposed_firewall_rules", ctx(plan, "tf_plan"))
+    assert records == () and "carries no VPC firewall rule resources" in missing
+    assert observed.collections_read == 1 and observed.rows_examined == 0
+    assert observed.empty_observed == (
+        "the terraform plan under review: 'resource_changes' is present and "
+        "holds no records",)
+
+    with evidence.ledger() as unreadable:
+        extract("proposed_firewall_rules", ctx(GARBAGE_PLAN, "tf_plan"))
+    assert unreadable.collections_read == 1
+    assert unreadable.empty_observed == ()
 
 
 # =============================================================================
