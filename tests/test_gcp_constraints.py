@@ -343,15 +343,20 @@ def test_deny_policy_documents_are_unverified():
     assert "deny" in v.message
 
 
-def test_conditional_bindings_make_subset_unverified():
+@needs_z3
+def test_conditional_bindings_are_first_class_not_unverified():
+    # Conditional bindings used to downgrade the whole check to 'unverified';
+    # now a NEW conditional grant absent from OLD is judged a real widening.
+    # (The residual-evasion and narrowing cases live in
+    # tests/test_gcp_subset_conditional.py.)
     new = {"bindings": [{
         "role": "roles/viewer",
         "members": ["user:alice@acme.example"],
         "condition": {"expression": 'request.time < timestamp("2027-01-01T00:00:00Z")'},
     }]}
     v = check_policy_subset(new, OLD)
-    assert v.status == "unverified"
-    assert "conditional" in v.message
+    assert v.status == "contradicted"
+    assert "roles/viewer" in v.message
 
 
 def test_subset_without_z3_degrades_to_unverified():
