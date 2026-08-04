@@ -1,0 +1,87 @@
+{
+  "//": "Terraform JSON syntax, LIST-of-single-key-objects encoding: `resource` is a LIST of objects, each keyed by resource TYPE and then by NAME, with every nested block spelled as an ARRAY of objects even when there is exactly one. proposal.tf.json in this directory carries the OTHER legal encoding (a `resource` MAPPING), so both are committed exactly once and cannot drift apart.",
+  "variable": {
+    "project": {
+      "type": "string"
+    }
+  },
+  "resource": [
+    {
+      "google_access_context_manager_service_perimeter": {
+        "prod": {
+          "parent": "accessPolicies/987",
+          "name": "accessPolicies/987/servicePerimeters/prod",
+          "title": "prod",
+          "perimeter_type": "PERIMETER_TYPE_REGULAR",
+          "use_explicit_dry_run_spec": false,
+          "status": [
+            {
+              "resources": [
+                "projects/123456"
+              ],
+              "restricted_services": [
+                "storage.googleapis.com",
+                "bigquery.googleapis.com"
+              ],
+              "access_levels": [
+                "accessPolicies/987/accessLevels/trusted_corp"
+              ],
+              "egress_policies": [
+                {
+                  "egress_from": [
+                    {
+                      "identities": [
+                        "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com"
+                      ]
+                    }
+                  ],
+                  "egress_to": [
+                    {
+                      "resources": [
+                        "*"
+                      ],
+                      "operations": [
+                        {
+                          "service_name": "storage.googleapis.com",
+                          "method_selectors": [
+                            {
+                              "method": "*"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "google_compute_firewall": {
+        "allow_internal": {
+          "//": "project is an interpolation, so the JSON path has an unresolvable case too: reason `interpolation`, on this attribute only.",
+          "name": "allow-internal",
+          "project": "${var.project}",
+          "network": "projects/acme-prod/global/networks/vpc-main",
+          "direction": "INGRESS",
+          "priority": 1000,
+          "disabled": false,
+          "allow": [
+            {
+              "protocol": "tcp",
+              "ports": [
+                "0-65535"
+              ]
+            }
+          ],
+          "source_ranges": [
+            "10.0.0.0/8"
+          ]
+        }
+      }
+    }
+  ]
+}
