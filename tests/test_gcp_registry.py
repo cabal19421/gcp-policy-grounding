@@ -69,6 +69,7 @@ DOCUMENT_CHECK_OWNERS = {
     # its silence on these fixtures.
     "gcp_grounding.vpcsc_checks": {"check_perimeter_estate"},
     "gcp_grounding.armor_checks": {"check_security_policy"},
+    "gcp_grounding.fw_estate": {"check_firewall_shadowing"},
 }
 
 STUB = "gcp_grounding_stub_provider"
