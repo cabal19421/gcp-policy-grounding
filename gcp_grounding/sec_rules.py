@@ -65,6 +65,7 @@ Every solve in this module goes through :func:`gcp_grounding.solve.decide` /
 from __future__ import annotations
 
 import glob
+import importlib
 import os
 from collections import defaultdict
 from dataclasses import dataclass
@@ -523,12 +524,44 @@ def _carry_verdict(promise: sec_artifact.Promise, label: str) -> Verdict:
                    f"{where}: {src.text!r} — {promise.reason}")
 
 
+def _stage1_sexpr(ast) -> Optional[str]:
+    """*ast* rendered the way :mod:`~gcp_grounding.sec_compile` stores it, or
+    ``None`` when that renderer cannot be resolved.
+
+    Resolved with importlib rather than imported at module scope: stage 2 must
+    keep loading committed artifacts in a checkout where the compiler is absent.
+    """
+    try:
+        sec_compile = importlib.import_module("gcp_grounding.sec_compile")
+    except ImportError:  # pragma: no cover - the compiler ships with stage 2
+        return None
+    try:
+        return sec_compile._render_sexpr(ast)
+    except (KeyError, TypeError, RecursionError):
+        # A shape the AST renderer does not know is not a tamper signal; the z3
+        # rendering below is still authoritative.
+        logger.debug("the stage-1 renderer could not render the stored ast",
+                     exc_info=True)
+        return None
+
+
 def _admit(promise: sec_artifact.Promise, z3, label: str):
     """Integrity-check a compiled promise. Returns ``(verdicts, register)``.
 
-    (1) SEXPR AGREEMENT: recompute ``symbolic(z3, ast)[0].sexpr()`` and compare to
-    the stored ``sexpr``. A mismatch is a detected inconsistency in a committed
-    file, so it is ``contradicted`` (refuse to register), not ``unverified``.
+    (1) SEXPR AGREEMENT: re-render the stored ast and compare to the stored
+    ``sexpr``. A mismatch is a detected inconsistency in a committed file, so it
+    is ``contradicted`` (refuse to register), not ``unverified``.
+
+    There are TWO faithful renderings of one ast and an artifact may carry
+    either. ``compile-requirements`` stores :func:`sec_compile._render_sexpr`'s
+    output — deliberately z3-INDEPENDENT, so a committed artifact survives a z3
+    upgrade — while this module historically recomputed
+    ``symbolic(z3, ast)[0].sexpr()``. The two never agree textually
+    (``(exists ((b iam_bindings)) (eq b.role "roles/owner"))`` versus
+    ``(= |iam_bindings#b.role| "roles/owner")``), so demanding the z3 form alone
+    refused EVERY artifact stage 1 wrote. Accepting either is not a weakening:
+    both are pure functions of the stored ast, so editing the ast changes both
+    and a stale ``sexpr`` still fails to match either one.
     (2) WITNESS RE-CLASSIFICATION: ``sec_probes.reclassify``; a drifted witness is
     ``contradicted`` (refuse). An undecided witness or an absent z3 records an
     ``unverified sec:artifact`` note and registers the rule anyway — the rules
@@ -549,7 +582,7 @@ def _admit(promise: sec_artifact.Promise, z3, label: str):
                          f"{label}: the stored ast could not be re-encoded ({exc}) — "
                          "integrity was not verified; the rule was registered")], True)
 
-    if fresh != promise.sexpr:
+    if promise.sexpr not in (fresh, _stage1_sexpr(promise.ast)):
         return ([Verdict("contradicted", "sec:artifact", promise.id, 0,
                          f"{label}: the stored sexpr does not match a fresh encoding "
                          "of the stored ast — the artifact was edited by hand or the "
