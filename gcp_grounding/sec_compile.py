@@ -116,57 +116,9 @@ class _Pending:
 
 # -- sexpr rendering ----------------------------------------------------------
 #
-# A deterministic, z3-INDEPENDENT s-expression rendering of the AST, stored in
-# the artifact for human review. It is derived purely from the (already
-# canonical) AST rather than from ``str(formula)`` so the committed bytes are
-# stable across z3 versions — the same reason witnesses are re-classified rather
-# than re-minted.
-
-def _render_term(term) -> str:
-    if term.get("node") == "field":
-        return f"{term['var']}.{term['field']}"
-    sort, value = term.get("sort"), term.get("value")
-    if sort == "Str":
-        return _quote(value)
-    if sort == "Bool":
-        return "true" if value else "false"
-    return str(value)
-
-
-def _quote(text: str) -> str:
-    return '"' + str(text).replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def _render_sexpr(node) -> str:
-    kind = node["node"]
-    if kind in ("true", "false"):
-        return kind
-    if kind == "not":
-        return f"(not {_render_sexpr(node['arg'])})"
-    if kind in ("and", "or"):
-        return f"({kind} " + " ".join(_render_sexpr(a) for a in node["args"]) + ")"
-    if kind == "implies":
-        return f"(=> {_render_sexpr(node['if'])} {_render_sexpr(node['then'])})"
-    if kind in ("atmost", "atleast"):
-        return (f"({kind} {node['k']} "
-                + " ".join(_render_sexpr(a) for a in node["args"]) + ")")
-    if kind in ("forall", "exists"):
-        return (f"({kind} (({node['var']} {node['collection']})) "
-                f"{_render_sexpr(node['body'])})")
-    if kind == "cmp":
-        return f"({node['op']} {_render_term(node['left'])} {_render_term(node['right'])})"
-    if kind == "in":
-        items = " ".join(_quote(x) for x in node["set"]["items"])
-        return f"(in {_render_term(node['term'])} (set {items}))"
-    if kind in ("prefix", "suffix", "contains"):
-        return f"({kind} {_render_term(node['term'])} {_quote(node['value'])})"
-    if kind == "cidr_contains":
-        return f"(cidr_contains {_render_term(node['cidr'])} {_render_term(node['addr'])})"
-    if kind == "port_in":
-        return f"(port_in {_render_term(node['term'])} {node['lo']} {node['hi']})"
-    if kind == "cel":
-        return f"(cel {_quote(node['expr'])})"
-    return f"({kind})"
+# THE ONE FORM lives in the shared leaf :mod:`~gcp_grounding.sec_ast`, so the
+# stage that WRITES the field and the stage that RE-CHECKS it render from the
+# same code without either reaching across for the other's renderer.
 
 
 # -- path helpers -------------------------------------------------------------
@@ -317,7 +269,7 @@ def compile_document(path, snapshot: GcpSnapshot, *, out_dir=None,
             pendings.append(p)
             continue
         p.free_consts = tuple(sec_ast.free_consts(cand.ast))
-        p.sexpr = _render_sexpr(cand.ast)
+        p.sexpr = sec_ast.render_sexpr(cand.ast)
         pendings.append(p)
 
     admissible = [p for p in pendings if p.status is None]

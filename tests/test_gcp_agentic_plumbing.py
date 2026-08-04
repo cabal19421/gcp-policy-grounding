@@ -115,6 +115,16 @@ def test_domain_probes_are_behavioural_not_kind_lookups():
     claim kind. The ``is True`` anchors are the two capabilities this checkout
     really does decide — without them "every probe is False" would satisfy every
     assertion below.
+
+    SUPERSEDES ``test_domain_probes_track_the_kinds_that_have_landed``, the
+    variant ``agent/gx-sexpr-one-form`` landed against the same problem: it
+    asserted ``env.HAVE_X is ("kind" in KINDS)``, which held only while the
+    probes WERE that membership test. Once ``agent/gx-capability-probes`` made
+    them behavioural the two sides genuinely disagree — a kind is registered
+    several tasks before anything can decide it — so that equality is not merely
+    tautological here, it is FALSE. Its two surviving facts are kept: the kinds
+    are asserted present above, and ``HAVE_ORG_ENFORCEMENT`` is still pinned,
+    now to what was measured rather than to a hardcoded ``False``.
     """
     from gcp_grounding.claims import KINDS
 

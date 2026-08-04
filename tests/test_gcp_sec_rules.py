@@ -135,10 +135,15 @@ def placeholder_promise(pid, mode, ast, *, domain="iam", state="proposal",
 
 
 def minted_promise(pid, mode, ast, *, domain="iam", state="proposal"):
-    """A compiled Promise whose sexpr and witnesses come from real z3 models —
-    the clean, freshly-compiled artifact the integrity checks must accept."""
+    """A compiled Promise whose witnesses come from real z3 models and whose
+    ``sexpr`` is the ONE committed rendering — the clean, freshly-compiled
+    artifact the integrity checks must accept.
+
+    Re-pinned to :func:`sec_ast.render_sexpr`: that is the z3-independent form
+    ``compile-requirements`` writes and the only one admission accepts. It was
+    previously ``formula.sexpr()``, a rendering stage 1 never commits."""
     formula, consts = sec_encode.symbolic(Z3, ast)
-    sexpr = formula.sexpr()
+    sexpr = sec_ast.render_sexpr(ast)
     obl = sec_probes.obligation(Z3, formula, mode)
     positive, negative = sec_probes.mint(Z3, obl, consts)
     assert positive is not None and negative is not None, "witnesses must mint"
@@ -164,6 +169,8 @@ def ctx(document=None, kind=None, *, baseline=None, solver=None, estate=None):
 _POLICIES = Path(__file__).parent / "fixtures" / "gcp" / "policies"
 IAM_GOOD = json.loads((_POLICIES / "iam_policy_good.json").read_text())
 IAM_ALLUSERS = {"bindings": [{"role": "roles/owner", "members": ["allUsers"]}]}
+ORG_GOOD = json.loads((_POLICIES / "org_policy_good.json").read_text())
+ORG_CONSTRAINT = "iam.disableServiceAccountKeyCreation"
 
 
 # =============================================================================
@@ -301,6 +308,84 @@ def test_register_extractor_makes_estate_collection_evaluable():
         assert v.status == "unverified" and "z3 is not available" in v.message
         return
     assert v.status == "grounded"
+
+
+# =============================================================================
+# the org-policy extractor's kind guard (MK-S02)
+# =============================================================================
+
+def test_org_policy_rules_requires_the_org_policy_kind_in_both_directions():
+    """The kind guard, pinned in BOTH directions — one direction cannot tell a
+    guard from its own inversion.
+
+    An ``org_policy`` context carrying a well-formed policy must yield RECORDS
+    and no reason; a context of any OTHER kind must yield the refusal pair. The
+    non-org_policy contexts here deliberately carry a NON-``None`` document,
+    because ``ctx.document is None`` refuses on its own and would answer the
+    guard and its inverse alike — a refusal obtained that way pins nothing.
+    """
+    records, reason = sec_rules.org_policy_rules(ctx(ORG_GOOD, "org_policy"))
+    assert reason is None
+    assert records == ({"constraint": ORG_CONSTRAINT, "is_list": False,
+                        "enforce": True, "value": ""},)
+
+    listed = {"name": f"projects/p/policies/{ORG_CONSTRAINT}",
+              "spec": {"rules": [{"enforce": True,
+                                  "values": {"allowedValues": ["b", "a"]}}]}}
+    records, reason = sec_rules.org_policy_rules(ctx(listed, "org_policy"))
+    assert reason is None
+    assert [r["value"] for r in records] == ["a", "b"]
+    assert all(r["is_list"] and r["constraint"] == ORG_CONSTRAINT for r in records)
+
+    refusal = ((), "the document under review is not an Org Policy")
+    for kind in ("iam_policy", "firewall_rule", "tf_plan", "security_policy", None):
+        assert sec_rules.org_policy_rules(ctx(ORG_GOOD, kind)) == refusal, kind
+
+    # the guard's second disjunct: the right kind with nothing to read.
+    assert sec_rules.org_policy_rules(ctx(None, "org_policy")) == refusal
+
+
+# =============================================================================
+# the admitted-rule record (MK-S01)
+# =============================================================================
+
+def test_compiled_rule_is_frozen_and_hashable():
+    """An admitted rule is IMMUTABLE, and its type participates in hashing.
+
+    ``frozen=False`` would silently let a compiled rule be REWRITTEN AFTER
+    ADMISSION — the artifact-tier version of the widening this task reverses —
+    and would set the type's ``__hash__`` to ``None``.
+    """
+    r = rule(placeholder_promise("frozen-pin", "refute", AST_OWNER))
+    swapped = placeholder_promise("swapped", "refute", AST_VIEWER_EXISTS)
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        r.promise = swapped
+    assert r.promise.id == "frozen-pin"      # admission survived the attempt
+
+    # HASHING. The frozen record's generated ``__hash__`` DELEGATES to its one
+    # field, and that field's ast is a plain dict, so the rule cannot really
+    # enter a dict or a set here (ESC-GX-SEXPR-001, and the strict-xfailed
+    # spec-literal below). What is observable — and what an unfrozen rule
+    # changes — is WHICH type refuses: the dict inside the promise, never the
+    # rule type itself, whose ``__hash__`` would be ``None``.
+    with pytest.raises(TypeError, match="unhashable type: 'dict'"):
+        {r: "admitted"}
+    with pytest.raises(TypeError, match="unhashable type: 'dict'"):
+        {r}
+
+
+@pytest.mark.xfail(strict=True, reason="ESC-GX-SEXPR-001: Promise carries its ast as a plain dict")
+def test_compiled_rule_instance_is_usable_as_a_dict_key():
+    """SPEC-LITERAL under house rule 4, for the half of MK-S01's killing-test
+    clause this task's declared path cannot satisfy: "the same instance works as
+    a dict key and a set member". It does not, on CLEAN source, because
+    ``sec_artifact.Promise`` stores the ast as a plain ``dict`` — see
+    ESC-GX-SEXPR-001 for what would close it. Landed strict, so the day
+    ``Promise`` grows a hashable ast this XPASSes and says so."""
+    r = rule(placeholder_promise("hash-pin", "refute", AST_OWNER))
+    assert {r: "admitted"}[r] == "admitted"
+    assert len({r, r}) == 1
 
 
 # =============================================================================
@@ -457,9 +542,85 @@ def test_flipped_mode_is_refused_by_witness_reclassification(tmp_path):
     assert "witness no longer classifies" in art[0].message
 
 
-def test_weakened_ast_is_refused_by_sexpr_mismatch(tmp_path):
+def _load_with_sexpr(tmp_path, name, sexpr):
+    """A clean minted artifact whose stored ``sexpr`` is replaced by *sexpr*
+    verbatim, then loaded — so a test can choose the rendering under test rather
+    than inherit whichever one :func:`minted_promise` happens to store."""
+    return _load_mutated(
+        tmp_path, name,
+        lambda data: data["promises"][0]["smt"].__setitem__("sexpr", sexpr))
+
+
+def test_the_committed_sexpr_has_exactly_one_renderer(tmp_path):
+    """ONE strict form, and the guard REJECTS the other one.
+
+    ``sec_ast.render_sexpr`` is the artifact's committed, z3-independent
+    rendering. Encoding the SAME ast through z3 gives a different string, and an
+    artifact carrying THAT string is not a differently-spelled clean artifact —
+    it is an artifact whose stored rendering disagrees with the one renderer, and
+    admission must refuse it. A guard that accepts either form admits both and
+    this pin goes red, which is exactly what it is here to catch.
+    """
     if not HAVE_Z3:
+        # Without z3 admission abstains before the comparison, so the strict form
+        # is not consulted; the documented builtin behaviour is that the artifact
+        # still registers carrying an honest integrity note.
+        path = _write(tmp_path, "one.promises.json",
+                      _doc([placeholder_promise("pin", "refute", AST_OWNER,
+                                                sexpr=sec_ast.render_sexpr(AST_OWNER))],
+                           source_doc="one.json"))
+        rules, verdicts = sec_rules.load_rules([path], solver=_SOLVER)
+        assert {r.promise.id for r in rules} == {"pin"}
+        note = [v for v in verdicts if v.kind == "sec:artifact"]
+        assert len(note) == 1 and note[0].status == "unverified"
         return
+
+    one_form = sec_ast.render_sexpr(AST_OWNER)
+    z3_form = sec_encode.symbolic(Z3, AST_OWNER)[0].sexpr()
+    # Non-vacuity: the two renderers must really disagree, or "rejects the other
+    # form" would be satisfied by rejecting nothing.
+    assert one_form != z3_form
+
+    rules, verdicts = _load_with_sexpr(tmp_path, "one-form", one_form)
+    assert {r.promise.id for r in rules} == {"pin"}
+    assert [v for v in verdicts if v.kind == "sec:artifact"] == []
+
+    rules, verdicts = _load_with_sexpr(tmp_path, "other-form", z3_form)
+    art = [v for v in verdicts if v.kind == "sec:artifact"]
+    assert rules == ()
+    assert len(art) == 1 and art[0].status == "contradicted"
+    assert "does not match a fresh encoding" in art[0].message
+
+
+def test_weakened_ast_is_refused_by_sexpr_mismatch(tmp_path):
+    """REGRESSION PIN. Hand-editing the ast while leaving the stored rendering
+    intact is ``contradicted sec:artifact``, naming the mismatch.
+
+    This one passed under the two-form guard too — the ast moves, so every
+    rendering of it moves — so it is evidence of nothing about the widening. It
+    is here to stay red if the comparison is ever dropped. Its non-vacuity is
+    asserted, not assumed: the edit must really move the one form, or "refused on
+    mismatch" would hold with no mismatch to refuse."""
+    weakened = exists({"node": "and", "args": [
+        cmp("ne", fld("role"), lit("Str", "roles/owner")),
+        cmp("eq", fld("member"), lit("Str", "allUsers")),
+    ]})
+    assert sec_ast.render_sexpr(weakened) != sec_ast.render_sexpr(AST_OWNER)
+
+    if not HAVE_Z3:
+        # Builtin backend: the comparison is not reached, and the documented
+        # behaviour is a registered rule carrying an honest integrity note —
+        # never a silent clean load.
+        path = _write(tmp_path, "weak.promises.json",
+                      _doc([placeholder_promise("pin", "refute", weakened,
+                                                sexpr=sec_ast.render_sexpr(AST_OWNER))],
+                           source_doc="weak.json"))
+        rules, verdicts = sec_rules.load_rules([path], solver=_SOLVER)
+        assert {r.promise.id for r in rules} == {"pin"}
+        note = [v for v in verdicts if v.kind == "sec:artifact"]
+        assert len(note) == 1 and note[0].status == "unverified"
+        return
+
     def weaken(data):
         # relax the role equality (cmp eq -> cmp ne) but leave the stored sexpr
         args = data["promises"][0]["smt"]["ast"]["body"]["args"]

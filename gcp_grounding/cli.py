@@ -1,12 +1,17 @@
-"""Command-line interface: ``gcp-ground verify-policy`` / ``scan-command``.
+"""Command-line interface: ``gcp-ground verify-policy`` / ``scan-command`` /
+``compile-requirements``.
 
-Two subcommands, exposed both as the ``gcp-ground`` console script and as
+Three subcommands, exposed both as the ``gcp-ground`` console script and as
 ``python -m gcp_grounding``::
 
     gcp-ground verify-policy FILE [--snapshot PATH] [--baseline PATH]
                              [--format text|json] [--explain] [--hook]
-                             [--bash-policy block|warn|off]
+                             [--bash-policy block|warn|off] [--abstain-notes]
+                             [--requirements PATH]
     gcp-ground scan-command --command STR|- [--format text|json]
+    gcp-ground compile-requirements [DIR] [--snapshot PATH] [--out DIR]
+                             [--check] [--format text|json]
+                             [--no-independence] [--llm]
 
 ``verify-policy`` runs the preflight gate
 (:func:`~gcp_grounding.preflight.ground_policy`) over one policy document;
@@ -84,11 +89,80 @@ handled by the bash arm, which runs before this check — a Bash event carries
 a ``command``, never a ``tool_input.file_path``, so this check returns
 "proceed" for it either way.
 
+``--hook`` has an ABSTAIN CHANNEL, opt-in via ``--abstain-notes`` /
+:data:`ABSTAIN_NOTES_ENV`. Without it, a hook run that could not judge the
+document is completely silent — zero stdout, zero stderr, exit 0 — which is
+byte-for-byte what a clean pass looks like, so a raw ``.tf`` file, an
+unparsable policy, a CEL condition z3 was not there to decide, a missing
+``tf_claims``, an uncaptured snapshot category and a tautology warning all
+reach the agent as an unqualified success. With it, every ``unverified``
+verdict is printed to stderr under a ``NOT DECIDED`` header, rendered exactly
+as the human report renders its unverified lines, and the ignorance is on the
+record while the exit code stays 0. This channel NEVER blocks and never
+changes an exit code; it is opt-in because the hook's stderr is agent-visible
+and the default contract is silence on a passing run.
+
+The eventual replacement is structured JSON on stdout — a
+``hookSpecificOutput`` object with an ``additionalContext`` field, which
+Claude Code feeds to the agent without blocking, so the ignorance would reach
+the agent as data rather than as prose on stderr. That option needs stdout,
+and the stdout-is-empty invariant of hook mode is preserved here deliberately
+— the notes go to stderr alone — so it stays available.
+
+``compile-requirements`` runs stage 1 of the requirements compiler
+(:func:`gcp_grounding.sec_compile.compile_directory`) over a directory of
+markdown requirements, writing one reviewable ``*.promises.json`` per document
+into ``--out`` (default ``<DIR>/compiled``). Its exit codes are the gate's,
+read over the compile:
+
+- ``0`` — every promise compiled, or was honestly ``unverified``;
+- ``1`` — a promise was ``rejected``, or ``--check`` found artifact drift;
+- ``2`` — a usage error, including a missing or unreadable ``--snapshot``.
+
+The snapshot is REQUIRED here, unlike in hook mode: compiling without one
+cannot ground a requirement's vocabulary, so a promise naming a hallucinated
+role would compile clean. Refusing to start is the only honest option. ``--llm``
+is optional in the strongest sense — when :mod:`gcp_grounding.sec_llm` is absent
+it prints one stderr note and compiles deterministically rather than failing.
+
+``verify-policy --requirements PATH`` picks the compiled artifacts back up: a
+directory of ``*.promises.json`` or a single one, falling back to
+:data:`REQUIREMENTS_ENV`, which is how a hook or CI job turns requirements on
+globally. With neither set, no rules load and nothing extra is printed — the
+report only ever claims what it checked, so silence is honest.
+
+A NON-ENFORCING REQUIREMENT GETS ITS OWN STARTUP LINE, and it does NOT depend
+on ``--abstain-notes``. A user-authored promise that fails to compile would
+otherwise be invisible in the mode operators actually run:
+:mod:`~gcp_grounding.sec_rules` maps a ``rejected`` promise to an ``unverified``
+carry verdict, so ``report.ok`` stays True, and the abstain channel defaults
+off — a typo'd requirement would yield exit 0 with byte-empty stderr and zero
+enforcement, indistinguishable from the rule working. So whenever a requirements
+source resolves and any loaded promise is not enforcing, ONE line goes to stderr
+on every run, in both hook and normal mode, naming the artifact directory. The
+exit code is unchanged in every case: this is a notice, never a block, so it
+cannot resurrect the fail-closed hole ``--hook``'s fail-open contract closed.
+When every loaded promise is enforcing, nothing is printed — a channel that
+fires on a healthy configuration is noise, and noise gets guardrails switched
+off.
+
 ``--explain`` re-derives and dumps (to stderr, keeping stdout parseable for
 ``--format json``) the z3 constraints this run generated: the translated
 formula per ``cel`` condition and the new⊈old satisfiability assertion when
 a ``--baseline`` comparison ran. The derivation is deterministic, so the
-re-generated formulas are exactly the ones the checks decided.
+re-generated formulas are exactly the ones the checks decided. With requirements
+configured it also prints each compiled promise's s-expression and its two
+pinned witnesses (:func:`gcp_grounding.sec_evidence.explain_lines`).
+
+``--format json`` emits :func:`gcp_grounding.sec_evidence.sec_document` instead
+of :meth:`~gcp_grounding.report.PolicyReport.to_dict` whenever a requirements
+source was CONFIGURED — even if it resolved to zero rules — so a consumer that
+turned requirements on always sees the same shape and can tell "no rules loaded"
+(``sec.requirements == []``) from "requirements are off" (no ``sec`` key at
+all). The gate is CONFIGURATION, not load outcome; keying it on whether rules
+happened to load would make the document shape depend on whether a compile
+succeeded. With no requirements source configured the output is byte-identical
+to what it has always been.
 
 stdlib ``argparse`` only — no third-party CLI framework.
 """
@@ -97,6 +171,8 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
+import inspect
 import json
 import os
 import sys
@@ -119,17 +195,42 @@ from .core.report import GroundingReport, Verdict
 from .core.solver import get_solver
 from .knowledge import GcpSnapshot
 from .preflight import detect_kind, ground_policy
-from .report import PolicyReport
+# _MARKS / _STAMPED are the human render's own presentation rules: the abstain
+# channel reuses them so its lines cannot drift from the unverified lines of the
+# report a blocking run prints.
+from .report import _MARKS, _STAMPED, PolicyReport
 
 logger = get_logger(__name__)
 
-__all__ = ["BASH_POLICY_ENV", "SNAPSHOT_ENV", "build_parser", "main"]
+__all__ = ["ABSTAIN_NOTES_ENV", "BASH_POLICY_ENV", "REQUIREMENTS_ENV",
+           "SNAPSHOT_ENV", "build_parser", "main"]
 
 #: Environment variable consulted when ``--snapshot`` is not given.
 SNAPSHOT_ENV = "GCP_GROUNDING_SNAPSHOT"
 
 #: Environment variable consulted when ``--bash-policy`` is not given.
 BASH_POLICY_ENV = "GCP_GROUNDING_BASH_POLICY"
+
+#: Environment variable that turns the ``--hook`` abstain channel on when
+#: ``--abstain-notes`` is not given — one export configures a whole session's
+#: hooks, exactly as :data:`SNAPSHOT_ENV` does.
+ABSTAIN_NOTES_ENV = "GCP_GROUNDING_ABSTAIN_NOTES"
+
+#: Environment variable naming the compiled requirements — an artifact
+#: directory or a single ``*.promises.json`` — when ``--requirements`` is not
+#: given. Exporting it once is how a hook or a CI job turns requirements on
+#: globally, exactly as :data:`SNAPSHOT_ENV` configures the estate.
+REQUIREMENTS_ENV = "GCP_GROUNDING_REQUIREMENTS"
+
+#: Where ``compile-requirements`` looks when DIR is omitted, resolved against
+#: the cwd.
+_DEFAULT_REQUIREMENTS_DIR = "sec_requirements"
+
+#: Environment values that mean "on", case-insensitively, mirroring the
+#: harness's truthy set. ANYTHING else is False — including ``"off"``,
+#: ``"0"``, the empty string and a typo — because the channel is opt-in and an
+#: unrecognized value must not opt an operator in behind their back.
+_TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
 
 #: How ``--hook`` treats a state-mutating shell command: ``block`` exits 2,
 #: ``warn`` reports it and exits 0, ``off`` does not scan at all.
@@ -153,6 +254,12 @@ _BASH_CAPTURED_AT = "not consulted"
 #: text pass, so the report names no backend rather than the one z3 that
 #: happened to be importable.
 _BASH_BACKEND = "none"
+
+#: The mark and the freshness stamping rule the human render gives an
+#: ``unverified`` line (report.py's ``_MARKS`` / ``_STAMPED``), read once here
+#: so the abstain channel reads identically to the report's own lines.
+_ABSTAIN_MARK = dict(_MARKS)["unverified"]
+_ABSTAIN_STAMPED = "unverified" in _STAMPED
 
 #: CLI ``--format`` values → :meth:`PolicyReport.render` formats.
 _FORMATS = {"text": "human", "json": "json"}
@@ -229,6 +336,17 @@ def build_parser() -> argparse.ArgumentParser:
              f"(default: {_DEFAULT_BASH_POLICY}, falling back to "
              f"${BASH_POLICY_ENV}); block exits 2, warn reports and exits 0, "
              f"off skips the scan")
+    verify.add_argument(
+        "--abstain-notes", action="store_true", default=False,
+        help=f"in --hook mode, print the verdicts the gate could not judge "
+             f"(the 'unverified' bucket) to stderr and still exit 0 — this "
+             f"NEVER blocks anything (default: off, honouring "
+             f"${ABSTAIN_NOTES_ENV}=1|true|yes|on)")
+    verify.add_argument(
+        "--requirements", metavar="PATH",
+        help=f"compiled requirements to run alongside the built-in checks: a "
+             f"directory of *.promises.json or a single one (default: "
+             f"${REQUIREMENTS_ENV}; unset means no rules load)")
     verify.set_defaults(handler=_cmd_verify_policy)
     scan = sub.add_parser(
         "scan-command",
@@ -246,6 +364,44 @@ def build_parser() -> argparse.ArgumentParser:
         "--format", choices=tuple(_FORMATS), default="text",
         help="report format on stdout (default: text)")
     scan.set_defaults(handler=_cmd_scan_command)
+    compile_req = sub.add_parser(
+        "compile-requirements",
+        help="compile a directory of markdown requirements into reviewable "
+             "*.promises.json artifacts; exit 1 iff a promise was rejected or "
+             "an artifact drifted",
+        description="Run stage 1 of the requirements compiler over DIR, "
+                    "grounding every requirement's vocabulary against the "
+                    "snapshot and writing one artifact per document. A "
+                    "snapshot is REQUIRED: without one a requirement naming a "
+                    "hallucinated role would compile clean, and pretending to "
+                    "have checked is the one thing this gate does not do.")
+    compile_req.add_argument(
+        "directory", nargs="?", metavar="DIR", default=_DEFAULT_REQUIREMENTS_DIR,
+        help=f"directory of *.md requirement documents, resolved against the "
+             f"cwd (default: {_DEFAULT_REQUIREMENTS_DIR})")
+    compile_req.add_argument(
+        "--snapshot", metavar="PATH",
+        help=f"estate snapshot JSON (default: ${SNAPSHOT_ENV}); missing or "
+             f"unreadable is a usage error, not a fail-open")
+    compile_req.add_argument(
+        "--out", metavar="DIR", default=None,
+        help="where the artifacts are written (default: <DIR>/compiled)")
+    compile_req.add_argument(
+        "--check", action="store_true",
+        help="compile in memory and fail on artifact drift instead of writing "
+             "— the CI mode that keeps committed artifacts honest")
+    compile_req.add_argument(
+        "--format", choices=tuple(_FORMATS), default="text",
+        help="report format on stdout (default: text)")
+    compile_req.add_argument(
+        "--no-independence", action="store_true",
+        help="skip the compile-time independence probe between promises")
+    compile_req.add_argument(
+        "--llm", action="store_true",
+        help="use the LLM-assisted stage when gcp_grounding.sec_llm is "
+             "available; otherwise note it on stderr and compile "
+             "deterministically (never a hard failure)")
+    compile_req.set_defaults(handler=_cmd_compile_requirements)
     return parser
 
 
@@ -290,16 +446,27 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
     snapshot, problem = _load_snapshot(args.snapshot)
     if snapshot is None:
         return _usage(problem)
-    report = ground_policy(args.file, snapshot, baseline=args.baseline)
-    rendered = PolicyReport(report, captured_at=snapshot.captured_at,
-                            source=args.file).render(_FORMATS[args.format])
-    print(rendered)
+    source = _requirements_source(args)
+    rules, carried = _load_requirements(source, hook=False)
+    report = ground_policy(args.file, snapshot, baseline=args.baseline,
+                           rules=rules)
+    # The carry verdicts are what keeps a rejected or unverified promise
+    # visible: without them a requirement that did not run is indistinguishable
+    # from one that passed.
+    for verdict in carried:
+        report.add(verdict)
+    policy_report = PolicyReport(report, captured_at=snapshot.captured_at,
+                                 source=args.file)
+    print(_render_policy(policy_report, args.format, source, rules))
     if args.explain:
-        print("\n".join(_explain_lines(args.file, args.baseline)), file=sys.stderr)
+        lines = _explain_lines(args.file, args.baseline)
+        lines.extend(_sec_explain_lines(source, rules))
+        print("\n".join(lines), file=sys.stderr)
     return EXIT_OK if report.ok else EXIT_FAILED
 
 
-def _usage(problem: str, *, hook: bool = False) -> int:
+def _usage(problem: str, *, hook: bool = False,
+           prog: str = "verify-policy") -> int:
     if hook:
         # Reuse the fail-open wording so operators see one phrase across the
         # stdin, snapshot and argv arms — a hook usage error checks nothing and
@@ -307,7 +474,7 @@ def _usage(problem: str, *, hook: bool = False) -> int:
         print(f"gcp-ground --hook: {problem} — nothing was checked (fail-open)",
               file=sys.stderr)
         return EXIT_OK
-    print(f"gcp-ground verify-policy: error: {problem}", file=sys.stderr)
+    print(f"gcp-ground {prog}: error: {problem}", file=sys.stderr)
     return EXIT_BLOCK
 
 
@@ -323,6 +490,177 @@ def _load_snapshot(flag: str | None) -> tuple[GcpSnapshot | None, str | None]:
         return None, f"snapshot {path}: could not be read ({exc})"
     except ValueError as exc:
         return None, str(exc)  # GcpSnapshot.load already names the path
+
+
+# -- compiled requirements: pickup, notice, render -----------------------------
+
+
+def _prefix(hook: bool) -> str:
+    """The stderr line prefix for the mode we are in — the hook's stderr is
+    agent-visible and its notes are already prefixed this way."""
+    return "gcp-ground --hook" if hook else "gcp-ground verify-policy"
+
+
+def _requirements_source(args: argparse.Namespace) -> str | None:
+    """The CONFIGURED requirements location, or ``None`` when requirements are
+    off. The flag wins, then :data:`REQUIREMENTS_ENV`.
+
+    This answers "did the operator turn requirements on?", NOT "did any rule
+    load" — the distinction is what keeps the ``--format json`` shape stable
+    across a failed compile (see :func:`_render_policy`).
+    """
+    flag = getattr(args, "requirements", None)
+    if flag:
+        return flag
+    raw = os.environ.get(REQUIREMENTS_ENV)
+    return raw.strip() if raw and raw.strip() else None
+
+
+def _load_requirements(source: str | None, *, hook: bool) -> tuple[tuple, tuple]:
+    """→ ``(rules, carry_verdicts)`` for the configured *source*.
+
+    Never raises and never blocks. :mod:`~gcp_grounding.sec_rules` is resolved
+    with importlib — mirroring preflight's dynamic ``tf_claims`` resolution — so
+    a checkout without the sec modules, or an unreadable artifact directory,
+    prints one stderr note and proceeds with no rules. A broken requirements
+    setup must never block an edit; that is the module docstring's promise, and
+    it outranks running any particular rule.
+    """
+    if source is None:
+        return (), ()
+    prefix = _prefix(hook)
+    try:
+        sec_rules = importlib.import_module("gcp_grounding.sec_rules")
+    except ImportError as exc:
+        print(f"{prefix}: compiled requirements are not available in this "
+              f"checkout ({exc}) — none were loaded", file=sys.stderr)
+        return (), ()
+    if not os.path.exists(source) or not os.access(source, os.R_OK):
+        print(f"{prefix}: the requirements at {source} could not be read — "
+              f"none were loaded", file=sys.stderr)
+        return (), ()
+    try:
+        if os.path.isdir(source):
+            rules, verdicts = sec_rules.load_directory(source)
+        else:
+            rules, verdicts = sec_rules.load_rules([source])
+    except (OSError, ValueError) as exc:
+        print(f"{prefix}: the requirements at {source} could not be loaded "
+              f"({exc}) — none were loaded", file=sys.stderr)
+        return (), ()
+    _requirements_notice(rules, verdicts, source=source, hook=hook)
+    return tuple(rules), tuple(verdicts)
+
+
+def _requirements_notice(rules, verdicts, *, source: str, hook: bool) -> None:
+    """Print the ONE operator line when a loaded promise is not enforcing.
+
+    Without this line a broken requirement is INVISIBLE in the mode operators
+    actually run. ``sec_rules`` maps a ``rejected`` promise to an ``unverified``
+    carry verdict — whose rationale is sound, since one bad requirement file
+    must not fail every unrelated policy run — so ``report.ok`` stays True, and
+    ``--abstain-notes`` defaults off. Dropping a typo'd requirement into
+    ``sec_requirements/`` and running the hook would then yield exit 0 with
+    byte-empty stderr and zero enforcement: byte-identical to the rule working.
+
+    So this channel is deliberately NOT gated on ``--abstain-notes``. The whole
+    point is that the operator has not opted into anything and still needs to
+    know their guardrail is inert. It NEVER changes an exit code — a notice that
+    could block would resurrect the fail-closed hole the hook's fail-open
+    contract closed.
+
+    Silence when every loaded promise enforces: a channel that fires on a
+    healthy configuration is noise, and noise is what gets a guardrail switched
+    off.
+    """
+    enforcing = {rule.promise.id for rule in rules}
+    # A non-compiled promise exists ONLY as a carry verdict — there is no
+    # whole-artifact status accessor — so the stalled set is read off the
+    # verdicts that do not belong to a registered rule.
+    stalled = {verdict.target for verdict in verdicts
+               if verdict.target not in enforcing}
+    if not stalled:
+        return
+    print(f"{_prefix(hook)}: {len(stalled)} of {len(enforcing) + len(stalled)} "
+          f"compiled requirement(s) are not enforcing (see "
+          f"compile-requirements) — {source}", file=sys.stderr)
+
+
+def _witness_table(sec_evidence: Any, sec_rules: Any, rules) -> Any:
+    """The evidence side-table for the ``sec`` document: each rule's two pinned
+    witnesses, plus the record that refuted it this run, if any.
+
+    Record fields may be bools or ints, and
+    :class:`~gcp_grounding.sec_evidence.WitnessRow` refuses a non-string
+    assignment rather than guessing a rendering — so they are stringified here,
+    at the boundary.
+    """
+    table = sec_evidence.WitnessTable()
+    for rule in rules:
+        promise = rule.promise
+        for role, witness in (("pinned-positive", promise.positive),
+                              ("pinned-negative", promise.negative)):
+            if witness is None:
+                continue
+            table.add(sec_evidence.WitnessRow(
+                promise_id=promise.id, role=role,
+                assignment=dict(witness.assignment)))
+        found = sec_rules.last_witness(promise.id)
+        if found:
+            table.add(sec_evidence.WitnessRow(
+                promise_id=promise.id, role="violating-record",
+                collection=found["collection"], index=found["index"],
+                assignment={k: str(v) for k, v in found["record"].items()}))
+    return table
+
+
+def _render_policy(policy_report: PolicyReport, format: str,
+                   source: str | None, rules) -> str:
+    """The stdout render, one document.
+
+    ``--format json`` becomes :func:`sec_evidence.sec_document` whenever a
+    requirements source was CONFIGURED — even when it resolved to zero rules —
+    so a consumer that turned requirements on always sees the same shape and can
+    tell "no rules loaded" (``sec.requirements == []``) from "requirements are
+    off" (no ``sec`` key at all). Keying that on the LOAD OUTCOME instead would
+    make the document shape depend on whether a compile succeeded, which is
+    exactly the ambiguity the always-present nested key removes.
+
+    With no source configured this is byte-identical to what it has always been.
+    """
+    if source is None or format != "json":
+        return policy_report.render(_FORMATS[format])
+    try:
+        sec_evidence = importlib.import_module("gcp_grounding.sec_evidence")
+        sec_rules = importlib.import_module("gcp_grounding.sec_rules")
+    except ImportError:
+        # Same fail-open as the pickup: the base document is still true, it just
+        # carries no evidence table.
+        logger.debug("the sec evidence channel is unavailable", exc_info=True)
+        return policy_report.render(_FORMATS[format])
+    document = sec_evidence.sec_document(
+        policy_report, _witness_table(sec_evidence, sec_rules, rules), rules)
+    # Rendered exactly as report.py renders its own JSON, so the two documents
+    # differ only by the added key.
+    return json.dumps(document, indent=2, ensure_ascii=False)
+
+
+def _sec_explain_lines(source: str | None, rules) -> list[str]:
+    """The ``--explain`` stanzas for the compiled requirements, or ``[]``.
+
+    Each loaded promise's s-expression and pinned witnesses print next to the
+    CEL and subset formulas: the reviewer's cross-check that what shipped in the
+    artifact is what actually ran.
+    """
+    if source is None:
+        return []
+    try:
+        sec_evidence = importlib.import_module("gcp_grounding.sec_evidence")
+    except ImportError:
+        logger.debug("the sec evidence channel is unavailable", exc_info=True)
+        return []
+    return ["compiled requirements loaded this run:",
+            *sec_evidence.explain_lines(rules)]
 
 
 # -- --hook: Claude-Code PostToolUse ------------------------------------------
@@ -342,6 +680,12 @@ def _run_hook(args: argparse.Namespace) -> int:
     :func:`_hook_scope_skip` runs next and decides whether a file event is in
     scope at all — a read-only tool, or a ``PreToolUse`` file edit, never
     reaches the grounding pass.
+
+    When the gate passes and :func:`_abstain_notes` is enabled, the verdicts it
+    could not judge go to stderr before the exit-0 return. That channel is
+    reporting only: it NEVER changes an exit code, in any case, and it lives
+    inside the ``report.ok`` arm, so a blocking run renders its report exactly
+    as before.
     """
     event = _read_hook_event(sys.stdin)
     if event is None:
@@ -368,10 +712,23 @@ def _run_hook(args: argparse.Namespace) -> int:
         print(f"gcp-ground --hook: {problem} — nothing was checked (fail-open)",
               file=sys.stderr)
         return EXIT_OK
-    report = ground_policy(path, snapshot, baseline=args.baseline)
+    # Requirements are resolved only once this event is genuinely being
+    # grounded: an out-of-scope or non-policy event must stay byte-silent, so
+    # the not-enforcing notice rides along with a real run, never with a skip.
+    source = _requirements_source(args)
+    rules, carried = _load_requirements(source, hook=True)
+    report = ground_policy(path, snapshot, baseline=args.baseline, rules=rules)
+    for verdict in carried:
+        report.add(verdict)
     if args.explain:
-        print("\n".join(_explain_lines(path, args.baseline)), file=sys.stderr)
+        lines = _explain_lines(path, args.baseline)
+        lines.extend(_sec_explain_lines(source, rules))
+        print("\n".join(lines), file=sys.stderr)
     if report.ok:
+        if _abstain_notes(args):
+            notes = _abstain_note_lines(report, snapshot.captured_at)
+            if notes:
+                print("\n".join(notes), file=sys.stderr)
         return EXIT_OK
     rendered = PolicyReport(report, captured_at=snapshot.captured_at,
                             source=path).render("human")
@@ -427,6 +784,47 @@ def _hook_file_path(event: Mapping[str, Any] | None) -> str | None:
         return None
     path = tool_input.get("file_path")
     return path if isinstance(path, str) and path else None
+
+
+# -- --hook: the abstain channel ----------------------------------------------
+
+
+def _abstain_notes(args: argparse.Namespace) -> bool:
+    """Whether ``--hook`` should print what it could not judge.
+
+    The flag wins; otherwise :data:`ABSTAIN_NOTES_ENV` enables the channel when
+    it is one of :data:`_TRUTHY_ENV`, case-insensitively. Anything else —
+    ``"off"``, ``"0"``, the empty string, a typo — is False: an opt-in channel
+    that guessed would be an opt-out one.
+    """
+    if getattr(args, "abstain_notes", False):
+        return True
+    raw = os.environ.get(ABSTAIN_NOTES_ENV)
+    return raw is not None and raw.strip().casefold() in _TRUTHY_ENV
+
+
+def _abstain_note_lines(report: GroundingReport, captured_at: str) -> list[str]:
+    """The stderr block naming every claim the gate could not judge, or ``[]``.
+
+    Empty when nothing is ``unverified``: no notes means no header, because a
+    channel that fires on a clean pass is noise, and noise is what gets a
+    guardrail switched off.
+
+    Deliberately NOT :meth:`PolicyReport.render` — that prints the PASSED
+    header and every grounded line too, and this channel is for the ignorance
+    alone. The per-line shape is still the render's (:data:`_ABSTAIN_MARK`,
+    :data:`_ABSTAIN_STAMPED`), so an operator reading hook stderr sees the same
+    lines here and in a blocking report.
+    """
+    unverified = report.by_status("unverified")
+    if not unverified:
+        return []
+    stamp = f" [snapshot {captured_at}]" if _ABSTAIN_STAMPED else ""
+    lines = [f"gcp-ground --hook: NOT DECIDED — {len(unverified)} claim(s) "
+             f"could not be judged (exit 0, nothing blocked)"]
+    lines.extend(f"  {_ABSTAIN_MARK} [{v.kind}] {v.message}{stamp}"
+                 for v in unverified)
+    return lines
 
 
 # -- --hook: the bash arm ------------------------------------------------------
@@ -598,6 +996,76 @@ def _cmd_scan_command(args: argparse.Namespace) -> int:
     print(_bash_report(verdicts, source=command.strip()).render(
         _FORMATS[args.format]))
     return EXIT_OK
+
+
+# -- compile-requirements ------------------------------------------------------
+
+
+def _cmd_compile_requirements(args: argparse.Namespace) -> int:
+    """Run stage 1 over a directory of markdown requirements.
+
+    EXIT 0 means compiled or honestly unverified, 1 means a rejected promise or
+    artifact drift, 2 means a usage or snapshot error — the gate's own contract,
+    read over the compile instead of over a policy.
+
+    The snapshot is REQUIRED, and its absence is a usage error rather than the
+    fail-open the hook grants: compiling without a snapshot cannot ground a
+    requirement's vocabulary, so a promise naming a hallucinated role would
+    compile clean and ship as a rule that can never fire. Unlike hook mode there
+    is no edit to unblock here, so there is nothing to trade the honesty for.
+    """
+    snapshot, problem = _load_snapshot(args.snapshot)
+    if snapshot is None:
+        return _usage(problem, prog="compile-requirements")
+    try:
+        sec_compile = importlib.import_module("gcp_grounding.sec_compile")
+    except ImportError as exc:
+        return _usage(f"the requirements compiler is not available in this "
+                      f"checkout ({exc})", prog="compile-requirements")
+    _llm_note(args.llm, sec_compile)
+    out_dir = args.out or os.path.join(args.directory, "compiled")
+    results = sec_compile.compile_directory(
+        args.directory, snapshot, out_dir=out_dir, check_only=args.check,
+        independence=not args.no_independence)
+    # One report for the whole directory: a per-document render would make the
+    # exit code and the printed evidence disagree about what "the compile" was.
+    merged = GroundingReport(backend=get_solver().backend)
+    for result in results:
+        for verdict in result.report.verdicts:
+            merged.add(verdict)
+    print(PolicyReport(merged, captured_at=snapshot.captured_at,
+                       source=str(args.directory)).render(_FORMATS[args.format]))
+    # ``_emit`` already records drift as a contradicted sec:artifact verdict, so
+    # merged.ok covers it; the explicit check keeps the contract readable and
+    # holds even if a future drift becomes verdict-free.
+    drifted = any(result.drifted for result in results)
+    return EXIT_OK if merged.ok and not drifted else EXIT_FAILED
+
+
+def _llm_note(enabled: bool, sec_compile: Any) -> None:
+    """``--llm`` is optional in the strongest sense: it never hard-fails.
+
+    The LLM-assisted stage lives in :mod:`gcp_grounding.sec_llm`, which is not
+    part of every checkout, and stage 1 is deterministic and complete without
+    it. So a missing module — or a compiler in this build that exposes no seam
+    to hand it to — is one stderr note and a deterministic compile, never an
+    error: refusing to compile because an OPTIONAL accelerator is absent would
+    make the honest path the harder one.
+    """
+    if not enabled:
+        return
+    note = "gcp-ground compile-requirements: --llm"
+    try:
+        found = importlib.util.find_spec("gcp_grounding.sec_llm") is not None
+    except (ImportError, ValueError):
+        found = False
+    if not found:
+        print(f"{note}: gcp_grounding.sec_llm is not available in this checkout "
+              f"— compiling deterministically", file=sys.stderr)
+        return
+    if "llm" not in inspect.signature(sec_compile.compile_directory).parameters:
+        print(f"{note}: this build's compiler exposes no LLM-assisted stage — "
+              f"compiling deterministically", file=sys.stderr)
 
 
 # -- --explain: the z3 constraints generated this run --------------------------
