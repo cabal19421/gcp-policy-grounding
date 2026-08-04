@@ -1,8 +1,10 @@
 """End-to-end orchestration: one document in, one grounding report out.
 
 :func:`ground_policy` is the gate's single entry point. It auto-detects what
-kind of document it was handed (IAM allow/deny policy JSON, Org Policy JSON,
-or ``terraform show -json`` plan output), extracts that kind's claims, runs
+kind of document it was handed — an IAM allow policy, an IAM deny policy, an
+Org Policy, a VPC-SC service perimeter, an access level, a VPC firewall rule,
+a hierarchical/network firewall policy, a Cloud Armor security policy, or
+``terraform show -json`` plan output — extracts that kind's claims, runs
 the Datalog existence reasoner and the constraint-solver layer, and merges
 everything into one vendored
 :class:`~gcp_grounding.core.report.GroundingReport`.
@@ -30,6 +32,18 @@ the Datalog pass, not left unverified).
 The optional *baseline* enables the z3 new⊆old policy comparison
 (:func:`~gcp_grounding.constraints.check_policy_subset`); it is defined for
 IAM policies only, and any other pairing is recorded as ``unverified``.
+
+The optional *rules* — compiled requirement rules from
+:mod:`gcp_grounding.sec_rules`, stage 2 of the ``sec_requirements/`` compiler —
+run alongside the built-in checks and render through the same Verdict channel.
+Passing ``None`` (the default) or an empty sequence preserves today's behaviour
+exactly. A rule that has nothing to say about this document *kind* adds nothing;
+a rule whose state tier the caller does not satisfy — a pair-tier rule with no
+baseline, an estate-tier rule whose snapshot category was not captured — records
+``unverified`` naming the missing input, never a silent skip. Like
+:mod:`~gcp_grounding.tf_claims`, :mod:`~gcp_grounding.sec_rules` is resolved
+dynamically: in a checkout without it, supplied rules record one honest
+``unverified`` instead of an import error.
 """
 
 from __future__ import annotations
@@ -54,7 +68,9 @@ logger = get_logger(__name__)
 __all__ = ["DOCUMENT_KINDS", "detect_kind", "ground_policy"]
 
 #: Document kinds :func:`detect_kind` can recognize.
-DOCUMENT_KINDS = ("iam_policy", "org_policy", "tf_plan")
+DOCUMENT_KINDS = ("iam_policy", "org_policy", "tf_plan", "iam_deny_policy",
+                  "vpc_sc_perimeter", "access_level", "firewall_rule",
+                  "firewall_policy", "security_policy")
 
 #: Top-level keys marking ``terraform show -json`` plan output.
 _TF_PLAN_KEYS = ("format_version", "terraform_version", "planned_values",
@@ -64,24 +80,143 @@ _TF_PLAN_KEYS = ("format_version", "terraform_version", "planned_values",
 _ORG_V1_KEYS = ("constraint", "booleanPolicy", "listPolicy")
 
 
+#: Blocks (``status`` / ``spec``) whose presence of any of these keys marks a
+#: VPC Service Controls service perimeter.
+_PERIMETER_KEYS = ("resources", "restrictedServices", "restricted_services",
+                   "accessLevels", "access_levels", "ingressPolicies",
+                   "ingress_policies", "egressPolicies", "egress_policies")
+
+#: ``match`` keys that mark a hierarchical/network firewall policy rule (both
+#: the REST camelCase and terraform snake_case spellings).
+_FW_POLICY_MATCH_KEYS = ("srcIpRanges", "src_ip_ranges",
+                         "destIpRanges", "dest_ip_ranges")
+
+#: ``match`` keys that mark a Cloud Armor security policy rule.
+_SECURITY_POLICY_MATCH_KEYS = ("versionedExpr", "versioned_expr", "expr", "config")
+
+#: ``spec`` keys required for a bare-``spec`` document to read as an Org Policy
+#: v2 (a spec block that carries none of these is some other domain's).
+_ORG_V2_SPEC_KEYS = ("rules", "inheritFromParent", "inherit_from_parent", "reset")
+
+
+def _is_iam_deny_policy(doc: Mapping[str, Any]) -> bool:
+    """A v3 IAM *deny* policy: a non-empty top-level ``rules`` list with a
+    ``denyRule``/``deny_rule`` item. Org Policy v2 nests ``rules`` under
+    ``spec``, and Cloud Armor rule items carry ``match``/``action`` and never
+    ``denyRule`` — neither collides."""
+    rules = doc.get("rules")
+    return (isinstance(rules, list) and len(rules) > 0
+            and any(isinstance(r, Mapping) and ("denyRule" in r or "deny_rule" in r)
+                    for r in rules))
+
+
+def _is_vpc_sc_perimeter(doc: Mapping[str, Any]) -> bool:
+    """A VPC Service Controls service perimeter: a ``…/servicePerimeters/…``
+    name, or a ``status``/``spec`` block carrying any perimeter field."""
+    name = doc.get("name")
+    if isinstance(name, str) and "/servicePerimeters/" in name:
+        return True
+    return any(isinstance(block, Mapping)
+               and any(key in block for key in _PERIMETER_KEYS)
+               for block in (doc.get("status"), doc.get("spec")))
+
+
+def _is_access_level(doc: Mapping[str, Any]) -> bool:
+    """An Access Context Manager access level: a ``…/accessLevels/…`` name, a
+    ``basic`` block with ``conditions``, or a ``custom`` block with ``expr``."""
+    name = doc.get("name")
+    if isinstance(name, str) and "/accessLevels/" in name:
+        return True
+    basic = doc.get("basic")
+    if isinstance(basic, Mapping) and "conditions" in basic:
+        return True
+    custom = doc.get("custom")
+    return isinstance(custom, Mapping) and "expr" in custom
+
+
+def _is_firewall_rule(doc: Mapping[str, Any]) -> bool:
+    """A VPC firewall rule: the ``compute#firewall`` kind, or a ``network``
+    string alongside an ``allowed``/``denied``/``allow``/``deny`` list (the
+    bare ``allow``/``deny`` spellings are the terraform block names)."""
+    if doc.get("kind") == "compute#firewall":
+        return True
+    return (isinstance(doc.get("network"), str)
+            and any(isinstance(doc.get(key), list)
+                    for key in ("allowed", "denied", "allow", "deny")))
+
+
+def _is_firewall_policy(doc: Mapping[str, Any]) -> bool:
+    """A hierarchical/network firewall policy: the ``compute#firewallPolicy``
+    kind, a ``…/firewallPolicies/…`` name/selfLink, or a ``rules`` list whose
+    item has both a ``direction`` key and a ``match`` block with a CIDR field.
+    The ``direction`` key is what tells this apart from a Cloud Armor policy."""
+    if doc.get("kind") == "compute#firewallPolicy":
+        return True
+    for field in ("name", "selfLink"):
+        value = doc.get(field)
+        if isinstance(value, str) and "/firewallPolicies/" in value:
+            return True
+    rules = doc.get("rules")
+    return isinstance(rules, list) and any(
+        isinstance(r, Mapping) and "direction" in r
+        and isinstance(r.get("match"), Mapping)
+        and any(key in r["match"] for key in _FW_POLICY_MATCH_KEYS)
+        for r in rules)
+
+
+def _is_security_policy(doc: Mapping[str, Any]) -> bool:
+    """A Cloud Armor security policy: the ``compute#securityPolicy`` kind, or a
+    ``rules`` list whose item has a str ``action`` and a ``match`` block with a
+    Cloud Armor field — and where NO item carries a ``direction`` key (which,
+    with firewall-policy detection running first, disambiguates the two)."""
+    if doc.get("kind") == "compute#securityPolicy":
+        return True
+    rules = doc.get("rules")
+    if not isinstance(rules, list):
+        return False
+    if any(isinstance(r, Mapping) and "direction" in r for r in rules):
+        return False
+    return any(isinstance(r, Mapping) and isinstance(r.get("action"), str)
+               and isinstance(r.get("match"), Mapping)
+               and any(key in r["match"] for key in _SECURITY_POLICY_MATCH_KEYS)
+               for r in rules)
+
+
 def detect_kind(doc: Any) -> str | None:
     """Which of :data:`DOCUMENT_KINDS` *doc* looks like — or None.
 
-    Checked most-distinctive first: tf plan markers, then Org Policy (v1
-    typed-policy keys, or a v2 ``…/policies/<id>`` name / ``spec`` block),
-    then an IAM policy's ``bindings`` (``etag`` + ``version`` alone also
-    count: an empty IAM policy carries only those).
+    Checked most-distinctive first: tf plan markers, then the six security
+    domains (IAM deny policy, VPC-SC perimeter, access level, firewall rule,
+    firewall policy, Cloud Armor security policy) each by its own predicate,
+    then Org Policy (v1 typed-policy keys, or a v2 ``…/policies/<id>`` name /
+    ``rules``-bearing ``spec`` block), then an IAM allow policy's ``bindings``
+    (``etag`` + ``version`` alone also count: an empty IAM policy carries only
+    those). The perimeter and firewall predicates precede the bare-``spec``
+    Org Policy fallback so a perimeter or policy spec is not misread as one.
     """
     if not isinstance(doc, Mapping):
         return None
     if any(key in doc for key in _TF_PLAN_KEYS):
         return "tf_plan"
+    if _is_iam_deny_policy(doc):
+        return "iam_deny_policy"
+    if _is_vpc_sc_perimeter(doc):
+        return "vpc_sc_perimeter"
+    if _is_access_level(doc):
+        return "access_level"
+    if _is_firewall_rule(doc):
+        return "firewall_rule"
+    if _is_firewall_policy(doc):
+        return "firewall_policy"
+    if _is_security_policy(doc):
+        return "security_policy"
     if any(key in doc for key in _ORG_V1_KEYS):
         return "org_policy"
     name = doc.get("name")
     if isinstance(name, str) and "/policies/" in name:
         return "org_policy"
-    if isinstance(doc.get("spec"), Mapping):
+    spec = doc.get("spec")
+    if isinstance(spec, Mapping) and any(key in spec for key in _ORG_V2_SPEC_KEYS):
         return "org_policy"
     if "bindings" in doc or ("etag" in doc and "version" in doc):
         return "iam_policy"
@@ -89,13 +224,16 @@ def detect_kind(doc: Any) -> str | None:
 
 
 def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
-                  baseline: Any = None) -> GroundingReport:
+                  baseline: Any = None, rules: Any = None) -> GroundingReport:
     """Ground one policy document end-to-end against *snapshot*.
 
     *path_or_obj* is a JSON file path (``str``/``os.PathLike``) or an
     already-parsed document. *baseline* (same forms) opts into the new⊆old
-    IAM-policy comparison. Never raises on bad input — see the module
-    docstring's fail-open contract.
+    IAM-policy comparison. *rules* is a
+    ``Sequence[sec_rules.CompiledRule] | None`` of compiled requirement rules to
+    run alongside the built-in checks; ``None`` (the default) or an empty
+    sequence is exactly today's behaviour. Never raises on bad input — see the
+    module docstring's fail-open contract.
     """
     report = GroundingReport()
     solver = get_solver()
@@ -174,9 +312,42 @@ def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
             for v in _subset_verdict(doc, kind, solver, ctx, baseline_source):
                 report.add(v)
 
+    if rules:
+        module = _sec_rules_module()
+        if module is None:
+            report.add(Verdict("unverified", "sec:compile", source, 0,
+                               f"{source}: {len(rules)} compiled requirement(s) were "
+                               f"supplied, but gcp_grounding.sec_rules is not "
+                               f"available — they were not run"))
+        else:
+            # THIRD consumer of the baseline parsed once above (after
+            # _subset_verdict and the registry's pair checks): re-loading the
+            # path here would parse the same file twice and — worse — let the
+            # two parses disagree about whether it was readable. An unreadable
+            # baseline is None, so a pair-tier rule emits `unverified` naming
+            # the missing input rather than being judged against nothing.
+            old_doc = baseline_doc
+            # `estate` is a tolerated override: GcpSnapshot has no estate field
+            # today (this document's domain work puts the new categories at the
+            # TOP LEVEL of the snapshot, which estate-tier rules read through
+            # the extractors sec_domains registers), so this normally yields
+            # None — and picks one up automatically if the field is ever added.
+            rule_ctx = module.RuleContext(snapshot=snapshot, document=doc,
+                                          document_kind=kind, source=source,
+                                          baseline=old_doc,
+                                          estate=getattr(snapshot, "estate", None),
+                                          solver=solver)
+            for rule in rules:
+                # None means "not applicable to this document kind" — adding
+                # nothing is the abstain-flood fix; a rule that should have
+                # decided and could not returns an `unverified` Verdict instead.
+                v = rule.evaluate(rule_ctx)
+                if v is not None:
+                    report.add(v)
+
     counts = report.counts()
-    logger.debug("ground_policy(%s): kind=%s claims=%d verdicts=%s ok=%s",
-                 source, kind, len(claims), counts, report.ok)
+    logger.debug("ground_policy(%s): kind=%s claims=%d rules=%d verdicts=%s ok=%s",
+                 source, kind, len(claims), len(rules or ()), counts, report.ok)
     return report
 
 
@@ -269,6 +440,17 @@ def _tf_plan_extractor():
     except ImportError:
         return None
     return module.terraform_plan_claims
+
+
+def _sec_rules_module():
+    """:mod:`gcp_grounding.sec_rules` — or None where the module is not part of
+    this checkout. Resolved dynamically exactly like :func:`_tf_plan_extractor`,
+    so supplied rules degrade to an honest ``unverified`` instead of an import
+    error."""
+    try:
+        return importlib.import_module("gcp_grounding.sec_rules")
+    except ImportError:
+        return None
 
 
 # -- baseline (new⊆old) comparison --------------------------------------------
