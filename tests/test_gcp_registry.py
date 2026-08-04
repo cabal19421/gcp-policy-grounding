@@ -122,6 +122,9 @@ def _org_bad_expected():
     return [
         ("grounded", "constraint", "constraints/compute.disableSerialPortAccess"),
         ("contradicted", "constraint", "constraints/compute.disableSerialPortAccess"),
+        # gcp_grounding.org_checks IS part of this checkout, so its claim check
+        # runs — and abstains, because this snapshot captures no org policies.
+        ("unverified", "org_enforcement", "constraints/compute.disableSerialPortAccess"),
     ]
 
 
@@ -164,11 +167,12 @@ def _tf_full_expected():
 def test_no_providers_is_byte_identical(snap, name, expected):
     # The registry must not contribute anything that changes these baseline
     # (non-firewall/non-armor/…) fixtures' grounding. As domain modules land in
-    # this checkout (fw_claims, …) they add NEW google resource types, never
-    # shadowing a built-in and never touching these fixtures — so the invariant
-    # relaxes from "registry is empty" to "registry never shadows a built-in tf
-    # type", which keeps the gate byte-identical to before the seam existed.
-    assert registry.document_checks() == ()
+    # this checkout (fw_claims, org_checks, …) they add NEW google resource types
+    # and their own document checks, never shadowing a built-in and never
+    # touching these fixtures — so the invariant relaxes from "registry is empty"
+    # to "registry never shadows a built-in tf type", which keeps the gate
+    # byte-identical to before the seam existed.
+    assert {f.__name__ for f in registry.document_checks()} <= {"check_org_estate"}
     assert set(registry.tf_extractors()).isdisjoint(_BUILTIN_TF_TYPES)
     assert registry.claim_checks("role") == ()
     report = ground_policy(POLICIES / f"{name}.json", snap)

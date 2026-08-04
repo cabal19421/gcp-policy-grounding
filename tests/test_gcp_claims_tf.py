@@ -233,13 +233,18 @@ def test_unhandled_google_type_yields_type_reference_only():
 # -- conservative skips shared with the API-document extractors ------------
 
 
-def test_non_principal_member_yields_no_principal_claim():
+def test_public_member_yields_public_principal_claim():
+    # An allUsers member is no longer dropped: it rides through the shared
+    # iam_policy_claims extractor as a 'public_principal' grant carrying the
+    # role, re-anchored onto the resource address.
     claims = terraform_plan_claims({"resource_changes": [member_change(
         "google_project_iam_member.public", {"role": "roles/viewer", "member": "allUsers"})]})
     assert claims == [
         Claim("resource_type_ref", "google_project_iam_member",
               "google_project_iam_member.public"),
         Claim("role", "roles/viewer", "google_project_iam_member.public.role"),
+        Claim.of("public_principal", "allUsers", "google_project_iam_member.public.member",
+                 polarity="grant", role="roles/viewer"),
     ]
 
 
