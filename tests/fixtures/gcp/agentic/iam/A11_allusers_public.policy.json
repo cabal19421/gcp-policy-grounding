@@ -1,0 +1,13 @@
+{
+  "bindings": [
+    {
+      "members": [
+        "allUsers",
+        "allAuthenticatedUsers"
+      ],
+      "role": "roles/storage.objectViewer"
+    }
+  ],
+  "etag": "BwYCa11AllUsers=",
+  "version": 1
+}

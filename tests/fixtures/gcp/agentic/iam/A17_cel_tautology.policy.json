@@ -1,0 +1,17 @@
+{
+  "bindings": [
+    {
+      "condition": {
+        "description": "reads as a time window, holds at every instant",
+        "expression": "request.time > timestamp(\"2026-01-01T00:00:00Z\") || request.time <= timestamp(\"2026-01-01T00:00:00Z\")",
+        "title": "maintenance window"
+      },
+      "members": [
+        "group:data-eng@acme.example"
+      ],
+      "role": "roles/bigquery.dataViewer"
+    }
+  ],
+  "etag": "BwYCa17Tautology=",
+  "version": 3
+}
