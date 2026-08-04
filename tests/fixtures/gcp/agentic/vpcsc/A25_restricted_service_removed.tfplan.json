@@ -1,0 +1,65 @@
+{
+  "format_version": "1.2",
+  "resource_changes": [
+    {
+      "address": "google_access_context_manager_service_perimeter.acme_prod",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "after": {
+          "name": "accessPolicies/987654321/servicePerimeters/acme_prod",
+          "parent": "accessPolicies/987654321",
+          "perimeter_type": "PERIMETER_TYPE_REGULAR",
+          "spec": [],
+          "status": [
+            {
+              "access_levels": [
+                "accessPolicies/987654321/accessLevels/trusted_corp"
+              ],
+              "egress_policies": [],
+              "ingress_policies": [],
+              "resources": [
+                "projects/111111111111"
+              ],
+              "restricted_services": [
+                "storage.googleapis.com"
+              ]
+            }
+          ],
+          "title": "acme-prod",
+          "use_explicit_dry_run_spec": false
+        },
+        "before": {
+          "name": "accessPolicies/987654321/servicePerimeters/acme_prod",
+          "parent": "accessPolicies/987654321",
+          "perimeter_type": "PERIMETER_TYPE_REGULAR",
+          "spec": [],
+          "status": [
+            {
+              "access_levels": [
+                "accessPolicies/987654321/accessLevels/trusted_corp"
+              ],
+              "egress_policies": [],
+              "ingress_policies": [],
+              "resources": [
+                "projects/111111111111"
+              ],
+              "restricted_services": [
+                "storage.googleapis.com",
+                "bigquery.googleapis.com"
+              ]
+            }
+          ],
+          "title": "acme-prod",
+          "use_explicit_dry_run_spec": false
+        }
+      },
+      "mode": "managed",
+      "name": "acme_prod",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "type": "google_access_context_manager_service_perimeter"
+    }
+  ],
+  "terraform_version": "1.9.0"
+}
