@@ -1,0 +1,223 @@
+{
+  "encoder": "gcp-sec-encode/1",
+  "promises": [
+    {
+      "domain": "iam",
+      "id": "bindings-are-conditioned",
+      "mode": "assert_satisfiable",
+      "notes": [],
+      "reason": "",
+      "severity": "high",
+      "smt": {
+        "ast": {
+          "body": {
+            "left": {
+              "field": "has_condition",
+              "node": "field",
+              "var": "b"
+            },
+            "node": "cmp",
+            "op": "eq",
+            "right": {
+              "node": "lit",
+              "sort": "Bool",
+              "value": true
+            }
+          },
+          "collection": "iam_bindings",
+          "node": "forall",
+          "var": "b"
+        },
+        "free_consts": [
+          [
+            "iam_bindings#b.has_condition",
+            "Bool"
+          ]
+        ],
+        "sexpr": "(forall ((b iam_bindings)) (eq b.has_condition true))"
+      },
+      "source": {
+        "file": "tests/fixtures/gcp/sec/iam.md",
+        "line": 39,
+        "text": "Every IAM binding should carry an IAM Condition."
+      },
+      "state": "proposal",
+      "status": "compiled",
+      "vocabulary": [],
+      "vocabulary_unverified": [],
+      "wellformedness": {
+        "conflicts_with": [],
+        "independent": true,
+        "non_tautological": true,
+        "notes": [],
+        "probe_scope": "per_record",
+        "satisfiable": true
+      },
+      "witnesses": {
+        "negative": {
+          "assignment": {
+            "iam_bindings#b.has_condition": "false"
+          },
+          "origin": "z3-model"
+        },
+        "positive": {
+          "assignment": {
+            "iam_bindings#b.has_condition": "true"
+          },
+          "origin": "z3-model"
+        }
+      }
+    },
+    {
+      "domain": "iam",
+      "id": "no-primitive-owner",
+      "mode": "refute",
+      "notes": [
+        "the primitive owner role is an escalation class, not a job function"
+      ],
+      "reason": "",
+      "severity": "high",
+      "smt": {
+        "ast": {
+          "body": {
+            "left": {
+              "field": "role",
+              "node": "field",
+              "var": "b"
+            },
+            "node": "cmp",
+            "op": "eq",
+            "right": {
+              "node": "lit",
+              "sort": "Str",
+              "value": "roles/owner"
+            }
+          },
+          "collection": "iam_bindings",
+          "node": "exists",
+          "var": "b"
+        },
+        "free_consts": [
+          [
+            "iam_bindings#b.role",
+            "Str"
+          ]
+        ],
+        "sexpr": "(exists ((b iam_bindings)) (eq b.role \"roles/owner\"))"
+      },
+      "source": {
+        "file": "tests/fixtures/gcp/sec/iam.md",
+        "line": 25,
+        "text": "No binding may grant the primitive owner role."
+      },
+      "state": "proposal",
+      "status": "compiled",
+      "vocabulary": [
+        {
+          "kind": "role",
+          "value": "roles/viewer"
+        }
+      ],
+      "vocabulary_unverified": [],
+      "wellformedness": {
+        "conflicts_with": [],
+        "independent": true,
+        "non_tautological": true,
+        "notes": [
+          "probe_scope=per_record: the symbolic probe collapses the existential to one hypothetical record"
+        ],
+        "probe_scope": "per_record",
+        "satisfiable": true
+      },
+      "witnesses": {
+        "negative": {
+          "assignment": {
+            "iam_bindings#b.role": "roles/owner"
+          },
+          "origin": "z3-model"
+        },
+        "positive": {
+          "assignment": {
+            "iam_bindings#b.role": "roles/viewer"
+          },
+          "origin": "z3-model"
+        }
+      }
+    },
+    {
+      "domain": "iam",
+      "id": "no-public-principals",
+      "mode": "refute",
+      "notes": [],
+      "reason": "",
+      "severity": "high",
+      "smt": {
+        "ast": {
+          "body": {
+            "node": "in",
+            "set": {
+              "items": [
+                "allAuthenticatedUsers",
+                "allUsers"
+              ],
+              "node": "set",
+              "sort": "Str"
+            },
+            "term": {
+              "field": "member",
+              "node": "field",
+              "var": "b"
+            }
+          },
+          "collection": "iam_bindings",
+          "node": "exists",
+          "var": "b"
+        },
+        "free_consts": [
+          [
+            "iam_bindings#b.member",
+            "Str"
+          ]
+        ],
+        "sexpr": "(exists ((b iam_bindings)) (in b.member (set \"allAuthenticatedUsers\" \"allUsers\")))"
+      },
+      "source": {
+        "file": "tests/fixtures/gcp/sec/iam.md",
+        "line": 13,
+        "text": "IAM bindings must not grant access to the entire internet."
+      },
+      "state": "proposal",
+      "status": "compiled",
+      "vocabulary": [],
+      "vocabulary_unverified": [],
+      "wellformedness": {
+        "conflicts_with": [],
+        "independent": true,
+        "non_tautological": true,
+        "notes": [
+          "probe_scope=per_record: the symbolic probe collapses the existential to one hypothetical record"
+        ],
+        "probe_scope": "per_record",
+        "satisfiable": true
+      },
+      "witnesses": {
+        "negative": {
+          "assignment": {
+            "iam_bindings#b.member": "allUsers"
+          },
+          "origin": "z3-model"
+        },
+        "positive": {
+          "assignment": {
+            "iam_bindings#b.member": "user:reviewer@acme.example"
+          },
+          "origin": "z3-model"
+        }
+      }
+    }
+  ],
+  "schema": "gcp-sec-promises/1",
+  "snapshot_captured_at": "2026-07-18T09:30:00Z",
+  "source_doc": "tests/fixtures/gcp/sec/iam.md",
+  "source_sha256": "b6f1938cd36ae837f88627352a86dcd08d4da1d121f16e090e6879a4d72ff801"
+}
