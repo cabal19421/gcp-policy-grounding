@@ -57,7 +57,9 @@ logger = get_logger(__name__)
 
 __all__ = ["DOCUMENT_KINDS", "detect_kind", "ground_policy"]
 
-#: Document kinds :func:`detect_kind` can recognize.
+#: Document kinds :func:`detect_kind` can recognize. The two VPC Service
+#: Controls kinds are decided by :mod:`gcp_grounding.vpcsc_claims` through the
+#: registry once detected.
 DOCUMENT_KINDS = ("iam_policy", "org_policy", "tf_plan", "iam_deny_policy",
                   "vpc_sc_perimeter", "access_level", "firewall_rule",
                   "firewall_policy", "security_policy")
@@ -182,14 +184,21 @@ def detect_kind(doc: Any) -> str | None:
     ``rules``-bearing ``spec`` block), then an IAM allow policy's ``bindings``
     (``etag`` + ``version`` alone also count: an empty IAM policy carries only
     those). The perimeter and firewall predicates precede the bare-``spec``
-    Org Policy fallback so a perimeter or policy spec is not misread as one.
+    Org Policy fallback so a perimeter or policy spec is not misread as one —
+    a VPC Service Controls document carries a ``spec`` block and would
+    otherwise be misread as an Org Policy v2.
     """
     if not isinstance(doc, Mapping):
         return None
     if any(key in doc for key in _TF_PLAN_KEYS):
         return "tf_plan"
+    name = doc.get("name")
     if _is_iam_deny_policy(doc):
         return "iam_deny_policy"
+    # _is_vpc_sc_perimeter / _is_access_level test the Access Context Manager
+    # resource names ("/servicePerimeters/", "/accessLevels/") as well as the
+    # block shapes, so a VPC-SC kind is pinned before the Org Policy
+    # `spec`-block sniff below can claim it.
     if _is_vpc_sc_perimeter(doc):
         return "vpc_sc_perimeter"
     if _is_access_level(doc):
@@ -202,7 +211,6 @@ def detect_kind(doc: Any) -> str | None:
         return "security_policy"
     if any(key in doc for key in _ORG_V1_KEYS):
         return "org_policy"
-    name = doc.get("name")
     if isinstance(name, str) and "/policies/" in name:
         return "org_policy"
     spec = doc.get("spec")

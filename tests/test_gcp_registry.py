@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from gcp_grounding import preflight, registry
+from gcp_grounding import preflight, registry, tf_claims
 from gcp_grounding.claims import Claim, iam_policy_claims
 from gcp_grounding.core.report import Verdict
 from gcp_grounding.core.solver import get_solver
@@ -159,9 +159,9 @@ def _tf_full_expected():
 def test_no_providers_is_byte_identical(snap, name, expected):
     # The registry must not contribute anything that changes these baseline
     # (non-firewall/non-armor/…) fixtures' grounding. As domain modules land in
-    # this checkout (fw_claims, hfw_claims, armor_claims, …) they may register
-    # tf extractors for their own google-provider resource types, but those are
-    # NEW types: never shadowing a built-in, and never matching the iam / org
+    # this checkout (fw_claims, hfw_claims, armor_claims, vpcsc_claims, …) they
+    # may register tf extractors for their own google resource types, but NEW
+    # types: never shadowing a built-in, and never matching the iam / org
     # resource types these fixtures use, so the registry contributes nothing to
     # *their* reports. The invariant therefore relaxes from "registry is empty"
     # to "registry never shadows a built-in tf type", which keeps the gate

@@ -1,0 +1,41 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.0",
+  "resource_changes": [
+    {
+      "address": "google_access_context_manager_service_perimeter_egress_policy.export",
+      "mode": "managed",
+      "type": "google_access_context_manager_service_perimeter_egress_policy",
+      "name": "export",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "perimeter": "accessPolicies/987/servicePerimeters/prod",
+          "egress_from": [
+            {
+              "identity_type": "ANY_SERVICE_ACCOUNT",
+              "identities": [],
+              "sources": []
+            }
+          ],
+          "egress_to": [
+            {
+              "resources": ["projects/700700"],
+              "external_resources": [],
+              "operations": [
+                {
+                  "service_name": "storage.googleapis.com",
+                  "method_selectors": [
+                    {"method": "google.storage.objects.get", "permission": ""}
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
