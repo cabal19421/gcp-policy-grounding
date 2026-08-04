@@ -23,9 +23,12 @@ CLAIMS per rule (``location`` of the form ``rules[<i>].denyRule.<field>[<j>]``):
 - ``deniedPrincipals`` / ``exceptionPrincipals`` — a prefixed member yields a
   ``principal`` claim (grounded against the estate principals like any binding
   member); ``allUsers`` / ``allAuthenticatedUsers`` yield a ``public_principal``
-  claim with ``polarity="deny"`` (in a deny policy these are a guardrail, and
-  the polarity key is what stops the IAM public-principal check from flagging
-  them); anything else yields ``unmodelled_principal``. Every entry of
+  claim with ``polarity="deny"`` (in a deny policy a DENIED public principal is
+  a guardrail, and the polarity key is what stops the IAM public-principal check
+  from flagging it) plus ``excepted``, which says which of the two fields it
+  came from — an EXCEPTED public principal is a bypass, not a guardrail, and
+  polarity alone cannot tell the two apart because both fields run through one
+  branch; anything else yields ``unmodelled_principal``. Every entry of
   ``deniedPrincipals`` additionally yields a ``denied_principal`` claim carrying
   ``rule_index`` for the escalation check in :mod:`~gcp_grounding.iam_checks`.
 - ``deniedPermissions`` / ``exceptionPermissions`` — the service-qualified form
@@ -128,9 +131,14 @@ def _principal_claims(deny_rule: Mapping[str, Any], i: int, base: str,
             if isinstance(member, str) and member.startswith(_PRINCIPAL_PREFIXES):
                 claims.append(Claim("principal", member, loc))
             elif member in PUBLIC_PRINCIPALS:
-                # A guardrail in a deny policy, not an exposure: polarity="deny"
-                # is what keeps the public-principal check from flagging it.
-                claims.append(Claim.of("public_principal", member, loc, polarity="deny"))
+                # polarity="deny" says this came from a deny policy rather than
+                # a grant; `excepted` says WHICH of the two fields above it came
+                # from, mirroring the flag already set on permission claims.
+                # Both principal fields run through this one branch, so without
+                # the second key an EXCEPTED allUsers — a bypass of the denial —
+                # is indistinguishable from a denied one, which is a guardrail.
+                claims.append(Claim.of("public_principal", member, loc,
+                                       polarity="deny", excepted=not is_denied))
             else:
                 logger.debug("%s (%r) is not an estate principal — recorded as "
                              "unmodelled", loc, member)

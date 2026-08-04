@@ -264,9 +264,16 @@ def test_recognized_document_with_zero_extractable_claims_is_unverified(snap, do
     assert detect_kind(doc) is not None  # recognized, yet nothing extracts
     report = ground_policy(doc, snap)
     assert report.ok  # unverified is honest ignorance, not a gate failure
-    [v] = report.verdicts
+    [v] = [x for x in report.verdicts if x.kind == "document"]
     assert (v.status, v.kind) == ("unverified", "document")
     assert "nothing checkable" in v.message
+    # An IAM ALLOW policy abstains a second time, on the channel that owns
+    # escalation: `document` is not a kind the escalation family owns, so
+    # without this the escalation check would be silent over bindings it could
+    # not read — and silence there reads as "no escalation was found".
+    others = [(x.status, x.kind) for x in report.verdicts if x is not v]
+    assert others == ([("unverified", "iam_escalation")]
+                      if detect_kind(doc) == "iam_policy" else [])
 
 
 @pytest.mark.parametrize("doc", [

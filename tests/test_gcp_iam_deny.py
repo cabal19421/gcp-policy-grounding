@@ -169,6 +169,21 @@ def test_public_principal_in_deniedPrincipals_carries_deny_polarity():
     assert any(c.kind == "denied_principal" and c.value == "allUsers" for c in claims)
 
 
+def test_public_principal_payload_distinguishes_denied_from_excepted():
+    # Both principal fields run through ONE branch, so polarity alone cannot say
+    # which of them a public member came from — and an `allUsers` EXCEPTION is a
+    # bypass, the exact opposite of the guardrail the deny polarity implies.
+    # The discriminator mirrors the `excepted` flag already set on permissions.
+    claims = iam_deny_policy_claims({"rules": [{"denyRule": {
+        "deniedPrincipals": ["allUsers"],
+        "exceptionPrincipals": ["allAuthenticatedUsers"]}}]})
+    by_value = {c.value: c for c in claims if c.kind == "public_principal"}
+    assert set(by_value) == {"allUsers", "allAuthenticatedUsers"}
+    assert by_value["allUsers"].fields() == {"excepted": False, "polarity": "deny"}
+    assert by_value["allAuthenticatedUsers"].fields() == {"excepted": True,
+                                                          "polarity": "deny"}
+
+
 def test_denied_principal_carries_rule_index():
     claims = iam_deny_policy_claims(
         {"rules": [{"denyRule": {"deniedPrincipals": ["group:data-eng@acme.example"]}}]})
@@ -192,6 +207,23 @@ def test_terraform_spelling_produces_identical_claims():
         "denied_permissions": ["iam.googleapis.com/serviceAccountKeys.create"],
         "denial_condition": {"expression": expr}}}]}
     assert iam_deny_policy_claims(rest) == iam_deny_policy_claims(tf)
+
+
+def test_a_single_element_block_unwraps_and_a_two_element_block_does_not():
+    # MK-E07, gcp_grounding/iam_deny.py `def _as_mapping` — an unparametrized
+    # handle carrying BOTH sides of the repeated-block unwrap, because a test
+    # carrying only one side leaves the boundary free to move.
+    #
+    # Terraform plan JSON encodes a repeated block as a one-item array, so
+    # `[{...}]` must unwrap to that mapping or a plan-encoded deny rule produces
+    # no claims AT ALL. A TWO-item array is ambiguous and must yield None rather
+    # than silently taking element 0 and dropping the second rule unrecorded.
+    rule = {"denied_principals": ["group:data-eng@acme.example"],
+            "denied_permissions": ["iam.googleapis.com/serviceAccountKeys.create"]}
+    bare = iam_deny_policy_claims({"rules": [{"deny_rule": rule}]})
+    assert bare != []
+    assert iam_deny_policy_claims({"rules": [{"deny_rule": [rule]}]}) == bare
+    assert iam_deny_policy_claims({"rules": [{"deny_rule": [rule, rule]}]}) == []
 
 
 def test_document_name_yields_no_claim():
