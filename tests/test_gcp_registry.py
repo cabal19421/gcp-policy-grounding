@@ -159,13 +159,20 @@ def _tf_full_expected():
 def test_no_providers_is_byte_identical(snap, name, expected):
     # The registry must not contribute anything that changes these baseline
     # (non-firewall/non-armor/…) fixtures' grounding. As domain modules land in
-    # this checkout (fw_claims, …) they add NEW google resource types, never
-    # shadowing a built-in and never touching these fixtures — so the invariant
-    # relaxes from "registry is empty" to "registry never shadows a built-in tf
-    # type", which keeps the gate byte-identical to before the seam existed.
+    # this checkout (fw_claims, hfw_claims, …) they may register tf extractors
+    # for their own google-provider resource types, but those are NEW types:
+    # never shadowing a built-in, and never matching the iam / org resource
+    # types these fixtures use, so the registry contributes nothing to *their*
+    # reports. The invariant therefore relaxes from "registry is empty" to
+    # "registry never shadows a built-in tf type", which keeps the gate
+    # byte-identical to before the seam existed.
     assert registry.document_checks() == ()
     assert set(registry.tf_extractors()).isdisjoint(_BUILTIN_TF_TYPES)
     assert registry.claim_checks("role") == ()
+    fixture_types = {"google_project_iam_binding", "google_project_iam_member",
+                     "google_project_iam_policy", "google_project_iam_custom_role",
+                     "google_org_policy_policy"}
+    assert fixture_types.isdisjoint(registry.tf_extractors())
     report = ground_policy(POLICIES / f"{name}.json", snap)
     got = sorted((v.status, v.kind, v.target) for v in report.verdicts)
     assert got == sorted(expected)
