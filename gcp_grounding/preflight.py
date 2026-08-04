@@ -21,10 +21,10 @@ absent ``bindings`` key is not — nothing was read there).
 
 The ``terraform`` claim extractor (:mod:`gcp_grounding.tf_claims`) is looked
 up dynamically: where the module is not present, a tf plan document yields a
-single ``unverified`` verdict saying so instead of an import error. Claim
-kinds no layer decides (e.g. ``resource_type_ref``, whose terraform-type
-vocabulary is not the snapshot's asset-type enumeration) likewise land in
-``unverified`` — every extracted claim receives exactly one verdict.
+single ``unverified`` verdict saying so instead of an import error. A claim
+kind no layer decides — one outside the reasoner's existence kinds (which
+``resource_type_ref`` belongs to), ``cel`` and ``constraint_value`` — lands
+in ``unverified`` too: every extracted claim receives exactly one verdict.
 
 The optional *baseline* enables the z3 new⊆old policy comparison
 (:func:`~gcp_grounding.constraints.check_policy_subset`); it is defined for
