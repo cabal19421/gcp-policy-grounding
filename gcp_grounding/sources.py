@@ -606,7 +606,8 @@ def load_source(path: str | os.PathLike[str], *, origins: str | None = None,
 
 def load_terraform(path: str | os.PathLike[str], *, options: SourceOptions,
                    kind: str = "terraform-dir",
-                   precedence: merge.PrecedencePolicy | None = None
+                   precedence: merge.PrecedencePolicy | None = None,
+                   vault: redact.SecretVault | None = None
                    ) -> tuple[LoadedSource | None, tuple[Verdict, ...]]:
     """A configured state, plan or directory path as an IN-MEMORY source.
 
@@ -616,6 +617,15 @@ def load_terraform(path: str | os.PathLike[str], *, options: SourceOptions,
     and the seam where one half of the design ended at a written file and the
     other began at a loaded one does not exist.
 
+    *vault* is handed STRAIGHT DOWN to the capture, and :func:`load_current`
+    always passes :func:`vault`. Terraform is the ONE source kind that carries
+    plaintext secrets — a tfstate stores them unmasked and its
+    ``sensitive_attributes`` is a display marker — so this call is where the
+    process-wide vault learns anything at all. Without it the log filter and
+    ``redact.scrub_report`` are installed over an empty vault and scrub nothing,
+    which is indistinguishable from working right up until something logs a
+    value the attribute-level replacement did not reach.
+
     A capture that fails — an unreadable tree, a refused artifact, a reader that
     raised — comes back as ``None`` plus one ``state:source`` verdict. It never
     raises.
@@ -623,7 +633,8 @@ def load_terraform(path: str | os.PathLike[str], *, options: SourceOptions,
     fspath = os.fspath(path)
     try:
         captured = estate.capture(
-            fspath, options=estate.CaptureOptions(precedence=precedence))
+            fspath, options=estate.CaptureOptions(precedence=precedence),
+            vault=vault)
     except Exception as exc:                # noqa: BLE001 - isolation is the point
         return None, (_source_failed(kind, fspath,
                                      f"{type(exc).__name__}: "
@@ -771,7 +782,7 @@ def load_current(options: SourceOptions) -> CurrentState:
         else:
             source, verdicts = load_terraform(
                 path, options=options, kind=kind,
-                precedence=resolved.precedence)
+                precedence=resolved.precedence, vault=secrets)
         notes.extend(verdicts)
         if source is not None:
             loaded.append(source)
