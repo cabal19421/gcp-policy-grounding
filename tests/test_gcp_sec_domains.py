@@ -6,12 +6,25 @@ documented builtin behaviour (every rule abstains ``unverified``) when z3 is
 absent and the real grounded/contradicted assertions when it is present.
 
 The estate cases are ALSO checkout-branched. The estate snapshot tables
-(``firewall_rules``, ``hierarchical_firewall_policies``) and the
-``estate_partial_snapshot.json`` fixture arrive with ``sx-kb-estate-tables`` /
-``sx-fixtures-estate``; :func:`estate_snapshot` builds a real
+(``firewall_rules``, ``hierarchical_firewall_policies``) arrive with
+``sx-kb-estate-tables``; :func:`estate_snapshot` builds a real
 :class:`~gcp_grounding.knowledge.GcpSnapshot` when those fields exist and a
 stand-in object with the same attributes when they do not, so the extractor's
 ``getattr``-and-compare-with-``is`` contract is exercised either way.
+
+``estate_partial_snapshot.json`` is NOT branched: it is REQUIRED. A named
+partial-estate input silently substituted by a trivially empty snapshot cannot
+tell "captured everything except this table" from "captured nothing" — both
+answer UNKNOWN for the same reason — so its absence is a missing dependency to
+escalate, never to paper over. For the same reason the extractor count below is
+the exact knowable one (see :data:`EXTRACTOR_DEPENDENCIES`) and not a floor.
+
+The last section pins the RECORD-SHAPE GUARDS: for each measured shape that
+produced zero records and NO reason, the extractor now abstains naming the
+record and the key, and the end-to-end verdict is ``unverified`` rather than a
+``grounded`` standing on rows nobody read. Each of those tests carries its own
+honest control, so an extractor that simply abstained on everything would fail
+here too.
 
 NAMED MUTATION MUST-KILLS PINNED HERE: MK-I02 through MK-I13 — the IANA protocol
 table, the ragged-record sort rank, the string dimension, the all-protocols test,
@@ -20,6 +33,7 @@ the extractor-failed log. Each was measured to survive this suite as it stood an
 re-measured ALONE in an isolated copy before being pinned (house rule 7).
 """
 
+import importlib.util
 import json
 import logging
 from pathlib import Path
@@ -29,6 +43,7 @@ import pytest
 
 from gcp_grounding import (sec_artifact, sec_ast, sec_domains, sec_encode,
                            sec_probes, sec_rules, solve)
+from gcp_grounding.claims import Claim
 from gcp_grounding.constraints import _z3_module
 from gcp_grounding.core.solver import get_solver
 from gcp_grounding.knowledge import GcpSnapshot
@@ -157,6 +172,28 @@ def extract(collection, context):
     return sec_rules.EXTRACTORS[collection](context)
 
 
+#: collection -> the domain claims module its extractor needs, or ``None`` when
+#: :func:`sec_domains.register` installs it unconditionally. This is what makes
+#: the extractor count EXACTLY KNOWABLE in any checkout: a floor (``>= 2``) would
+#: have passed just as happily if a domain silently stopped registering.
+EXTRACTOR_DEPENDENCIES = {
+    "proposed_firewall_rules": "fw_claims",
+    "firewall_rules": None,
+    "armor_rules": "armor_claims",
+    "hier_firewall_rules": None,
+    "perimeter_resources": "vpcsc_claims",
+    "perimeter_restricted_services": "vpcsc_claims",
+}
+
+
+def expected_extractors():
+    """The collections ``register`` must install an extractor for in THIS
+    checkout, resolved from disk rather than from ``sec_domains``' own state."""
+    return {collection for collection, module in EXTRACTOR_DEPENDENCIES.items()
+            if module is None
+            or importlib.util.find_spec(f"gcp_grounding.{module}") is not None}
+
+
 # =============================================================================
 # registration
 # =============================================================================
@@ -182,7 +219,11 @@ def test_register_is_idempotent(monkeypatch):
     sec_domains.register()
     first = dict(calls)
     assert first["collections"] == len(sec_domains.COLLECTION_SPECS)
-    assert first["extractors"] >= 2  # the two estate collections always register
+    # the EXACT knowable count, not a floor: every collection whose claims
+    # module this checkout carries, plus the two that always register
+    assert first["extractors"] == len(expected_extractors())
+    assert {name for name in EXTRACTOR_DEPENDENCIES
+            if name in sec_rules.EXTRACTORS} == expected_extractors()
     assert sec_domains.registered() is True
 
     sec_domains.register()
@@ -228,6 +269,15 @@ def test_domain_names_are_sec_artifact_domains_compatible():
     flattened = [name for names in sec_domains.DOMAIN_COLLECTIONS.values()
                  for name in names]
     assert [spec.name for spec in sec_domains.COLLECTION_SPECS] == flattened
+
+
+def test_every_registered_collection_has_a_known_extractor_dependency():
+    """The table the exact extractor count is computed from covers every spec —
+    a new collection outside it would make that count knowable by accident."""
+    assert set(EXTRACTOR_DEPENDENCIES) == {spec.name
+                                           for spec in sec_domains.COLLECTION_SPECS}
+    for module in set(EXTRACTOR_DEPENDENCIES.values()) - {None}:
+        assert module in sec_domains.DOMAIN_MODULES.values(), module
 
 
 def test_absent_domain_module_still_registers_the_others(monkeypatch):
@@ -470,9 +520,24 @@ def test_estate_hier_firewall_rules_flatten_per_attachment():
 
 def test_an_uncaptured_estate_collection_reports_the_uncaptured_reason():
     """``estate_partial_snapshot.json`` captures the vocabularies but no record
-    table; without that fixture a bare snapshot is the same 'not captured'."""
+    table — and it is REQUIRED, never substituted.
+
+    A trivially empty snapshot standing in for the named partial-estate input
+    cannot tell "captured everything except this table" from "captured nothing":
+    both answer UNKNOWN for the same reason, so the green run would prove only
+    that an empty object has no attributes. An absent fixture is a missing
+    dependency to escalate, not to paper over.
+    """
     partial = _FIXTURES / "estate_partial_snapshot.json"
-    snapshot = GcpSnapshot.load(partial) if partial.exists() else SNAP
+    assert partial.is_file(), (
+        f"{partial} is a required fixture: this test names a PARTIAL estate — "
+        "vocabularies captured, record tables not — and an empty snapshot "
+        "substituted for it cannot distinguish that from a capture that read "
+        "nothing at all")
+    snapshot = GcpSnapshot.load(partial)
+    assert snapshot.captured_categories(), (
+        "the partial-estate fixture must have captured SOMETHING, or it is the "
+        "empty snapshot this test exists to stop standing in")
     for collection, table in (("firewall_rules", "firewall_rules"),
                               ("hier_firewall_rules",
                                "hierarchical_firewall_policies")):
@@ -818,3 +883,367 @@ def test_a_crashing_domain_extractor_logs_its_traceback(caplog):
     [record] = [r for r in caplog.records if r.name == log.name]
     assert record.exc_info                      # TRUTHY, never `is not None`
     assert record.exc_info[0] is ValueError
+
+
+# =============================================================================
+# record-shape guards in the collection extractors
+#
+# Every guard below turns a GENERIC floor abstention — "the extractor produced no
+# records and did not say whether the collection is empty or unreadable" — into a
+# PRECISE one at the site that produced it, naming the record and the key it
+# could not read. Each shape was MEASURED to yield zero records and NO reason
+# before its guard landed, and zero records with no reason is exactly the state
+# in which a ``forall`` promise passes over rows nobody ever read.
+# =============================================================================
+
+#: An override that DELETES a key rather than setting it — the measured shape is
+#: a policy record carrying only an attachments list.
+_ABSENT = object()
+
+HIER_POLICY = "organizations/1/locations/global/firewallPolicies/fp-baseline"
+
+#: "every hierarchical rule is attached to organizations/1" — a NODE-SCOPED
+#: promise, which is the shape an unreadable ``attachments`` key lets pass while
+#: the policy is in fact attached to the organization.
+NODE_FORALL = forall(cmp("eq", fld("node", "h"), lit("Str", "organizations/1")),
+                     var="h", coll="hier_firewall_rules")
+
+
+def hier_table(**overrides):
+    """The captured policies table holding ONE policy, with one key varied."""
+    record = dict(ESTATE_HIER[HIER_POLICY], **overrides)
+    return {HIER_POLICY: {k: v for k, v in record.items() if v is not _ABSENT}}
+
+
+def hier_extract(table):
+    return extract("hier_firewall_rules", ctx(snapshot=estate_snapshot(
+        hierarchical_firewall_policies=table)))
+
+
+def hier_verdict(table, pid):
+    """The end-to-end verdict of the node-scoped promise over *table*."""
+    rule = sec_rules.CompiledRule(
+        promise=promise(pid, "assert_satisfiable", NODE_FORALL,
+                        domain="hier_firewall", state="estate"))
+    return rule.evaluate(ctx(kind="firewall_policy", snapshot=estate_snapshot(
+        hierarchical_firewall_policies=table)))
+
+
+@pytest.mark.parametrize("rules", [_ABSENT, {"0": {"action": "deny"}}, "deny-all"])
+def test_a_policy_whose_rules_key_is_unreadable_abstains_naming_policy_and_key(rules):
+    """MEASURED before the guard: a table holding one policy with only an
+    attachments list yields zero records and no missing reason, and so does the
+    same table with ``rules`` as a Mapping."""
+    records, missing = hier_extract(hier_table(rules=rules))
+    assert records == ()
+    assert missing and "fp-baseline" in missing and "'rules'" in missing
+
+    verdict = hier_verdict(hier_table(rules=rules), "hier-rules-shape")
+    assert verdict.status == "unverified" and verdict.status != "grounded"
+    assert "fp-baseline" in verdict.message
+
+
+@pytest.mark.parametrize("attachments", [_ABSENT, "organizations/1",
+                                         {"0": "organizations/1"}])
+def test_a_policy_whose_attachments_are_unreadable_abstains_naming_policy_and_key(
+        attachments):
+    """ATTACHMENTS ARE A SCOPE SELECTOR, NOT A TAG.
+
+    Encoded as the reserved empty string, a policy that IS attached to an
+    organization reads as attached NOWHERE, and the node-scoped promise above
+    passes over a rule that violates it."""
+    records, missing = hier_extract(hier_table(attachments=attachments))
+    assert records == ()
+    assert missing and "fp-baseline" in missing and "'attachments'" in missing
+
+    verdict = hier_verdict(hier_table(attachments=attachments), "hier-attach-shape")
+    assert verdict.status == "unverified" and verdict.status != "grounded"
+    assert "fp-baseline" in verdict.message
+
+
+def test_a_captured_empty_attachment_list_keeps_the_honest_empty_string():
+    """The empty string stays RESERVED for a genuinely captured empty list — a
+    policy attached nowhere is a fact about the estate, not a hole in it."""
+    records, missing = hier_extract(hier_table(attachments=[]))
+    assert missing is None
+    assert records and all(record["node"] == "" for record in records)
+
+    verdict = hier_verdict(hier_table(attachments=[]), "hier-attach-empty")
+    if not HAVE_Z3:
+        assert verdict.status == "unverified"
+        return
+    # attached nowhere is DECIDABLE, and it refutes the node-scoped promise
+    assert verdict.status == "contradicted"
+
+
+def test_an_unsupported_policy_record_is_rejected_before_the_rules_loop():
+    """Dropping the policy would let a ``forall`` promise pass vacuously, which
+    the clause forbids — so the rejector runs on the POLICY record itself, not
+    only on each rule inside it."""
+    table = hier_table(unsupported="the policy carried a shape we do not model")
+    records, missing = hier_extract(table)
+    assert records == ()
+    assert missing and "fp-baseline" in missing
+    assert "not fully understood" in missing
+
+    verdict = hier_verdict(table, "hier-unsupported")
+    assert verdict.status == "unverified" and verdict.status != "grounded"
+
+
+def test_a_non_empty_policy_table_that_produced_no_rows_abstains_precisely():
+    """A captured-but-ruleless table is vacuity the generic floor catches LATE
+    and anonymously; the extractor names the table instead."""
+    records, missing = hier_extract(hier_table(rules=[]))
+    assert records == ()
+    assert missing and "hierarchical_firewall_policies" in missing
+    assert "did not say whether" not in missing     # not the generic floor text
+
+    verdict = hier_verdict(hier_table(rules=[]), "hier-no-rows")
+    assert verdict.status == "unverified" and verdict.status != "grounded"
+
+
+def test_the_control_a_readable_policy_table_still_grounds_the_node_promise():
+    """Without this, every assertion above could be satisfied by an extractor
+    that abstains on everything."""
+    records, missing = hier_extract(hier_table())
+    assert missing is None and records
+
+    verdict = hier_verdict(hier_table(), "hier-node-control")
+    if not HAVE_Z3:
+        assert verdict.status == "unverified"
+        return
+    assert verdict.status == "grounded"
+
+
+# -- perimeter sections -------------------------------------------------------
+
+#: collection -> the ``(field, payload key, field table)`` triple ``register``
+#: passes ``_perimeter_entries``, so the guards are pinned on exactly the
+#: extractor a checkout carrying ``vpcsc_claims`` installs.
+PERIMETER_SHAPES = {
+    "perimeter_resources": ("resource", "resources",
+                            sec_domains._PERIMETER_RESOURCE_FIELDS),
+    "perimeter_restricted_services": ("service", "restricted_services",
+                                      sec_domains._PERIMETER_SERVICE_FIELDS),
+}
+
+PERIMETER_DOC = {"name": "accessPolicies/987/servicePerimeters/prod"}
+
+#: "every perimeter entry is enforced, not dry-run" — the promise a silently
+#: skipped section makes pass over entries nobody read.
+SECTION_FORALL = forall(cmp("eq", fld("section", "p"), lit("Str", "status")),
+                        var="p", coll="perimeter_resources")
+
+
+def perimeter_claim(name, **payload):
+    """One ``perimeter_config`` claim in the normalized snake_case shape."""
+    return Claim.of("perimeter_config",
+                    f"accessPolicies/987/servicePerimeters/{name}",
+                    "$.name", name=name, **payload)
+
+
+def perimeter_extract(claims, collection="perimeter_resources"):
+    """The guarded extractor for *collection*, over a stand-in claims module so
+    the shape is pinned in a checkout that does not carry ``vpcsc_claims``."""
+    module = SimpleNamespace(
+        DOCUMENT_EXTRACTORS={"vpc_sc_perimeter": lambda _doc: list(claims)})
+    field, source, fields = PERIMETER_SHAPES[collection]
+    return sec_domains._guarded(
+        collection,
+        sec_domains._perimeter_entries(module, collection, field, source, fields))
+
+
+def perimeter_verdict(claims, pid):
+    """The end-to-end verdict of the enforced-section promise over *claims*."""
+    sec_rules.register_extractor("perimeter_resources", perimeter_extract(claims))
+    rule = sec_rules.CompiledRule(
+        promise=promise(pid, "assert_satisfiable", SECTION_FORALL, domain="vpc_sc"))
+    return rule.evaluate(ctx(PERIMETER_DOC, "vpc_sc_perimeter"))
+
+
+def test_a_perimeter_carrying_neither_spec_nor_status_abstains_by_name():
+    """MEASURED before the guard: the extractor skips any section block that is
+    not a Mapping and returns zero records with no reason."""
+    claims = [perimeter_claim("prod")]
+    records, missing = perimeter_extract(claims)(ctx(PERIMETER_DOC,
+                                                     "vpc_sc_perimeter"))
+    assert records == ()
+    assert missing and "prod" in missing
+    assert "spec" in missing and "status" in missing
+
+    verdict = perimeter_verdict(claims, "vpcsc-no-section")
+    assert verdict.status == "unverified" and verdict.status != "grounded"
+    assert "prod" in verdict.message
+
+
+@pytest.mark.parametrize("collection", sorted(PERIMETER_SHAPES))
+@pytest.mark.parametrize("section", ["spec", "status"])
+def test_a_perimeter_section_without_its_entry_key_abstains_by_name(section,
+                                                                   collection):
+    """The hard-coded entry key was read raw, so any payload drift produced zero
+    records and no reason. Both extractors, both sections."""
+    _field, source, _fields = PERIMETER_SHAPES[collection]
+    claims = [perimeter_claim("prod", **{section: {"unrelated": []}})]
+    records, missing = perimeter_extract(claims, collection)(
+        ctx(PERIMETER_DOC, "vpc_sc_perimeter"))
+    assert records == ()
+    assert missing and "prod" in missing and section in missing
+    assert repr(source) in missing
+
+    if collection != "perimeter_resources":
+        return                       # the promise below quantifies over that one
+    verdict = perimeter_verdict(claims, f"vpcsc-no-{section}-key")
+    assert verdict.status == "unverified" and verdict.status != "grounded"
+    assert "prod" in verdict.message and repr(source) in verdict.message
+
+
+def test_a_non_empty_perimeter_claim_list_that_produced_no_rows_abstains():
+    claims = [perimeter_claim("prod", status={"resources": []})]
+    records, missing = perimeter_extract(claims)(ctx(PERIMETER_DOC,
+                                                     "vpc_sc_perimeter"))
+    assert records == ()
+    assert missing and "perimeter_resources" in missing
+    assert "did not say whether" not in missing     # not the generic floor text
+
+    verdict = perimeter_verdict(claims, "vpcsc-no-rows")
+    assert verdict.status == "unverified" and verdict.status != "grounded"
+
+
+def test_a_spec_only_perimeter_is_not_read_as_enforced():
+    """The section is a real dimension: conflating the dry-run half with the
+    enforced one would let a spec-only change read as enforced."""
+    claims = [perimeter_claim("prod", spec={"resources": ["projects/222"]})]
+    records, missing = perimeter_extract(claims)(ctx(PERIMETER_DOC,
+                                                     "vpc_sc_perimeter"))
+    assert missing is None
+    assert [record["section"] for record in records] == ["spec"]
+
+    verdict = perimeter_verdict(claims, "vpcsc-spec-only")
+    if not HAVE_Z3:
+        assert verdict.status == "unverified"
+        return
+    assert verdict.status == "contradicted"
+
+
+def test_the_control_a_readable_perimeter_still_flattens_and_grounds():
+    claims = [perimeter_claim(
+        "prod", status={"resources": ["projects/111"],
+                        "restricted_services": ["storage.googleapis.com"]})]
+    records, missing = perimeter_extract(claims)(ctx(PERIMETER_DOC,
+                                                     "vpc_sc_perimeter"))
+    assert missing is None
+    assert [dict(record) for record in records] == [
+        {"perimeter": "prod", "resource": "projects/111", "section": "status"}]
+
+    services, missing = perimeter_extract(
+        claims, "perimeter_restricted_services")(ctx(PERIMETER_DOC,
+                                                     "vpc_sc_perimeter"))
+    assert missing is None
+    assert [record["service"] for record in services] == ["storage.googleapis.com"]
+
+    verdict = perimeter_verdict(claims, "vpcsc-control")
+    if not HAVE_Z3:
+        assert verdict.status == "unverified"
+        return
+    assert verdict.status == "grounded"
+
+
+# -- the two guards mutation proved untested, and the crash channel -----------
+
+
+def test_a_source_range_that_is_not_ipv4_abstains_with_the_range_named():
+    """MUTATION-PROVED UNTESTED, and RE-MEASURED here: replacing
+    ``_cidr_dimension``'s abstain arm with ``continue`` (line-count neutral, so
+    the evidence-lint anchors do not move) SURVIVES the whole suite with this
+    test deselected and is KILLED by it.
+
+    A rule whose source ranges are ALL non-IPv4 must NAME the range it could not
+    read; dropping the range instead leaves a rangeless row a cidr-mentioning
+    promise judges as though the rule's scope had been established."""
+    with pytest.raises(sec_domains._Undecidable) as excinfo:
+        sec_domains._firewall_records(
+            [("fw-v6", normalized_rule(source_ranges=["2001:db8::/32"]))],
+            "firewall rule")
+    assert "2001:db8::/32" in str(excinfo.value) and "fw-v6" in str(excinfo.value)
+    assert "not evaluated" in str(excinfo.value)
+
+    doc = dict(two_by_two(), sourceRanges=["2001:db8::/32"])
+    records, missing = extract("proposed_firewall_rules", ctx(doc, "firewall_rule"))
+    assert records == () and "2001:db8::/32" in missing
+    # the control: the same document with an IPv4 range reads its rows
+    ipv4, ipv4_missing = extract("proposed_firewall_rules",
+                                 ctx(two_by_two(), "firewall_rule"))
+    assert ipv4_missing is None and ipv4
+
+    rule = sec_rules.CompiledRule(promise=promise("no-open-ssh-v6", "refute",
+                                                  OPEN_SSH))
+    verdict = rule.evaluate(ctx(doc, "firewall_rule"))
+    assert verdict.status == "unverified" and "2001:db8::/32" in verdict.message
+    if not HAVE_Z3:
+        return
+    # and the control end-to-end: the same promise still decides a readable rule
+    assert rule.evaluate(ctx(FW_GOOD, "firewall_rule")).status == "grounded"
+
+
+def test_a_narrow_port_beside_an_over_wide_range_yields_both_rows():
+    """The wide range contributes a PORT-OMITTED row BESIDE the enumerated one,
+    so a promise about the SPECIFIC port abstains loudly instead of grounding
+    over an instance the 65 000 dropped ports never entered.
+
+    MEASURED, and stated rather than claimed: in THIS checkout the port-value
+    mutants of that shape (``values.append(None)`` dropped, moved to the front,
+    or made to replace the enumerated ports; the append made conditional on
+    nothing having been enumerated) are ALREADY killed by MK-I10 above, which
+    pins ``_port_values(["22", "0-65535"]) == [22, None]``. What this test adds
+    is the consequence MK-I10 does not reach: MK-I10 asks about port 80, which
+    the rule never enumerates, while a promise about port 22 — the port the rule
+    DOES carry — must still abstain, because the wide range means the instance
+    cannot answer for it either way."""
+    doc = dict(two_by_two(),
+               allowed=[{"IPProtocol": "tcp", "ports": ["22", "0-65535"]}])
+    records, missing = extract("proposed_firewall_rules", ctx(doc, "firewall_rule"))
+    assert missing is None
+    assert [r for r in records if r.get("port") == 22], "the narrow port is a row"
+    assert [r for r in records if "port" not in r], "the wide range is a row too"
+
+    about_22 = sec_rules.CompiledRule(
+        promise=promise("some-rule-allows-22", "assert_satisfiable",
+                        exists({"node": "port_in", "term": fld("port"),
+                                "lo": 22, "hi": 22})))
+    wide = about_22.evaluate(ctx(doc, "firewall_rule"))
+    narrow = about_22.evaluate(
+        ctx(dict(two_by_two(), allowed=[{"IPProtocol": "tcp", "ports": ["22"]}]),
+            "firewall_rule"))
+    if not HAVE_Z3:
+        assert wide.status == "unverified" and narrow.status == "unverified"
+        return
+    assert narrow.status == "grounded"       # the control: it CAN decide
+    assert wide.status == "unverified" and wide.status != "grounded"
+    assert "port is missing from the record" in wide.message
+
+
+def test_a_crashing_extractor_abstains_by_collection_and_the_rule_does_not_raise():
+    """The broad arm of ``_guarded`` is load-bearing: narrowing it to a class the
+    suite never raises survives every other test here.
+
+    A plain ``RuntimeError`` — no domain type, no evidence type — must still
+    become one abstention naming the collection, and rule evaluation must RETURN
+    that abstention rather than let the exception escape into the gate."""
+    def boom(_ctx):
+        raise RuntimeError("the estate table changed shape under us")
+
+    sec_rules.register_extractor("firewall_rules",
+                                 sec_domains._guarded("firewall_rules", boom))
+    records, missing = extract("firewall_rules", ctx())
+    assert records == ()
+    assert "firewall_rules" in missing
+    assert "the estate table changed shape under us" in missing
+
+    ast = forall(cmp("eq", fld("action", "f"), lit("Str", "deny")),
+                 var="f", coll="firewall_rules")
+    rule = sec_rules.CompiledRule(
+        promise=promise("estate-crash", "assert_satisfiable", ast, state="estate"))
+    verdict = rule.evaluate(ctx(FW_GOOD, "firewall_rule"))      # must not raise
+    assert verdict.status == "unverified"
+    assert "firewall_rules" in verdict.message
+    assert "the estate table changed shape under us" in verdict.message
