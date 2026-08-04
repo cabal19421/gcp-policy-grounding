@@ -150,8 +150,11 @@ def _baseline_prior(ctx: CheckContext, constraint: str) -> _Prior | None:
         return None
     fields = [c.fields() for c in prior_claims]
     return _Prior(
+        # A baseline rule the extractor could not read contributes no rule
+        # CONTENT: folding its empty payload in would let an unreadable old
+        # side manufacture a widening finding out of nothing.
         rules=tuple(_normalize_rule(f) for f in fields
-                    if f["rule_index"] != NO_RULE_INDEX),
+                    if f["rule_index"] != NO_RULE_INDEX and not f["unreadable"]),
         reset=any(f["reset"] is True for f in fields),
         inherit=any(f["inherit_from_parent"] is True for f in fields),
         source="the baseline document")
@@ -188,8 +191,20 @@ def _resolve_prior(claim: Claim, fields: Mapping[str, Any],
             f"{constraint} at {node} (captured {ctx.snapshot.captured_at}), so a "
             f"change to enforcement was not decided — an unrecorded node is not an "
             f"unenforced one")
-    rules = tuple(_normalize_rule(r) for r in record.get("rules", ())
-                  if isinstance(r, Mapping))
+    captured = record.get("rules")
+    if not isinstance(captured, (list, tuple)):
+        # No empty default: a record whose rules could not be READ is not a
+        # record of non-enforcement, and folding it to zero rules is how
+        # "never looked" becomes "it was already off". (The read cannot go
+        # through :func:`gcp_grounding.evidence.rows`, which accepts a ``list``
+        # only, because a loaded snapshot's record tables hold tuples.)
+        return None, Verdict(
+            "unverified", VERDICT_KIND, constraint, 0,
+            f"{claim.location}: the estate's record of {constraint} at {node} "
+            f"(captured {ctx.snapshot.captured_at}) has no readable 'rules' list, "
+            f"got {type(captured).__name__} — so a change to enforcement was not "
+            f"decided; an unreadable record is not a record of non-enforcement")
+    rules = tuple(_normalize_rule(r) for r in captured if isinstance(r, Mapping))
     return _Prior(rules=rules,
                   reset=record.get("reset") is True,
                   inherit=record.get("inherit_from_parent") is True,
@@ -284,16 +299,40 @@ def _check_widening(claim: Claim, fields: Mapping[str, Any],
         f"state from {prior.source})")
 
 
+def _unreadable_proposal(claim: Claim, fields: Mapping[str, Any]) -> Verdict | None:
+    """The one ``unverified`` a claim carrying an ``unreadable`` payload owes.
+
+    The PROPOSAL side of the honesty contract, and it comes first: a rule the
+    extractor could not read decides nothing about the prior state either way,
+    so naming what could not be read is the whole verdict. Without it a decoy
+    rule — an empty one, a description-only one, an ambiguous two-key one, a
+    non-array rules value — produced no claim at all and the report read PASSED.
+    """
+    unreadable = fields["unreadable"]
+    if not unreadable:
+        return None
+    node = fields["node"] or "the node it is set on"
+    return Verdict(
+        "unverified", VERDICT_KIND, claim.value, 0,
+        f"{claim.location}: {'; '.join(unreadable)} — so what this document sets "
+        f"for {claim.value} at {node} could not be read, and its effect on "
+        f"enforcement was not decided")
+
+
 def check_constraint_enforcement(claim: Claim, ctx: CheckContext) -> list[Verdict]:
     """CHECK 1 and CHECK 2 for one ``constraint_enforcement`` claim.
 
-    Returns exactly one ``unverified`` when the prior state cannot be resolved;
-    otherwise the enforcement verdict, plus the widening verdict when the rule
-    sets list values. Solver-free: ``ctx.solver`` is not read.
+    Returns exactly one ``unverified`` when the proposal itself could not be
+    read, or when the prior state cannot be resolved; otherwise the enforcement
+    verdict, plus the widening verdict when the rule sets list values.
+    Solver-free: ``ctx.solver`` is not read.
     """
     if claim.kind != "constraint_enforcement":
         raise ValueError(f"check_constraint_enforcement got a {claim.kind!r} claim")
     fields = claim.fields()
+    unreadable = _unreadable_proposal(claim, fields)
+    if unreadable is not None:
+        return [unreadable]
     prior, abstention = _resolve_prior(claim, fields, ctx)
     if abstention is not None:
         return [abstention]

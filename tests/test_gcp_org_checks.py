@@ -367,6 +367,9 @@ def test_constraint_enforcement_payload_round_trips_through_fields():
         "denied_values": ["evil.example"],
         "reset": False,
         "inherit_from_parent": True,
+        # Present on EVERY enforcement claim, empty here: a well-formed rule
+        # says so positively rather than by the absence of a key.
+        "unreadable": [],
     }
     # Frozen, so two extractions of the same document are equal and hashable.
     twin = enforcement_claim(copy.deepcopy(load("org_policy_widened.json")))
@@ -390,18 +393,108 @@ def test_boolean_and_list_v1_documents_map_onto_the_same_payload():
     assert restored.fields()["reset"] is True
 
 
-def test_an_ambiguous_or_shapeless_rule_emits_no_enforcement_claim():
-    # Two value-type keys at once: the pre-existing extractor already refuses
-    # to guess, and the new claim must not guess either.
+def test_an_ambiguous_or_shapeless_rule_abstains_instead_of_saying_nothing():
+    # RE-PIN, and the old expectation was the bug: this test used to certify
+    # that an ambiguous rule produced NOTHING but the constraint claim. That
+    # silence is a one-key evasion — the surviving constraint claim keeps the
+    # document out of the zero-claims honesty guard, so a rule nobody could
+    # read was reported as a clean pass. The value-TYPE claim is still withheld
+    # (the extractor still refuses to guess); the skip now travels.
     ambiguous = {"name": f"{NODE}/policies/compute.disableSerialPortAccess",
                  "spec": {"rules": [{"enforce": True, "values": {}}]}}
-    assert [c.kind for c in org_policy_claims(ambiguous)] == ["constraint"]
+    assert [c.kind for c in org_policy_claims(ambiguous)] == \
+        ["constraint", "constraint_enforcement"]
+    assert enforcement_claim(ambiguous).fields()["unreadable"] == [
+        "spec.rules[0] carries 2 value-type keys (enforce, values) at once, so "
+        "which value type it sets is ambiguous"]
     # Neither shape at all.
-    assert [c.kind for c in org_policy_claims(
-        {"name": f"{NODE}/policies/compute.disableSerialPortAccess",
-         "spec": {"rules": [{"condition": {"expression": "true"}}]}})] == ["constraint"]
+    shapeless = {"name": f"{NODE}/policies/compute.disableSerialPortAccess",
+                 "spec": {"rules": [{"condition": {"expression": "true"}}]}}
+    assert [c.kind for c in org_policy_claims(shapeless)] == \
+        ["constraint", "constraint_enforcement"]
+    assert "carries none of the value-type keys" in \
+        enforcement_claim(shapeless).fields()["unreadable"][0]
     # A constraint the document does not name unambiguously: nothing at all.
     assert org_policy_claims({"constraint": SERIAL, "name": "x/policies/y"}) == []
+
+
+# -- the rules array may never read as silence -------------------------------
+
+
+DECOYS = [{}, {"description": "housekeeping"}, {"condition": {"expression": "true"}},
+          {"enforce": True, "values": {}}, "not-an-object"]
+
+
+@pytest.mark.parametrize("decoy", DECOYS)
+def test_a_skipped_rule_is_one_unverified_naming_the_rule_location(snap, decoy):
+    document = {"name": f"{NODE}/policies/compute.disableSerialPortAccess",
+                "spec": {"rules": [decoy]}}
+    report = ground_policy(document, snap)
+    [verdict] = enforcement(report)
+    assert (verdict.status, verdict.kind, verdict.target) == \
+        ("unverified", "org_enforcement", SERIAL)
+    assert "spec.rules[0]" in verdict.message
+    assert "not decided" in verdict.message
+    assert verdict.lineno == 0
+    # An abstention passes the gate; a POSITIVE over an unread rule never may.
+    assert report.ok
+    assert not [v for v in enforcement(report) if v.status == "grounded"]
+
+
+@pytest.mark.parametrize("decoy", DECOYS)
+@pytest.mark.parametrize("spec_flag, spelling", [({"reset": True}, "spec.reset"),
+                                                 ({"inheritFromParent": True},
+                                                  "spec.inheritFromParent")])
+def test_one_decoy_rule_cannot_hide_a_disablement(snap, decoy, spec_flag, spelling):
+    # MEASURED before the fix: a reset spelling plus one decoy rule printed
+    # PASSED with one grounded verdict and returned success.
+    document = {"name": f"{NODE}/policies/compute.disableSerialPortAccess",
+                "spec": dict(spec_flag, rules=[decoy])}
+    report = ground_policy(document, snap)
+    [abstain] = [v for v in enforcement(report) if v.status == "unverified"]
+    assert "spec.rules[0]" in abstain.message
+    [removal] = [v for v in enforcement(report) if v.status == "contradicted"]
+    assert (removal.kind, removal.target) == ("org_enforcement", SERIAL)
+    assert spelling in removal.message and "stops enforcing" in removal.message
+    assert not report.ok
+
+
+def test_a_non_list_rules_value_is_unverified_naming_the_key(snap):
+    document = {"name": f"{NODE}/policies/compute.disableSerialPortAccess",
+                "spec": {"rules": "all of them"}}
+    report = ground_policy(document, snap)
+    [verdict] = enforcement(report)
+    assert (verdict.status, verdict.target) == ("unverified", SERIAL)
+    assert "spec.rules is not an array, got str" in verdict.message
+    assert report.ok and not [v for v in enforcement(report)
+                              if v.status == "grounded"]
+
+
+def test_a_malformed_values_block_abstains_instead_of_grounding(snap):
+    # MEASURED before the fix: a string where a list belongs yielded ok=True,
+    # three grounded and zero unverified, the message stating the constraint
+    # was not enforced here before.
+    document = {"name": f"{NODE}/policies/iam.allowedPolicyMemberDomains",
+                "spec": {"rules": [{"values": {"allowedValues": "acme.example"}}]}}
+    report = ground_policy(document, snap)
+    [verdict] = enforcement(report)
+    assert (verdict.status, verdict.kind, verdict.target) == \
+        ("unverified", "org_enforcement", DOMAINS)
+    assert "spec.rules[0].values.allowedValues is not an array, got str" in \
+        verdict.message
+    assert verdict.lineno == 0
+    assert "not enforced here before" not in verdict.message
+    assert not [v for v in enforcement(report) if v.status == "grounded"]
+
+
+def test_the_same_values_block_well_formed_still_decides(snap):
+    # The both-directions control: the abstention above is caused by the
+    # malformation and by nothing else about this document.
+    document = {"name": f"{NODE}/policies/iam.allowedPolicyMemberDomains",
+                "spec": {"rules": [{"values": {"allowedValues": ["acme.example"]}}]}}
+    report = ground_policy(document, snap)
+    assert [v.status for v in enforcement(report)] == ["grounded", "contradicted"]
+    assert not report.ok
 
 
 # -- CHECK 3: hierarchy-node values ------------------------------------------

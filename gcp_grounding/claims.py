@@ -84,9 +84,28 @@ beside it carries the value ITSELF — the enforce flag, the allow/deny-all
 flags, the concrete allowed/denied value lists, and the document-level
 ``reset`` / ``inheritFromParent`` switches — in the frozen payload, so
 :mod:`~gcp_grounding.org_checks` can compare a proposal against the estate's
-recorded policy. The two are emitted in lockstep: where the conservative
-value-type extractor skips a rule (ambiguous, malformed, or neither shape),
-no enforcement claim is emitted either.
+recorded policy.
+
+A SKIPPED RULE IS NOT A SILENT ONE. The conservative value-type extractor
+still refuses to guess what an ambiguous, malformed or shapeless rule sets, so
+no ``constraint_value`` claim is emitted for it — but an enforcement claim IS,
+carrying the skip in its ``unreadable`` payload field (a tuple of reasons, each
+naming the offending json-path and the shape found there) and no values at all.
+Silence was a one-key evasion: the surviving ``constraint`` claim keeps such a
+document out of the zero-claims honesty guard, so a rules array nobody could
+read used to produce a clean PASS. The same field carries a malformed value
+list — a non-array where ``allowedValues`` belongs, or entries that are not
+non-empty strings — which otherwise degraded to an empty list indistinguishable
+from an observed-empty one. An explicitly empty ``rules`` array is the opposite
+case and stays claim-free: it was read, and it holds nothing.
+
+The document-level claim (``rule_index`` :data:`NO_RULE_INDEX`, location
+``spec``) is emitted whenever ``spec.reset`` or ``spec.inheritFromParent`` is
+true and NO rule of the document's own was read, INDEPENDENT of whether the
+rules array is absent, empty, unreadable or full of decoys — two of the three
+disablement spellings hang off nothing else, and one skipped entry used to hide
+them both. It is suppressed only when a rule-level claim already carried the
+same switches.
 """
 
 from __future__ import annotations
@@ -159,7 +178,13 @@ _ENFORCEMENT_DEFAULTS: dict[str, Any] = {
 #: ``rule_index`` of the one claim a v2 spec with NO rules of its own still
 #: emits, so a bare ``spec.reset``/``spec.inheritFromParent`` — disablement
 #: spellings that carry no rule to hang off — remain checkable.
-NO_RULE_INDEX = -1
+#:
+#: Deliberately NOT an integer. Every consumer compares it symbolically
+#: (``fields["rule_index"] == NO_RULE_INDEX``) and every real index comes out of
+#: ``enumerate()``, so a non-integer sentinel reads identically for them while
+#: being unable to collide with a real rule index BY CONSTRUCTION rather than by
+#: the arithmetic accident that no index is negative.
+NO_RULE_INDEX = "document"
 
 
 def freeze(value: Any) -> Any:
@@ -330,15 +355,17 @@ def org_policy_claims(policy: Mapping[str, Any]) -> list[Claim]:
     if isinstance(list_policy, Mapping):
         claims.append(Claim("constraint_value", constraint, "listPolicy", is_list=True))
         all_values = list_policy.get("allValues")
+        values, unreadable = _values_shape(list_policy, "listPolicy")
         claims.append(_enforcement_claim(
             constraint, "listPolicy", node, 0,
             dict(_ENFORCEMENT_DEFAULTS,
                  allow_all=True if all_values == "ALLOW" else None,
                  deny_all=True if all_values == "DENY" else None,
-                 **_values_shape(list_policy)),
+                 **values),
             reset=_v1_reset(policy),
             inherit=_bool_or_none(list_policy, "inheritFromParent",
-                                  "inherit_from_parent")))
+                                  "inherit_from_parent"),
+            unreadable=unreadable))
 
     # v2: each rule carries one value-type-bearing key; the spec-level reset /
     # inheritFromParent switches ride along on every rule's payload.
@@ -346,23 +373,41 @@ def org_policy_claims(policy: Mapping[str, Any]) -> list[Claim]:
     reset = _bool_or_none(spec, "reset") if spec is not None else None
     inherit = (_bool_or_none(spec, "inheritFromParent", "inherit_from_parent")
                if spec is not None else None)
+    read_any_rule = False
     if isinstance(rules, list):
         for i, rule in enumerate(rules):
             location = f"spec.rules[{i}]"
-            claim = _v2_rule_value_claim(constraint, rule, location)
-            if claim is not None:
-                claims.append(claim)
-                claims.append(_enforcement_claim(constraint, location, node, i,
-                                                 _v2_rule_shape(rule),
-                                                 reset=reset, inherit=inherit))
+            claim, skipped = _v2_rule_value_claim(constraint, rule, location)
+            if claim is None:
+                # A rule nobody could read is not a rule that sets nothing: the
+                # skip travels as an abstain-carrying claim so the check can
+                # name the location and the reason instead of staying silent.
+                claims.append(_enforcement_claim(
+                    constraint, location, node, i, dict(_ENFORCEMENT_DEFAULTS),
+                    reset=reset, inherit=inherit, unreadable=(skipped,)))
+                continue
+            shape, unreadable = _v2_rule_shape(rule, location)
+            claims.append(claim)
+            claims.append(_enforcement_claim(constraint, location, node, i, shape,
+                                             reset=reset, inherit=inherit,
+                                             unreadable=unreadable))
+            if not unreadable:
+                read_any_rule = True
     elif spec is not None and rules is not None:
-        logger.debug("spec.rules is %s, not an array — no enforcement claims",
-                     type(rules).__name__)
-    if spec is not None and not rules and (reset is True or inherit is True):
+        claims.append(_enforcement_claim(
+            constraint, "spec.rules", node, NO_RULE_INDEX,
+            dict(_ENFORCEMENT_DEFAULTS), reset=reset, inherit=inherit,
+            unreadable=(f"spec.rules is not an array, "
+                        f"got {type(rules).__name__}",)))
+    if spec is not None and not read_any_rule and (reset is True or inherit is True):
         # A spec that resets to the inherited default, or defers wholesale to
-        # the parent, carries no rule to hang a claim off — yet those are two
-        # of the three ways to stop enforcing a constraint. Record one claim
-        # against the spec itself so the check can still see them.
+        # the parent, carries no rule to hang a claim off — yet those are two of
+        # the three ways to stop enforcing a constraint. Record one claim
+        # against the spec itself so the check can still see them. This is
+        # INDEPENDENT of the rules array: an absent one, an empty one, an
+        # unreadable one and one holding nothing but decoys all hide the
+        # switches equally well. It is suppressed only when a rule of the
+        # document's own was read, because that claim carries the same switches.
         claims.append(_enforcement_claim(constraint, "spec", node, NO_RULE_INDEX,
                                          dict(_ENFORCEMENT_DEFAULTS),
                                          reset=reset, inherit=inherit))
@@ -387,47 +432,75 @@ def _org_policy_constraint(policy: Mapping[str, Any]) -> tuple[str, str] | None:
     return None
 
 
-def _v2_rule_value_claim(constraint: str, rule: Any, location: str) -> Claim | None:
+def _v2_rule_value_claim(constraint: str, rule: Any,
+                         location: str) -> tuple[Claim | None, str | None]:
+    """→ (the value-type claim, None), or (None, why the rule was skipped).
+
+    Exactly one half is not None. The extractor is unchanged in what it accepts
+    — it still refuses to guess at an ambiguous or malformed rule — but the
+    refusal now carries a REASON out, because the caller has to say what it
+    could not read rather than emitting nothing at all.
+    """
     if not isinstance(rule, Mapping):
         logger.debug("%s is not an object — skipped", location)
-        return None
+        return None, f"{location} is not an object, got {type(rule).__name__}"
     typed = [k for k in (*_V2_BOOLEAN_KEYS, *_V2_LIST_KEYS) if k in rule]
-    if len(typed) != 1:
+    if len(typed) > 1:
         logger.debug("%s carries %d value-type keys (%s) — ambiguous, skipped",
-                     location, len(typed), ", ".join(typed) or "none")
-        return None
+                     location, len(typed), ", ".join(typed))
+        return None, (f"{location} carries {len(typed)} value-type keys "
+                      f"({', '.join(typed)}) at once, so which value type it "
+                      f"sets is ambiguous")
+    if not typed:
+        logger.debug("%s carries no value-type key — skipped", location)
+        return None, (f"{location} carries none of the value-type keys "
+                      f"({', '.join((*_V2_BOOLEAN_KEYS, *_V2_LIST_KEYS))}), so "
+                      f"what it sets could not be read")
     key = typed[0]
     value = rule[key]
     if key == "values":
         if not isinstance(value, Mapping):
             logger.debug("%s.values is not an object — skipped", location)
-            return None
-        return Claim("constraint_value", constraint, f"{location}.values", is_list=True)
+            return None, (f"{location}.values is not an object, "
+                          f"got {type(value).__name__}")
+        return Claim("constraint_value", constraint, f"{location}.values",
+                     is_list=True), None
     if not isinstance(value, bool):
         logger.debug("%s.%s is not a boolean — skipped", location, key)
-        return None
+        return None, (f"{location}.{key} is not a boolean, "
+                      f"got {type(value).__name__}")
     return Claim("constraint_value", constraint, f"{location}.{key}",
-                 is_list=key in _V2_LIST_KEYS)
+                 is_list=key in _V2_LIST_KEYS), None
 
 
 # -- the enforcement payload (the values themselves) --------------------------
 
 
-def _enforcement_claim(constraint: str, location: str, node: str, rule_index: int,
+def _enforcement_claim(constraint: str, location: str, node: str,
+                       rule_index: int | str,
                        shape: Mapping[str, Any], *, reset: bool | None,
-                       inherit: bool | None) -> Claim:
+                       inherit: bool | None,
+                       unreadable: tuple[str, ...] = ()) -> Claim:
     """One ``constraint_enforcement`` claim: *shape*'s value fields plus the
-    node, the rule index and the document-level reset/inherit switches, all
-    frozen into the payload so the values travel to the checker."""
+    node, the rule index, the document-level reset/inherit switches and the
+    reasons anything about the rule could not be read, all frozen into the
+    payload so the values — and the holes in them — travel to the checker."""
     return Claim.of("constraint_enforcement", constraint, location,
                     node=node, rule_index=rule_index, reset=reset,
-                    inherit_from_parent=inherit, **shape)
+                    inherit_from_parent=inherit, unreadable=tuple(unreadable),
+                    **shape)
 
 
-def _v2_rule_shape(rule: Mapping[str, Any]) -> dict[str, Any]:
-    """A v2 rule's value fields. Only reached for a rule the value-type
-    extractor already accepted, so exactly one of the four keys is present
-    and well-formed; the rest keep their "not stated" default."""
+def _v2_rule_shape(rule: Mapping[str, Any],
+                   location: str) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """→ (a v2 rule's value fields, the reasons any of them was unreadable).
+
+    Only reached for a rule the value-type extractor already accepted, so
+    exactly one of the four keys is present and well-formed; the rest keep
+    their "not stated" default. The ``values`` block's own lists are the one
+    part that can still be malformed, and a malformation there is reported
+    rather than folded into an empty list.
+    """
     shape = dict(_ENFORCEMENT_DEFAULTS)
     if isinstance(rule.get("enforce"), bool):
         shape["enforce"] = rule["enforce"]
@@ -436,37 +509,63 @@ def _v2_rule_shape(rule: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(rule.get("denyAll"), bool):
         shape["deny_all"] = rule["denyAll"]
     values = rule.get("values")
-    if isinstance(values, Mapping):
-        shape.update(_values_shape(values))
-    return shape
+    if not isinstance(values, Mapping):
+        return shape, ()
+    lists, unreadable = _values_shape(values, f"{location}.values")
+    shape.update(lists)
+    return shape, unreadable
 
 
-def _values_shape(values: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
-    """The allowed/denied lists of a v2 ``values`` block or a v1 ``listPolicy``,
-    read in either the REST (``allowedValues``) or the terraform
-    (``allowed_values``) spelling."""
-    return {"allowed_values": _string_tuple(values, "allowedValues", "allowed_values"),
-            "denied_values": _string_tuple(values, "deniedValues", "denied_values")}
+def _values_shape(values: Mapping[str, Any],
+                  location: str) -> tuple[dict[str, tuple[str, ...]], tuple[str, ...]]:
+    """→ (the allowed/denied lists, the reasons either could not be read).
+
+    Read from a v2 ``values`` block or a v1 ``listPolicy``, in either the REST
+    (``allowedValues``) or the terraform (``allowed_values``) spelling;
+    *location* is the json-path of the block itself, so a reason names the
+    field a verdict must point at.
+    """
+    shape: dict[str, tuple[str, ...]] = {}
+    unreadable: list[str] = []
+    for field, keys in (("allowed_values", ("allowedValues", "allowed_values")),
+                        ("denied_values", ("deniedValues", "denied_values"))):
+        shape[field], reason = _string_tuple(values, keys, location)
+        if reason is not None:
+            unreadable.append(reason)
+    return shape, tuple(unreadable)
 
 
-def _string_tuple(mapping: Mapping[str, Any], *keys: str) -> tuple[str, ...]:
-    """The first of *keys* present in *mapping*, as a tuple of its non-empty
-    string entries. A non-array, or an entry that is not a string, is dropped
-    with a debug log — an unrepresentable value is never guessed at."""
+def _string_tuple(mapping: Mapping[str, Any], keys: tuple[str, ...],
+                  location: str) -> tuple[tuple[str, ...], str | None]:
+    """→ (the non-empty string entries of the first of *keys* present in
+    *mapping*, why anything was dropped).
+
+    A non-array reads as NO values, and an entry that is not a non-empty string
+    is dropped — but neither is silence any more: an empty tuple that came out
+    of a malformed field is indistinguishable from one the document really set
+    empty, and downstream that difference is a positive verdict against an
+    abstention. The type guard is load-bearing in its own right: without it a
+    string is iterated character by character. A reason names the spelling
+    actually found under *location* — the REST one or the terraform one — so it
+    points at a field the document really carries.
+    """
     for key in keys:
         if key not in mapping:
             continue
+        path = f"{location}.{key}"
         raw = mapping[key]
         if not isinstance(raw, list):
             logger.debug("%s is %s, not an array — no values read",
-                         key, type(raw).__name__)
-            return ()
+                         path, type(raw).__name__)
+            return (), f"{path} is not an array, got {type(raw).__name__}"
         out = tuple(v for v in raw if isinstance(v, str) and v)
         if len(out) != len(raw):
             logger.debug("%s: %d of %d entries are not non-empty strings — dropped",
-                         key, len(raw) - len(out), len(raw))
-        return out
-    return ()
+                         path, len(raw) - len(out), len(raw))
+            return out, (f"{path}: {len(raw) - len(out)} of {len(raw)} entries "
+                         f"are not non-empty strings")
+        return out, None
+    return (), None
 
 
 def _bool_or_none(mapping: Mapping[str, Any], *keys: str) -> bool | None:
