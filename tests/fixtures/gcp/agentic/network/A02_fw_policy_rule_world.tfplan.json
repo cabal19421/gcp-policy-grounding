@@ -1,0 +1,66 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_compute_firewall_policy_rule.world_ssh",
+          "mode": "managed",
+          "type": "google_compute_firewall_policy_rule",
+          "name": "world_ssh",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "firewall_policy": "organizations/123456789012/locations/global/firewallPolicies/org-baseline",
+            "description": "temporary jump-host access",
+            "action": "allow",
+            "direction": "INGRESS",
+            "priority": 100,
+            "disabled": false,
+            "enable_logging": false,
+            "target_resources": [],
+            "target_service_accounts": [],
+            "match": [
+              {
+                "src_ip_ranges": ["0.0.0.0/0"],
+                "dest_ip_ranges": [],
+                "layer4_configs": [{"ip_protocol": "tcp", "ports": ["22"]}]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "google_compute_firewall_policy_rule.world_ssh",
+      "mode": "managed",
+      "type": "google_compute_firewall_policy_rule",
+      "name": "world_ssh",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "firewall_policy": "organizations/123456789012/locations/global/firewallPolicies/org-baseline",
+          "description": "temporary jump-host access",
+          "action": "allow",
+          "direction": "INGRESS",
+          "priority": 100,
+          "disabled": false,
+          "enable_logging": false,
+          "target_resources": [],
+          "target_service_accounts": [],
+          "match": [
+            {
+              "src_ip_ranges": ["0.0.0.0/0"],
+              "dest_ip_ranges": [],
+              "layer4_configs": [{"ip_protocol": "tcp", "ports": ["22"]}]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
