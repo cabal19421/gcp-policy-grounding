@@ -1,0 +1,43 @@
+{
+  "//": "Terraform JSON syntax, `resource` MAPPING encoding: type -> name -> body. perimeter.tf.json in this directory carries the OTHER legal encoding (a `resource` LIST of single-key objects). This file is the gate's reviewable HCL-JSON PROPOSAL fixture: it opens tcp/22 to the world and grants a real estate role to a real estate principal, so routing it must produce verdicts rather than an abstention. It lives here, beside the corpus, so the gate task creates no fixture of its own and the two encodings cannot drift apart.",
+  "variable": {
+    "change_ticket": {
+      "type": "string"
+    }
+  },
+  "resource": {
+    "google_compute_firewall": {
+      "allow_ssh_world": {
+        "//": "description is an interpolation of a variable: reason `interpolation`, on that attribute only. source_ranges stays LITERAL on purpose -- the open range is the thing under review and must never hide behind a variable.",
+        "name": "allow-ssh-world",
+        "project": "acme-prod",
+        "network": "projects/acme-prod/global/networks/vpc-main",
+        "description": "${var.change_ticket}",
+        "direction": "INGRESS",
+        "priority": 700,
+        "disabled": false,
+        "allow": [
+          {
+            "protocol": "tcp",
+            "ports": [
+              "22"
+            ]
+          }
+        ],
+        "source_ranges": [
+          "0.0.0.0/0"
+        ]
+      }
+    },
+    "google_project_iam_binding": {
+      "data_eng_owner": {
+        "//": "roles/owner and group:data-eng@acme.example are both in the estate fixture's vocabulary, and this binding is NOT in its iam_bindings: a grounded proposal that widens.",
+        "project": "acme-prod",
+        "role": "roles/owner",
+        "members": [
+          "group:data-eng@acme.example"
+        ]
+      }
+    }
+  }
+}
