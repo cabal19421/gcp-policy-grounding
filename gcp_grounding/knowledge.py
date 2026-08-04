@@ -68,7 +68,9 @@ UNKNOWN = Unknown()
 # Every top-level key a snapshot may carry besides captured_at. A typo here
 # ("role" for "roles") must not silently demote a whole category to UNKNOWN,
 # so from_dict rejects unrecognized keys outright.
-_CATEGORIES = ("roles", "permissions", "principals", "constraints", "resource_types")
+_CATEGORIES = ("roles", "permissions", "principals", "constraints", "resource_types",
+               "networks", "subnetworks", "network_tags", "service_accounts",
+               "access_levels", "restricted_services")
 
 
 def _str_set(value: Any, where: str) -> frozenset[str] | None:
@@ -124,6 +126,26 @@ class GcpSnapshot:
     constraints: dict[str, dict[str, Any]] | None = None
     #: asset types (e.g. "compute.googleapis.com/Instance").
     resource_types: frozenset[str] | None = None
+    #: VPC networks as "projects/<project>/global/networks/<name>" (extractors
+    #: normalize self-links by stripping the
+    #: "https://www.googleapis.com/compute/v1/" prefix).
+    networks: frozenset[str] | None = None
+    #: subnetworks as "projects/<project>/regions/<region>/subnetworks/<name>".
+    subnetworks: frozenset[str] | None = None
+    #: bare network tag strings (e.g. "web", "bastion"). PRESENCE-ONLY: GCP has
+    #: no "list all network tags" API — a tag is created implicitly by the rule
+    #: naming it, so a capture is inherently partial and a miss must NEVER read
+    #: as absence. See network_tag_exists, which returns True or UNKNOWN, never
+    #: False.
+    network_tags: frozenset[str] | None = None
+    #: bare service-account emails (e.g.
+    #: "ci-deployer@acme-prod.iam.gserviceaccount.com") — deliberately WITHOUT
+    #: the "serviceAccount:" prefix, so this category is distinct from principals.
+    service_accounts: frozenset[str] | None = None
+    #: access levels as "accessPolicies/<n>/accessLevels/<name>".
+    access_levels: frozenset[str] | None = None
+    #: VPC-SC restricted service hostnames (e.g. "storage.googleapis.com").
+    restricted_services: frozenset[str] | None = None
 
     # -- construction ---------------------------------------------------------
 
@@ -188,6 +210,12 @@ class GcpSnapshot:
             principals=_str_set(data.get("principals"), "principals"),
             constraints=constraints,
             resource_types=_str_set(data.get("resource_types"), "resource_types"),
+            networks=_str_set(data.get("networks"), "networks"),
+            subnetworks=_str_set(data.get("subnetworks"), "subnetworks"),
+            network_tags=_str_set(data.get("network_tags"), "network_tags"),
+            service_accounts=_str_set(data.get("service_accounts"), "service_accounts"),
+            access_levels=_str_set(data.get("access_levels"), "access_levels"),
+            restricted_services=_str_set(data.get("restricted_services"), "restricted_services"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -210,6 +238,18 @@ class GcpSnapshot:
                                   for name in sorted(self.constraints)}
         if self.resource_types is not None:
             out["resource_types"] = sorted(self.resource_types)
+        if self.networks is not None:
+            out["networks"] = sorted(self.networks)
+        if self.subnetworks is not None:
+            out["subnetworks"] = sorted(self.subnetworks)
+        if self.network_tags is not None:
+            out["network_tags"] = sorted(self.network_tags)
+        if self.service_accounts is not None:
+            out["service_accounts"] = sorted(self.service_accounts)
+        if self.access_levels is not None:
+            out["access_levels"] = sorted(self.access_levels)
+        if self.restricted_services is not None:
+            out["restricted_services"] = sorted(self.restricted_services)
         return out
 
     def captured_categories(self) -> tuple[str, ...]:
@@ -257,6 +297,41 @@ class GcpSnapshot:
         if self.resource_types is None:
             return UNKNOWN
         return name in self.resource_types
+
+    def network_exists(self, name: str) -> bool | Unknown:
+        if self.networks is None:
+            return UNKNOWN
+        return name in self.networks
+
+    def subnetwork_exists(self, name: str) -> bool | Unknown:
+        if self.subnetworks is None:
+            return UNKNOWN
+        return name in self.subnetworks
+
+    def network_tag_exists(self, name: str) -> bool | Unknown:
+        """PRESENCE-ONLY: GCP has no "list all network tags" API, so a captured
+        vocabulary is inherently partial and a miss is not evidence of absence.
+        Returns True when the tag is in a captured vocabulary and UNKNOWN
+        otherwise — NEVER False. sx-reasoner-categories enforces the same
+        asymmetry at the Datalog layer."""
+        if self.network_tags is not None and name in self.network_tags:
+            return True
+        return UNKNOWN
+
+    def service_account_exists(self, name: str) -> bool | Unknown:
+        if self.service_accounts is None:
+            return UNKNOWN
+        return name in self.service_accounts
+
+    def access_level_exists(self, name: str) -> bool | Unknown:
+        if self.access_levels is None:
+            return UNKNOWN
+        return name in self.access_levels
+
+    def restricted_service_exists(self, name: str) -> bool | Unknown:
+        if self.restricted_services is None:
+            return UNKNOWN
+        return name in self.restricted_services
 
     @cached_property
     def _role_included_permissions(self) -> frozenset[str]:
