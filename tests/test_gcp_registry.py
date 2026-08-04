@@ -152,13 +152,19 @@ def _tf_full_expected():
     ("tf_plan_full", _tf_full_expected()),
 ])
 def test_no_providers_is_byte_identical(snap, name, expected):
-    # Of the default PROVIDER_MODULES only gcp_grounding.org_checks is part of
-    # this checkout, and it owns exactly one document check and one claim kind
-    # of its own — it must contribute nothing to any other kind, nor to the
-    # terraform extractors.
-    assert {f.__name__ for f in registry.document_checks()} <= {"check_org_estate"}
-    assert registry.tf_extractors() == {}
+    # Two domain modules are landed here: org_checks contributes
+    # check_org_estate and hfw_checks contributes check_hierarchical_order.
+    # Neither returns verdicts for a document that makes no claim of its
+    # own, and hfw_claims' terraform extractors match no resource type
+    # these fixtures use, which is what the byte-identical assertion below
+    # then proves.
+    assert {fn.__name__ for fn in registry.document_checks()} <= {
+        "check_org_estate", "check_hierarchical_order"}
     assert registry.claim_checks("role") == ()
+    fixture_types = {"google_project_iam_binding", "google_project_iam_member",
+                     "google_project_iam_policy", "google_project_iam_custom_role",
+                     "google_org_policy_policy"}
+    assert fixture_types.isdisjoint(registry.tf_extractors())
     report = ground_policy(POLICIES / f"{name}.json", snap)
     got = sorted((v.status, v.kind, v.target) for v in report.verdicts)
     assert got == sorted(expected)
