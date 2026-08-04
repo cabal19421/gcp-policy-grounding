@@ -4,6 +4,35 @@
   ],
   "captured_at": "2026-07-18T09:30:00Z",
   "cloud_armor_policies": {
+    "armor-policy-prod": {
+      "rules": [
+        {
+          "action": "deny(403)",
+          "match": {
+            "expr": null,
+            "src_ip_ranges": [
+              "203.0.113.0/24"
+            ],
+            "versioned_expr": "SRC_IPS_V1"
+          },
+          "preview": false,
+          "priority": 1000
+        },
+        {
+          "action": "allow",
+          "match": {
+            "expr": null,
+            "src_ip_ranges": [
+              "*"
+            ],
+            "versioned_expr": "SRC_IPS_V1"
+          },
+          "preview": false,
+          "priority": 2147483647
+        }
+      ],
+      "type": "CLOUD_ARMOR"
+    },
     "projects/acme-prod/global/securityPolicies/edge-waf": {
       "rules": [
         {

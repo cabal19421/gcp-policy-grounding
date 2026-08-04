@@ -68,6 +68,7 @@ DOCUMENT_CHECK_OWNERS = {
     # kind would break the verdict-set equality below; that is what pins
     # its silence on these fixtures.
     "gcp_grounding.vpcsc_checks": {"check_perimeter_estate"},
+    "gcp_grounding.armor_checks": {"check_security_policy"},
 }
 
 STUB = "gcp_grounding_stub_provider"
