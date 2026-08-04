@@ -157,7 +157,14 @@ def test_domain_probes_are_behavioural_not_kind_lookups():
     assert capabilities.probe(capabilities.IAM_EXISTENCE).live is True
     assert capabilities.probe(capabilities.ORG_CONSTRAINT_VALUE).live is True
 
-    assert env.HAVE_ESTATE_CATEGORY is False
+    # HAVE_ESTATE_CATEGORY was False while no estate fixture existed. The
+    # integrated tree carries one, so the honest value is True — and True
+    # BECAUSE a real merged estate document loads, not because an exception was
+    # swallowed into a flag: the loaded snapshot must actually carry the record
+    # tables the estate-tier checks read.
+    assert env.HAVE_ESTATE_CATEGORY is True
+    estate = GcpSnapshot.from_dict(env.merged_estate_document())
+    assert "firewall_rules" in estate.captured_categories()
 
 
 def test_have_claim_kinds_matches_current_kinds():
@@ -203,18 +210,21 @@ def test_snapshot_variant_drops_a_category(snapshot_variant):
         assert other in categories
 
 
-def test_snapshot_variant_captured_at_round_trips(snapshot_variant):
+def test_snapshot_variant_captured_at_round_trips(snapshot_variant,
+                                                 estate_snapshot_path):
     stale = "2019-01-01T00:00:00Z"
     path = snapshot_variant(captured_at=stale)
     snap = GcpSnapshot.load(path)
     assert snap.captured_at == stale
-    assert set(snap.captured_categories()) == {
-        "roles",
-        "permissions",
-        "principals",
-        "constraints",
-        "resource_types",
-    }
+    # Overriding captured_at drops NOTHING: the variant captures exactly what
+    # the source estate snapshot captures. Asserted against the source rather
+    # than a literal list, because the integrated estate fixture carries the six
+    # flat vocabularies and the seven record tables as well as the five original
+    # ones — a hardcoded five would silently stop noticing a dropped table.
+    source = GcpSnapshot.load(estate_snapshot_path)
+    assert set(snap.captured_categories()) == set(source.captured_categories())
+    assert {"roles", "permissions", "principals", "constraints",
+            "resource_types"} <= set(snap.captured_categories())
 
 
 def test_snapshot_variant_name_is_stable(snapshot_variant):
