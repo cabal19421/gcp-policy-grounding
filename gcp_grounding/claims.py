@@ -6,13 +6,22 @@ constraint is used list-typed") together with a json-path ``location`` into
 the source document, so a verdict can point back at the exact field.
 
 The extractor is deliberately conservative: a claim is emitted only when the
-field resolves unambiguously. Anything else — malformed fields, request-time
-constructs (tag-based conditions, IAM Conditions referencing runtime-only
-attributes), members that are not estate principals (``allUsers``,
-``deleted:…``) — is *skipped*, never guessed at: no claim means the reasoner
-stays silent rather than minting a false verdict. ``request.time`` conditions
-are NOT skipped — time-window satisfiability is exactly what the z3 layer
-decides offline.
+field resolves unambiguously. Malformed fields and request-time constructs
+(tag-based conditions, IAM Conditions referencing runtime-only attributes)
+are *skipped*, never guessed at: no claim means the reasoner stays silent
+rather than minting a false verdict. ``request.time`` conditions are NOT
+skipped — time-window satisfiability is exactly what the z3 layer decides
+offline.
+
+Binding members are the one place nothing is silently dropped. An estate
+principal (``user:``/``serviceAccount:``/``group:``/``domain:``) yields a
+``principal`` claim; the public principals ``allUsers`` and
+``allAuthenticatedUsers`` yield a ``public_principal`` claim carrying the
+grant polarity and the binding's role; every other member — ``deleted:…``,
+``principal://…``, ``principalSet://…``, a non-string — yields an
+``unmodelled_principal`` claim. A member the snapshot cannot enumerate is
+recorded (as unverified downstream), never omitted, so public exposure can
+no longer hide in a byte-identical clean report.
 
 Claim kinds:
 
@@ -77,7 +86,7 @@ from .core.log import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ["KINDS", "Claim", "freeze", "unfreeze",
+__all__ = ["KINDS", "PUBLIC_PRINCIPALS", "Claim", "freeze", "unfreeze",
            "iam_policy_claims", "org_policy_claims"]
 
 KINDS = (
@@ -96,9 +105,17 @@ KINDS = (
 )
 
 #: Member prefixes that name estate principals a snapshot can enumerate.
-#: Everything else (allUsers, allAuthenticatedUsers, deleted:…, principal://
-#: and principalSet:// federated identities) is skipped, not guessed at.
+#: A member matching one yields a ``principal`` claim; the public principals
+#: below yield ``public_principal``; anything else (deleted:…, principal://
+#: and principalSet:// federated identities, a non-string) yields
+#: ``unmodelled_principal`` — no member is silently dropped.
 _PRINCIPAL_PREFIXES = ("user:", "serviceAccount:", "group:", "domain:")
+
+#: The two members that open a resource to everyone. In an IAM *allow* policy
+#: each is a public-exposure hole (emitted with ``polarity="grant"``); the same
+#: member named by an IAM *deny* policy is a guardrail, which is why
+#: :mod:`~gcp_grounding.iam_deny` emits it with ``polarity="deny"`` instead.
+PUBLIC_PRINCIPALS = ("allUsers", "allAuthenticatedUsers")
 
 #: Substrings marking CEL constructs resolvable only at request time — tag
 #: lookups and caller/transport attributes. An expression mentioning any of
@@ -233,11 +250,17 @@ def iam_policy_claims(policy: Mapping[str, Any]) -> list[Claim]:
         members = binding.get("members")
         if isinstance(members, list):
             for j, member in enumerate(members):
+                loc = f"bindings[{i}].members[{j}]"
                 if isinstance(member, str) and member.startswith(_PRINCIPAL_PREFIXES):
-                    claims.append(Claim("principal", member, f"bindings[{i}].members[{j}]"))
+                    claims.append(Claim("principal", member, loc))
+                elif member in PUBLIC_PRINCIPALS:
+                    claims.append(Claim.of("public_principal", member, loc,
+                                           polarity="grant",
+                                           role=role if isinstance(role, str) else ""))
                 else:
-                    logger.debug("bindings[%d].members[%d] (%r) is not an estate principal "
-                                 "— skipped", i, j, member)
+                    logger.debug("bindings[%d].members[%d] (%r) is not an estate "
+                                 "principal — recorded as unmodelled", i, j, member)
+                    claims.append(Claim("unmodelled_principal", str(member), loc))
         condition = binding.get("condition")
         if isinstance(condition, Mapping):
             expression = condition.get("expression")
