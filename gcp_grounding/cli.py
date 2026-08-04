@@ -32,6 +32,35 @@ a broken hook setup must never block an edit. A raw ``.tf`` file is not
 ``terraform show -json`` output, so it lands in ``unverified`` via the
 preflight fail-open contract and passes, honestly unjudged.
 
+The hook is SCOPED, and the scope is the contract: it grounds events from
+any tool EXCEPT a curated read-only set (:data:`_READ_ONLY_TOOLS`), and it
+declines ``PreToolUse`` file events with an explanation on stderr instead of
+judging them. Two decisions, each with a reason.
+
+*Reading a policy is not changing one.* A ``Read`` of a bad policy used to
+exit 2, which blocks on a file the agent did not write; a guardrail that
+fires on inspection is the classic reason operators switch guardrails off.
+The exit-2 stderr is fed back to the agent as if it had just made that
+error, corrupting the block-then-retry loop; and it is trivially
+self-inflicted, since an agent asked to AUDIT policies cannot read them. The
+obvious counter-argument — that scoping opens a bypass — is answered by the
+*shape* of the fix: :data:`_READ_ONLY_TOOLS` is a DENY-list of read-only
+tools, never an ALLOW-list of mutators. An unknown ``tool_name``, an absent
+one, and every ``mcp__*`` tool all stay INSIDE the gate, so the change
+removes a false-positive class and cannot remove coverage.
+
+*A PreToolUse file event cannot be judged honestly.* ``ground_policy`` reads
+the file FROM DISK, and on ``PreToolUse`` the edit has not landed, so disk
+still holds the OLD content: grounding it would produce a verdict about the
+wrong document — a WRONG verdict, not merely a useless one. Abstaining out
+loud is the only honest option, and the stderr line names the path and tells
+the operator to register the hook on ``PostToolUse`` instead. ``PreToolUse``
+for a BASH command is the opposite case: there the mutation genuinely has
+not happened yet, which is precisely when you want to intervene, and it is
+handled by the bash arm, which runs before this check — a Bash event carries
+a ``command``, never a ``tool_input.file_path``, so this check returns
+"proceed" for it either way.
+
 ``--explain`` re-derives and dumps (to stderr, keeping stdout parseable for
 ``--format json``) the z3 constraints this run generated: the translated
 formula per ``cel`` condition and the new⊈old satisfiability assertion when
@@ -80,6 +109,30 @@ _FORMATS = {"text": "human", "json": "json"}
 
 #: File suffixes ``--hook`` treats as policy documents worth grounding.
 _HOOK_SUFFIXES = (".tf", ".json")
+
+#: Tools whose events ``--hook`` refuses to ground, because they change
+#: nothing: reading a policy is not proposing one.
+#:
+#: A DENY-list, deliberately — NOT an allow-list of mutating tools. An unknown
+#: ``tool_name`` (a new MCP writer, a tool this release has never heard of) is
+#: not on it, so it stays INSIDE the gate. That asymmetry is what makes the
+#: scoping safe: it can only ever remove false positives, never open a bypass.
+_READ_ONLY_TOOLS = frozenset({
+    "Read",
+    "NotebookRead",
+    "Glob",
+    "Grep",
+    "LS",
+    "WebFetch",
+    "WebSearch",
+    "Task",
+    "TodoWrite",
+    "BashOutput",
+    "KillShell",
+    "ExitPlanMode",
+    "SlashCommand",
+    "AskUserQuestion",
+})
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -199,8 +252,24 @@ def _load_snapshot(flag: str | None) -> tuple[GcpSnapshot | None, str | None]:
 
 def _run_hook(args: argparse.Namespace) -> int:
     """Ground the file a PostToolUse event says was edited. Fail-open: only
-    a real ungrounded/contradicted finding exits nonzero."""
-    path = _hook_file_path(_read_hook_event(sys.stdin))
+    a real ungrounded/contradicted finding exits nonzero.
+
+    :func:`_hook_scope_skip` runs first and decides whether this event is in
+    scope at all — a read-only tool, or a ``PreToolUse`` file edit, never
+    reaches the grounding pass.
+    """
+    event = _read_hook_event(sys.stdin)
+    if event is None:
+        return EXIT_OK
+    skip = _hook_scope_skip(event)
+    if skip is not None:
+        if skip:
+            print(f"gcp-ground --hook: {skip}", file=sys.stderr)
+        else:
+            logger.debug("--hook: out of scope (tool_name=%r)",
+                         event.get("tool_name"))
+        return EXIT_OK
+    path = _hook_file_path(event)
     # casefold() mirrors the gate's case-insensitive suffix match: an edited
     # 'IAM.POLICY.JSON' is a policy document too.
     if path is None or not path.casefold().endswith(_HOOK_SUFFIXES):
@@ -234,6 +303,32 @@ def _read_hook_event(stream: Any) -> Mapping[str, Any] | None:
               f"object — nothing was checked (fail-open)", file=sys.stderr)
         return None
     return event
+
+
+def _hook_scope_skip(event: Mapping[str, Any]) -> str | None:
+    """Why this event must not be grounded, or ``None`` to proceed.
+
+    The empty string means "skip silently" (nothing happened that a guardrail
+    should have an opinion about); a non-empty string is the explanation to
+    print on stderr before skipping. See the module docstring for why the
+    scope is a deny-list and why ``PreToolUse`` file events are declined
+    rather than judged.
+    """
+    tool_name = event.get("tool_name")
+    if isinstance(tool_name, str) and tool_name in _READ_ONLY_TOOLS:
+        return ""  # a read is not a change — there is nothing to judge
+    if event.get("hook_event_name") == "PreToolUse":
+        path = _hook_file_path(event)
+        if path:
+            # The edit has not landed, so grounding the disk content would
+            # judge the wrong document. Abstain out loud, and say how to fix
+            # the registration.
+            return (f"PreToolUse for {path}: the edit has not landed yet, so "
+                    f"the file on disk is still the pre-edit content — "
+                    f"grounding it would judge the wrong document. Nothing "
+                    f"was checked; register this hook on PostToolUse to "
+                    f"ground the file the agent actually wrote.")
+    return None
 
 
 def _hook_file_path(event: Mapping[str, Any] | None) -> str | None:
