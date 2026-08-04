@@ -1,0 +1,11 @@
+{
+  "constraint": "constraints/iam.disableServiceAccountKeyCreation",
+  "name": "projects/acme-prod/policies/iam.disableServiceAccountKeyCreation",
+  "spec": {
+    "rules": [
+      {
+        "enforce": false
+      }
+    ]
+  }
+}

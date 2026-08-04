@@ -1,0 +1,7 @@
+{
+  "etag": "CNy0oO0GEIjHkr8B",
+  "name": "projects/acme-prod/policies/iam.disableServiceAccountKeyCreation",
+  "spec": {
+    "inherit_from_parent": true
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "etag": "CNy0oO0GEJi4tPAB",
+  "name": "projects/acme-prod/policies/iam.allowedPolicyMemberDomains",
+  "spec": {
+    "rules": [
+      {
+        "values": {
+          "allowedValues": [
+            "C01acme42",
+            "evil.example"
+          ]
+        }
+      }
+    ]
+  }
+}
