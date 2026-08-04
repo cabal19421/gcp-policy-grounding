@@ -519,7 +519,8 @@ def _source_id(builder: LedgerBuilder, known: set[str], resolution: Any) -> str:
 # -- the whole pipeline -------------------------------------------------------
 
 
-def capture(root_or_paths: Any, *, options: CaptureOptions | None = None) -> Capture:
+def capture(root_or_paths: Any, *, options: CaptureOptions | None = None,
+            vault: redact.SecretVault | None = None) -> Capture:
     """Discover, read, map, resolve and :func:`build`, in that order.
 
     *root_or_paths* is one path or an iterable of them; each is walked by
@@ -530,6 +531,13 @@ def capture(root_or_paths: Any, *, options: CaptureOptions | None = None) -> Cap
     return a refusal rather than raising; this catches the case where one
     raises anyway, because a capture that partially failed must SAY SO rather
     than silently shrink into a smaller estate that looks clean.
+
+    Pass *vault* to have every plaintext the readers replaced remembered by a
+    vault that OUTLIVES this call — ``sources.vault()`` is the one the log
+    filter and the report scrub read, and a capture that keeps its own private
+    vault leaves both of them checking against nothing. A caller that does not
+    pass one gets a throwaway vault, which is still what makes the fail-safe
+    routes in ``redact`` work; it just cannot scrub anything afterwards.
 
     ``tfsource`` is imported HERE rather than at module scope: this is the one
     boundary at which a flat module needs a reader at call time, and keeping
@@ -565,7 +573,7 @@ def capture(root_or_paths: Any, *, options: CaptureOptions | None = None) -> Cap
         region=options.region, organization=options.organization,
         folder=options.folder, access_policy=options.access_policy)
 
-    vault = redact.SecretVault()
+    vault = vault if vault is not None else redact.SecretVault()
     stamp = options.captured_at or None
     collected: list[facts.Fact] = []
     sources: list[SourceRecord] = []
