@@ -1,0 +1,17 @@
+{
+  "bindings": [
+    {
+      "condition": {
+        "description": "Backfill window agreed with data-eng",
+        "expression": "request.time >= timestamp(\"2026-08-01T00:00:00Z\") && request.time < timestamp(\"2026-12-01T00:00:00Z\")",
+        "title": "events-etl backfill window"
+      },
+      "members": [
+        "serviceAccount:etl-runner@acme-prod.iam.gserviceaccount.com"
+      ],
+      "role": "roles/bigquery.dataEditor"
+    }
+  ],
+  "etag": "BwYaBnJdRlD=",
+  "version": 3
+}
