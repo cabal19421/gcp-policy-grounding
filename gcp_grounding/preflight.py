@@ -22,9 +22,11 @@ absent ``bindings`` key is not — nothing was read there).
 The ``terraform`` claim extractor (:mod:`gcp_grounding.tf_claims`) is looked
 up dynamically: where the module is not present, a tf plan document yields a
 single ``unverified`` verdict saying so instead of an import error. A claim
-kind no layer decides — one outside the reasoner's existence kinds (which
-``resource_type_ref`` belongs to), ``cel`` and ``constraint_value`` — lands
-in ``unverified`` too: every extracted claim receives exactly one verdict.
+kind that no layer decides — no existence pass, no ``cel``/``constraint_value``
+check, and no domain check registered in :mod:`gcp_grounding.registry` — lands
+in ``unverified`` naming that gap, so every extracted claim still receives at
+least one verdict (existence kinds such as ``resource_type_ref`` are decided by
+the Datalog pass, not left unverified).
 
 The optional *baseline* enables the z3 new⊆old policy comparison
 (:func:`~gcp_grounding.constraints.check_policy_subset`); it is defined for
@@ -38,6 +40,7 @@ import json
 import os
 from typing import Any, Mapping
 
+from . import registry
 from .claims import iam_policy_claims, org_policy_claims
 from .constraints import check_cel, check_constraint_value, check_policy_subset
 from .core.log import get_logger
@@ -45,6 +48,7 @@ from .core.report import GroundingReport, Verdict
 from .core.solver import get_solver
 from .knowledge import GcpSnapshot
 from .reasoner import EXISTENCE_KINDS, ground_existence
+from .registry import CheckContext
 
 logger = get_logger(__name__)
 
@@ -123,21 +127,53 @@ def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
                            f"checkable could be extracted from it — nothing "
                            f"was checked"))
 
+    # Baseline is parsed ONCE here and shared: CheckContext.baseline is the
+    # PARSED document (not the path), so the registry pair checks and
+    # _subset_verdict read it without re-loading. (sx-sec-preflight adds a
+    # THIRD consumer of this same parsed baseline and must reuse this load
+    # rather than re-reading the path.) An unreadable baseline abstains for a
+    # stated reason below rather than letting a pair check silently see None.
+    baseline_doc = baseline_kind = baseline_source = baseline_error = None
+    if baseline is not None:
+        baseline_doc, baseline_source, baseline_error = _load_document(baseline)
+        if baseline_error is not None:
+            baseline_doc = None
+        else:
+            baseline_kind = detect_kind(baseline_doc)
+
+    ctx = CheckContext(snapshot=snapshot, solver=solver, document=doc,
+                       document_kind=kind, source=source, claims=tuple(claims),
+                       baseline=baseline_doc, baseline_kind=baseline_kind)
+
     existence = [c for c in claims if c.kind in EXISTENCE_KINDS]
     if existence:
         ground_existence(existence, snapshot, report)
     for claim in claims:
+        # Every claim — existence kinds included — is offered to the registry;
+        # the IAM escalation check, for one, attaches to `role`.
+        registry_verdicts = registry.run_claim_checks(claim, ctx)
+        for v in registry_verdicts:
+            report.add(v)
         if claim.kind == "cel":
             report.add(check_cel(claim, solver))
         elif claim.kind == "constraint_value":
             report.add(check_constraint_value(claim, snapshot))
-        elif claim.kind not in EXISTENCE_KINDS:
+        elif (claim.kind not in EXISTENCE_KINDS and not registry_verdicts):
             report.add(Verdict("unverified", claim.kind, claim.value, 0,
                                f"{claim.location}: no offline check is wired for "
                                f"claim kind {claim.kind!r} — not decided"))
 
+    for v in registry.run_document_checks(ctx):
+        report.add(v)
+
     if baseline is not None:
-        report.add(_subset_verdict(doc, kind, baseline, solver))
+        if baseline_error is not None:
+            report.add(Verdict("unverified", "subset", "iam-policy", 0,
+                               f"{baseline_source}: baseline {baseline_error} "
+                               f"— new⊆old was not decided"))
+        else:
+            for v in _subset_verdict(doc, kind, solver, ctx, baseline_source):
+                report.add(v)
 
     counts = report.counts()
     logger.debug("ground_policy(%s): kind=%s claims=%d verdicts=%s ok=%s",
@@ -201,8 +237,21 @@ def _extract_claims(doc: Any, kind: str | None, source: str,
                                f"claim extractor (gcp_grounding.tf_claims) is not "
                                f"available — its claims were not extracted"))
             return []
+    elif kind == "iam_policy":
+        extract = iam_policy_claims
+    elif kind == "org_policy":
+        extract = org_policy_claims
     else:
-        extract = iam_policy_claims if kind == "iam_policy" else org_policy_claims
+        # A document kind only a later domain module recognizes: its extractor
+        # is registered in the registry, and degrades to an honest unverified
+        # exactly like the tf-plan arm when that module is not installed.
+        extract = registry.document_extractor(kind)
+        if extract is None:
+            report.add(Verdict("unverified", "document", source, 0,
+                               f"{source}: detected {kind} content, but no claim "
+                               f"extractor for document kind {kind!r} is available "
+                               f"— its claims were not extracted"))
+            return []
     try:
         return list(extract(doc))
     except Exception as exc:  # fail-open: never crash the gate on bad input
@@ -228,28 +277,33 @@ def _tf_plan_extractor():
 # -- baseline (new⊆old) comparison --------------------------------------------
 
 
-def _subset_verdict(doc: Mapping[str, Any], kind: str | None, baseline: Any,
-                    solver) -> Verdict:
-    """The new⊆old verdict for *doc* against *baseline* — defined for IAM
-    policies only; every other pairing is recorded, not raised."""
+def _subset_verdict(doc: Mapping[str, Any], kind: str | None, solver,
+                    ctx: CheckContext, baseline_source: str) -> list[Verdict]:
+    """The new⊆old verdict(s) for *doc* against the baseline already parsed on
+    *ctx* — never re-reads the path.
+
+    For IAM policies this is the z3 new⊆old comparison; for any other document
+    kind a registered :data:`~gcp_grounding.registry.PAIR_CHECKS` widening check
+    runs first, and only when there is none does the pairing record as an honest
+    ``unverified``."""
     if kind != "iam_policy":
-        return Verdict("unverified", "subset", "iam-policy", 0,
-                       f"a baseline was given, but the document was detected as "
-                       f"{kind or 'unrecognized'}, not an IAM policy — new⊆old "
-                       f"was not decided")
-    old_doc, old_source, error = _load_document(baseline)
-    if error is not None:
-        return Verdict("unverified", "subset", "iam-policy", 0,
-                       f"{old_source}: baseline {error} — new⊆old was not decided")
-    if detect_kind(old_doc) != "iam_policy":
+        pair = registry.pair_check(kind)
+        if pair is not None:
+            return registry.run_pair_check(pair, ctx)
+        return [Verdict("unverified", "subset", "iam-policy", 0,
+                        f"a baseline was given, but the document was detected as "
+                        f"{kind or 'unrecognized'}, not an IAM policy — new⊆old "
+                        f"was not decided")]
+    if ctx.baseline_kind != "iam_policy":
         # A wrapped setIamPolicy body, an org policy, a deny policy: passing
         # it raw into check_policy_subset would read its absent `bindings` as
         # "grants nothing" and mint a false `contradicted`.
-        return Verdict("unverified", "subset", "iam-policy", 0,
-                       f"{old_source}: the baseline's shape was not recognized "
-                       f"as an IAM allow policy — new⊆old was not decided")
+        return [Verdict("unverified", "subset", "iam-policy", 0,
+                        f"{baseline_source}: the baseline's shape was not "
+                        f"recognized as an IAM allow policy — new⊆old was not "
+                        f"decided")]
     try:
-        return check_policy_subset(doc, old_doc, solver)
+        return [check_policy_subset(doc, ctx.baseline, solver)]
     except ValueError as exc:
-        return Verdict("unverified", "subset", "iam-policy", 0,
-                       f"new⊆old was not decided: {exc}")
+        return [Verdict("unverified", "subset", "iam-policy", 0,
+                        f"new⊆old was not decided: {exc}")]

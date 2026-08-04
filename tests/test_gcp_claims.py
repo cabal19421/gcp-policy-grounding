@@ -58,10 +58,18 @@ def test_iam_policy_bad_exact_claims():
 
 
 def test_org_policy_good_exact_claims():
+    # Every rule yields both the value-TYPE claim and the payload-bearing
+    # enforcement claim: the type alone made `enforce: true` and
+    # `enforce: false` indistinguishable.
     assert org_policy_claims(load("org_policy_good.json")) == [
         Claim("constraint", "constraints/iam.disableServiceAccountKeyCreation", "name"),
         Claim("constraint_value", "constraints/iam.disableServiceAccountKeyCreation",
               "spec.rules[0].enforce", is_list=False),
+        Claim.of("constraint_enforcement",
+                 "constraints/iam.disableServiceAccountKeyCreation", "spec.rules[0]",
+                 node="organizations/123456789012", rule_index=0, enforce=True,
+                 allow_all=None, deny_all=None, allowed_values=(), denied_values=(),
+                 reset=None, inherit_from_parent=None),
     ]
 
 
@@ -73,6 +81,11 @@ def test_org_policy_bad_exact_claims():
         Claim("constraint", "constraints/compute.disableSerialPortAccess", "name"),
         Claim("constraint_value", "constraints/compute.disableSerialPortAccess",
               "spec.rules[0].values", is_list=True),
+        Claim.of("constraint_enforcement",
+                 "constraints/compute.disableSerialPortAccess", "spec.rules[0]",
+                 node="projects/acme-prod", rule_index=0, enforce=None,
+                 allow_all=None, deny_all=None, allowed_values=("true",),
+                 denied_values=(), reset=None, inherit_from_parent=None),
     ]
 
 
@@ -88,6 +101,13 @@ def test_legacy_list_policy_on_boolean_constraint_yields_is_list_true():
         Claim("constraint", "constraints/compute.disableSerialPortAccess", "constraint"),
         Claim("constraint_value", "constraints/compute.disableSerialPortAccess",
               "listPolicy", is_list=True),
+        # A v1 document maps onto the very same enforcement payload; it names
+        # no node of its own (its parent is the API call's).
+        Claim.of("constraint_enforcement",
+                 "constraints/compute.disableSerialPortAccess", "listPolicy",
+                 node="", rule_index=0, enforce=None, allow_all=None, deny_all=None,
+                 allowed_values=("true",), denied_values=(), reset=None,
+                 inherit_from_parent=None),
     ]
     assert claims[1].is_list is True
 
@@ -100,6 +120,11 @@ def test_legacy_boolean_policy_yields_is_list_false():
         Claim("constraint", "constraints/iam.disableServiceAccountKeyCreation", "constraint"),
         Claim("constraint_value", "constraints/iam.disableServiceAccountKeyCreation",
               "booleanPolicy", is_list=False),
+        Claim.of("constraint_enforcement",
+                 "constraints/iam.disableServiceAccountKeyCreation", "booleanPolicy",
+                 node="", rule_index=0, enforce=True, allow_all=None, deny_all=None,
+                 allowed_values=(), denied_values=(), reset=None,
+                 inherit_from_parent=None),
     ]
 
 
@@ -111,6 +136,10 @@ def test_v2_deny_all_rule_is_list_typed():
         Claim("constraint", "constraints/compute.vmExternalIpAccess", "name"),
         Claim("constraint_value", "constraints/compute.vmExternalIpAccess",
               "spec.rules[0].denyAll", is_list=True),
+        Claim.of("constraint_enforcement", "constraints/compute.vmExternalIpAccess",
+                 "spec.rules[0]", node="projects/acme-prod", rule_index=0,
+                 enforce=None, allow_all=None, deny_all=True, allowed_values=(),
+                 denied_values=(), reset=None, inherit_from_parent=None),
     ]
 
 
@@ -139,9 +168,11 @@ def test_runtime_only_attribute_condition_yields_no_cel_claim():
     assert claims == [Claim("role", "roles/viewer", "bindings[0].role")]
 
 
-def test_non_principal_members_are_skipped():
-    # allUsers/allAuthenticatedUsers, deleted members and federated identity
-    # pools are not estate principals — no claim, so no false 'ungrounded'.
+def test_non_estate_members_leave_a_trace():
+    # Non-estate members are no longer silently dropped: allUsers /
+    # allAuthenticatedUsers become 'public_principal' grants carrying the role,
+    # and everything else (deleted:…, principalSet://) becomes
+    # 'unmodelled_principal' — a skipped member always leaves a trace.
     claims = iam_policy_claims({"bindings": [{
         "role": "roles/viewer",
         "members": [
@@ -154,6 +185,16 @@ def test_non_principal_members_are_skipped():
     }]})
     assert claims == [
         Claim("role", "roles/viewer", "bindings[0].role"),
+        Claim.of("public_principal", "allUsers", "bindings[0].members[0]",
+                 polarity="grant", role="roles/viewer"),
+        Claim.of("public_principal", "allAuthenticatedUsers", "bindings[0].members[1]",
+                 polarity="grant", role="roles/viewer"),
+        Claim("unmodelled_principal",
+              "deleted:serviceAccount:gone@acme-prod.iam.gserviceaccount.com?uid=123",
+              "bindings[0].members[2]"),
+        Claim("unmodelled_principal",
+              "principalSet://iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/*",
+              "bindings[0].members[3]"),
         Claim("principal", "user:alice@acme.example", "bindings[0].members[4]"),
     ]
 
