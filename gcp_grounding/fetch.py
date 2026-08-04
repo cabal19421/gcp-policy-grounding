@@ -10,7 +10,19 @@ estate:
   (the only source :mod:`~gcp_grounding.knowledge` accepts as proof of
   *absence* — the union of role-included permissions deliberately is not);
 - org-policy constraint names + value types via the Org Policy v2 API;
-- principals via Cloud Asset Inventory ``searchAllIamPolicies``;
+- principals via Cloud Asset Inventory ``searchAllIamPolicies``
+  (:func:`fetch_principals`), and — from the SAME single pass over that estate —
+  the full per-resource IAM bindings (:func:`fetch_iam_bindings`, role + members
+  + verbatim ``condition``), the two available together via
+  :func:`fetch_principals_and_bindings` so the estate is paginated once;
+- the resource hierarchy via the Cloud Resource Manager v3 API
+  (:func:`fetch_hierarchy`): a breadth-first ``folders.list`` / ``projects.list``
+  walk from an ``organizations/<id>`` or ``folders/<id>`` root into the
+  ``resource_hierarchy`` schema, bounded by a ``max_depth`` and a visited set.
+  It returns a ``truncated`` flag, and :func:`capture_snapshot` REFUSES to mark
+  ``resource_hierarchy`` captured when the walk truncated — a partial hierarchy
+  presented as complete would let ``hierarchy_names()`` prove ABSENCE for every
+  out-of-scope node and manufacture false ``ungrounded`` blocks;
 - Terraform resource types via a cached ``terraform providers schema -json``
   — the sole source of snapshot ``resource_types``, since that category is
   the terraform provider vocabulary :mod:`~gcp_grounding.tf_claims` emits
@@ -61,6 +73,7 @@ import json
 import os
 import re
 import subprocess
+from collections import deque
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Iterator
@@ -79,12 +92,15 @@ __all__ = [
     "fetch_constraints",
     "fetch_firewall_policies",
     "fetch_firewall_rules",
+    "fetch_hierarchy",
+    "fetch_iam_bindings",
     "fetch_network_tags",
     "fetch_networks",
     "fetch_org_policies",
     "fetch_perimeters",
     "fetch_permissions",
     "fetch_principals",
+    "fetch_principals_and_bindings",
     "fetch_resource_types",
     "fetch_restricted_services",
     "fetch_roles",
@@ -109,13 +125,14 @@ def fresh_captured_at() -> str:
 
 # APIs this module knows how to talk to, with their current versions.
 _API_VERSIONS = {"iam": "v1", "orgpolicy": "v2", "cloudasset": "v1", "compute": "v1",
-                 "accesscontextmanager": "v1"}
+                 "accesscontextmanager": "v1", "cloudresourcemanager": "v3"}
 
 
 def default_client(api: str, version: str | None = None) -> Any:
     """Build a live discovery client for *api* ("iam" / "orgpolicy" /
-    "cloudasset" / "compute" / "accesscontextmanager"), resolving the optional
-    SDK only now — never at import.
+    "cloudasset" / "compute" / "accesscontextmanager" /
+    "cloudresourcemanager"), resolving the optional SDK only now — never at
+    import.
 
     Uses Application Default Credentials. Anything accepted here can be
     replaced by a test double with the same ``.collection().method(...)
@@ -323,18 +340,90 @@ def fetch_constraints(orgpolicy: Any, parent: str) -> dict[str, dict[str, Any]]:
 
 # ── Cloud Asset Inventory: principals + resource inventory ────────────────────
 
+def _search_iam_policies(asset: Any, scope: str) -> Iterator[tuple[str | None, Mapping[str, Any]]]:
+    """Yield ``(resource, policy)`` for every CAI ``searchAllIamPolicies`` result
+    under *scope*, paginating the estate exactly ONCE. ``resource`` is the
+    result's full resource name (None when a result omits it — it then cannot be
+    keyed) and ``policy`` is its IAM policy object (``{}`` when absent). Every
+    per-resource fetcher below reads this one iterator, so principals and
+    bindings never trigger a second pagination of the same estate."""
+    search = asset.v1().searchAllIamPolicies
+    for result in _paginate(search, "results", scope=scope):
+        yield result.get("resource"), (result.get("policy") or {})
+
+
 def fetch_principals(asset: Any, scope: str) -> frozenset[str]:
     """Every principal bound anywhere in *scope* (a ``projects/``,
     ``folders/`` or ``organizations/`` name), via CAI
     ``searchAllIamPolicies`` — deduplicated binding members
     ("user:…", "serviceAccount:…", "group:…", …)."""
     principals: set[str] = set()
-    search = asset.v1().searchAllIamPolicies
-    for result in _paginate(search, "results", scope=scope):
-        for binding in (result.get("policy") or {}).get("bindings", ()):
+    for _resource, policy in _search_iam_policies(asset, scope):
+        for binding in policy.get("bindings", ()):
             principals.update(m for m in binding.get("members", ()) if m)
     logger.debug("fetched %d distinct principals in %s", len(principals), scope)
     return frozenset(principals)
+
+
+def _binding_record(binding: Mapping[str, Any]) -> dict[str, Any] | None:
+    """One IAM binding → the ``iam_bindings`` binding shape (role / members /
+    verbatim condition), or None when it carries no ``role`` — a member set with
+    no role grants nothing, so it is dropped rather than keyed under a guess. The
+    ``condition`` object is preserved exactly (or None), never flattened."""
+    role = binding.get("role")
+    if not role:
+        return None
+    return {
+        "role": role,
+        "members": [m for m in binding.get("members", ()) if m],
+        "condition": binding.get("condition"),
+    }
+
+
+def fetch_iam_bindings(asset: Any, scope: str) -> dict[str, dict[str, Any]]:
+    """The full IAM bindings under *scope*, via CAI ``searchAllIamPolicies``, as
+    the ``iam_bindings`` estate schema: each resource mapped to a ``bindings``
+    list of ``{role, members, condition}`` records with the ``condition`` object
+    kept verbatim (or None). A binding with no ``role`` is skipped; a result with
+    no resource name cannot be keyed and is skipped.
+
+    Where :func:`fetch_principals` walks exactly this data and discards
+    everything but the member strings, this keeps the roles and conditions a
+    conditional-binding or escalation check needs."""
+    bindings: dict[str, dict[str, Any]] = {}
+    for resource, policy in _search_iam_policies(asset, scope):
+        if not resource:
+            continue
+        records = [r for b in policy.get("bindings", ())
+                   if (r := _binding_record(b)) is not None]
+        bindings[resource] = {"bindings": records}
+    logger.debug("fetched IAM bindings for %d resources in %s", len(bindings), scope)
+    return bindings
+
+
+def fetch_principals_and_bindings(
+        asset: Any, scope: str) -> tuple[frozenset[str], dict[str, dict[str, Any]]]:
+    """Both the principal set AND the full IAM bindings under *scope* from ONE
+    pass over the CAI estate — the two categories share the single
+    :func:`_search_iam_policies` pagination rather than walking it twice. The
+    principal set is identical to what :func:`fetch_principals` returns (members
+    from every binding, role or not); the bindings table is identical to
+    :func:`fetch_iam_bindings`. Used by :func:`capture_snapshot` when both
+    categories are requested."""
+    principals: set[str] = set()
+    bindings: dict[str, dict[str, Any]] = {}
+    for resource, policy in _search_iam_policies(asset, scope):
+        records: list[dict[str, Any]] = []
+        for binding in policy.get("bindings", ()):
+            principals.update(m for m in binding.get("members", ()) if m)
+            record = _binding_record(binding)
+            if record is not None:
+                records.append(record)
+        if resource:
+            bindings[resource] = {"bindings": records}
+    logger.debug("fetched %d principals and IAM bindings for %d resources in %s",
+                 len(principals), len(bindings), scope)
+    return frozenset(principals), bindings
 
 
 def fetch_asset_types(asset: Any, parent: str) -> frozenset[str]:
@@ -900,6 +989,139 @@ def fetch_org_policies(orgpolicy: Any,
     return policies
 
 
+# ── Cloud Resource Manager: the resource hierarchy ────────────────────────────
+
+def _hierarchy_root_type(root: str) -> str:
+    """The ``resource_hierarchy`` node type for a walk *root*, or a ValueError.
+    A walk starts at an ``organizations/<id>`` or a ``folders/<id>`` — nothing
+    else has children to enumerate."""
+    if root.startswith("organizations/"):
+        return "organization"
+    if root.startswith("folders/"):
+        return "folder"
+    raise ValueError(f"hierarchy root {root!r} must look like 'organizations/<id>' "
+                     f"or 'folders/<id>' — a walk starts at an org or a folder")
+
+
+def _hierarchy_number(name: Any) -> str | None:
+    """The trailing numeric id of a ``<type>/<id>`` resource name (a project's
+    ``projects/<number>`` name, a folder's ``folders/<id>``, an org's
+    ``organizations/<id>``), or None. This is what feeds the ``projects/<number>``
+    alias :meth:`GcpSnapshot.hierarchy_names` builds."""
+    if isinstance(name, str) and "/" in name:
+        ident = name.rsplit("/", 1)[1]
+        return ident or None
+    return None
+
+
+def _list_hierarchy_children(list_call: Callable[..., Any], item_key: str,
+                             node: str) -> tuple[list[dict[str, Any]], bool]:
+    """Fully paginate *item_key* children of *node*, returning ``(items, ok)``.
+    ``ok`` is False when a page errored — the whole subtree under *node* is then
+    dropped and the caller marks the walk truncated, because a hierarchy that
+    silently omits a subtree but is presented as captured would prove false
+    ABSENCE for every node it dropped."""
+    try:
+        return list(_paginate(list_call, item_key, parent=node)), True
+    except Exception as exc:  # noqa: BLE001 — any list/page failure drops the subtree
+        logger.warning("listing %s under %s failed (%s) — subtree dropped; the "
+                       "hierarchy walk is truncated", item_key, node, exc)
+        return [], False
+
+
+def fetch_hierarchy(crm: Any, root: str, *,
+                    max_depth: int = 16) -> tuple[dict[str, dict[str, Any]], bool]:
+    """Breadth-first walk of the resource hierarchy from *root* (an
+    ``organizations/<id>`` or ``folders/<id>``), via Cloud Resource Manager v3
+    ``folders.list(parent=...)`` and ``projects.list(parent=...)`` (both
+    paginated), into the ``resource_hierarchy`` schema.
+
+    Returns ``(hierarchy, truncated)``. Each record carries ``parent`` / ``type``
+    / ``number`` / ``display_name``; keys are canonical (``organizations/<id>``,
+    ``folders/<id>``, ``projects/<projectId>``), and a project's ``number`` comes
+    from its ``name`` (``projects/<number>``) so
+    :meth:`GcpSnapshot.hierarchy_names` can build the ``projects/<number>`` alias.
+    The *root* node itself is included with a null parent; projects are leaves.
+
+    ``truncated`` is True when the walk stopped early — on *max_depth* (a visited
+    set plus the depth bound guard against a cycle or pathological nesting), on a
+    parent link that closed a cycle back onto an already-recorded node, or on any
+    per-page error that dropped a subtree.
+
+    A TRUNCATED WALK MUST NOT BE PRESENTED AS A CAPTURED HIERARCHY: a partial
+    hierarchy marked captured is WORSE than none, because
+    :meth:`GcpSnapshot.hierarchy_names` would then prove ABSENCE for every
+    out-of-scope node and turn ordinary VPC-SC and hierarchical-firewall
+    references into false ``ungrounded`` blocks. Uncaptured means every dependent
+    check abstains and says why; truncated-but-captured means it blocks and is
+    wrong — the same reasoning that makes ``network_tags`` presence-only, applied
+    to a table. :func:`capture_snapshot` therefore refuses to set the category
+    when this flag is True; a caller who genuinely wants the partial walk calls
+    this function directly and sets the field itself.
+    """
+    node_type = _hierarchy_root_type(root)
+    hierarchy: dict[str, dict[str, Any]] = {
+        root: {"parent": None, "type": node_type,
+               "number": _hierarchy_number(root), "display_name": None},
+    }
+    truncated = False
+    visited: set[str] = set()
+    queue: deque[tuple[str, int]] = deque([(root, 0)])
+    while queue:
+        node, depth = queue.popleft()
+        if node in visited:
+            continue
+        visited.add(node)
+        if depth >= max_depth:
+            logger.warning("hierarchy walk from %s reached max_depth=%d at %s — "
+                           "stopping; result is truncated", root, max_depth, node)
+            truncated = True
+            continue
+        folders, ok = _list_hierarchy_children(crm.folders().list, "folders", node)
+        truncated = truncated or not ok
+        for folder in folders:
+            fname = folder.get("name")
+            if not isinstance(fname, str) or not fname:
+                logger.warning("folders.list under %s returned an entry with no "
+                               "name — skipped", node)
+                continue
+            if fname in hierarchy:
+                logger.warning("hierarchy walk from %s revisited %s (cycle) — "
+                               "not re-expanded; result is truncated", root, fname)
+                truncated = True
+                continue
+            hierarchy[fname] = {
+                "parent": folder.get("parent") or node,
+                "type": "folder",
+                "number": _hierarchy_number(fname),
+                "display_name": folder.get("displayName"),
+            }
+            queue.append((fname, depth + 1))
+        projects, ok = _list_hierarchy_children(crm.projects().list, "projects", node)
+        truncated = truncated or not ok
+        for project in projects:
+            pid = project.get("projectId")
+            if not isinstance(pid, str) or not pid:
+                logger.warning("projects.list under %s returned an entry with no "
+                               "projectId — skipped", node)
+                continue
+            key = f"projects/{pid}"
+            if key in hierarchy:
+                logger.warning("hierarchy walk from %s revisited %s (cycle) — "
+                               "skipped; result is truncated", root, key)
+                truncated = True
+                continue
+            hierarchy[key] = {
+                "parent": project.get("parent") or node,
+                "type": "project",
+                "number": _hierarchy_number(project.get("name")),
+                "display_name": project.get("displayName"),
+            }
+    logger.debug("hierarchy walk from %s captured %d nodes (truncated=%s)",
+                 root, len(hierarchy), truncated)
+    return hierarchy, truncated
+
+
 # ── capture orchestration ─────────────────────────────────────────────────────
 
 def write_snapshot(snapshot: GcpSnapshot, path: str | os.PathLike[str]) -> None:
@@ -911,16 +1133,18 @@ def write_snapshot(snapshot: GcpSnapshot, path: str | os.PathLike[str]) -> None:
 
 
 def capture_snapshot(*, iam: Any = None, orgpolicy: Any = None, asset: Any = None,
-                     compute: Any = None, acm: Any = None,
+                     compute: Any = None, acm: Any = None, crm: Any = None,
                      custom_role_parents: Iterable[str] = (),
                      permission_resources: Iterable[str] = (),
                      service_account_projects: Iterable[str] = (),
                      orgpolicy_parent: str | None = None,
                      org_policy_nodes: Iterable[str] = (),
                      asset_scope: str | None = None,
+                     capture_iam_bindings: bool = False,
                      compute_project: str | None = None,
                      firewall_policy_parents: Iterable[str] = (),
                      access_policy: str | None = None,
+                     hierarchy_root: str | None = None,
                      terraform_dir: str | os.PathLike[str] | None = None,
                      schema_cache: str | os.PathLike[str] | None = None,
                      terraform_runner: Callable[..., str] | None = None,
@@ -951,6 +1175,14 @@ def capture_snapshot(*, iam: Any = None, orgpolicy: Any = None, asset: Any = Non
     terraform provider vocabulary, and unioning CAI asset types into it
     would flag the category as enumerated with the wrong namespace — a
     partial capture manufacturing false "ungrounded" evidence.
+
+    *capture_iam_bindings* (which needs *asset*) additionally captures the full
+    ``iam_bindings`` table from the SAME pass that captures ``principals`` — one
+    CAI pagination, both categories. *crm* (with *hierarchy_root*) captures
+    ``resource_hierarchy`` via :func:`fetch_hierarchy`, but ONLY when that walk
+    did not truncate: a truncated walk leaves the category ``None`` (a warning
+    names the root) rather than manufacturing false "ungrounded" verdicts for
+    every node outside the walk — see :func:`fetch_hierarchy`.
     """
     custom_role_parents = tuple(custom_role_parents)
     permission_resources = tuple(permission_resources)
@@ -978,6 +1210,13 @@ def capture_snapshot(*, iam: Any = None, orgpolicy: Any = None, asset: Any = Non
     if (asset is None) != (asset_scope is None):
         raise ValueError("principal capture needs both a Cloud Asset Inventory "
                          "client and an asset_scope")
+    if capture_iam_bindings and asset is None:
+        raise ValueError("capture_iam_bindings needs a Cloud Asset Inventory "
+                         "client (asset) — IAM bindings come from the same CAI "
+                         "searchAllIamPolicies pass as principals")
+    if (crm is None) != (hierarchy_root is None):
+        raise ValueError("resource-hierarchy capture needs both a Cloud Resource "
+                         "Manager client (crm) and a hierarchy_root")
     if (compute is None) != (compute_project is None):
         raise ValueError("compute capture needs both a compute client and a "
                          "compute_project")
@@ -1003,7 +1242,25 @@ def capture_snapshot(*, iam: Any = None, orgpolicy: Any = None, asset: Any = Non
     if org_policy_nodes:
         data["org_policies"] = fetch_org_policies(orgpolicy, org_policy_nodes)
     if asset is not None:
-        data["principals"] = sorted(fetch_principals(asset, asset_scope))
+        if capture_iam_bindings:
+            # One CAI pass populates BOTH categories rather than paginating twice.
+            principals, iam_bindings = fetch_principals_and_bindings(asset, asset_scope)
+            data["principals"] = sorted(principals)
+            data["iam_bindings"] = iam_bindings
+        else:
+            data["principals"] = sorted(fetch_principals(asset, asset_scope))
+    if crm is not None:
+        hierarchy, truncated = fetch_hierarchy(crm, hierarchy_root)
+        if truncated:
+            # A partial hierarchy marked captured is worse than none: it would
+            # prove ABSENCE for every node outside the walk. Leave it uncaptured.
+            logger.warning("resource-hierarchy walk from %s truncated (max_depth, "
+                           "a cycle, or a per-page error) — leaving "
+                           "resource_hierarchy UNCAPTURED so dependent checks "
+                           "abstain rather than fabricate false 'ungrounded' "
+                           "verdicts", hierarchy_root)
+        else:
+            data["resource_hierarchy"] = hierarchy
     if compute is not None:
         firewall_rules = fetch_firewall_rules(compute, compute_project)
         data["firewall_rules"] = firewall_rules
