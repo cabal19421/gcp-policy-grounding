@@ -27,6 +27,16 @@ Every google-provider managed resource — handled or not — additionally
 yields one ``resource_type_ref`` claim for its ``type``, so an invented
 resource type is catchable against the provider vocabulary.
 
+Additional ``google`` resource types are contributed by provider modules
+through :func:`gcp_grounding.registry.tf_extractors`, resolved lazily by
+:func:`_extractor_for` (a built-in extractor always wins, so a provider can
+never shadow the five shipped types). Each such extractor has the signature
+``(address: str, values: Mapping[str, Any]) -> list[Claim]`` and may reuse the
+``_first_block``, ``_blocks`` and ``_reanchored`` helpers exported here rather
+than re-implement the plan-JSON block conventions. A provider extractor that
+raises is caught and degrades to the honest "only its type reference is
+claimed" path — :func:`terraform_plan_claims` keeps its never-raise contract.
+
 Resources are read from ``planned_values`` (root module and child modules,
 recursively) first; ``resource_changes`` entries then contribute only
 addresses not already seen, with ``change.after`` as the planned values.
@@ -51,6 +61,11 @@ from .core.log import get_logger
 
 logger = get_logger(__name__)
 
+#: ``terraform_plan_claims`` is the sole ``import *`` export. The underscore
+#: helpers ``_first_block``, ``_blocks`` and ``_reanchored`` are a stable
+#: extension surface for provider modules (see the module docstring) —
+#: importable by name despite the leading underscore, following ``cli.py``'s
+#: precedent of importing constraint-layer privates.
 __all__ = ["terraform_plan_claims"]
 
 #: Provider short names whose resources are ours to ground. ``provider_name``
@@ -75,15 +90,31 @@ def terraform_plan_claims(plan: Mapping[str, Any]) -> list[Claim]:
     claims: list[Claim] = []
     for address, rtype, values in _google_resources(plan):
         claims.append(Claim("resource_type_ref", rtype, address))
-        extractor = _EXTRACTORS.get(rtype)
+        extractor = _extractor_for(rtype)
         if extractor is None:
             continue
-        if isinstance(values, Mapping):
-            claims.extend(extractor(address, values))
-        else:
+        if not isinstance(values, Mapping):
             logger.debug("%s has no planned values — only its type reference is claimed",
                          address)
+            continue
+        try:
+            claims.extend(extractor(address, values))
+        except Exception:  # noqa: BLE001 — never-raise contract; degrade honestly
+            logger.debug("extractor for %s at %s raised — only its type reference "
+                         "is claimed", rtype, address, exc_info=True)
     return claims
+
+
+def _extractor_for(rtype: str):
+    """The extractor for *rtype*, or None. A built-in :data:`_EXTRACTORS` entry
+    always wins; only when there is none is the lazy provider registry consulted
+    (imported inside the function so there is no import cycle), so a provider
+    module can never shadow one of the five shipped resource types."""
+    builtin = _EXTRACTORS.get(rtype)
+    if builtin is not None:
+        return builtin
+    from .registry import tf_extractors  # lazy — no import cycle
+    return tf_extractors().get(rtype)
 
 
 # -- plan walking -------------------------------------------------------------
@@ -281,6 +312,22 @@ def _first_block(value: Any, name: str) -> tuple[Mapping[str, Any] | None, str]:
     if isinstance(value, list) and value and isinstance(value[0], Mapping):
         return value[0], f"{name}[0]"
     return None, name
+
+
+def _blocks(value: Any, name: str) -> list[tuple[Mapping[str, Any], str]]:
+    """Every object of a *repeated* nested block, with its ``name[i]`` path
+    fragment — the companion to :func:`_first_block`, which deliberately takes
+    only the first. Plan JSON encodes a repeated block as a list of objects, so
+    a list yields one ``(object, "name[i]")`` entry per object (the index is the
+    position in the list, so non-object entries are skipped without shifting it);
+    a bare ``Mapping`` yields one entry at ``name``; anything else (``None``, a
+    scalar, an empty list) yields an empty list."""
+    if isinstance(value, Mapping):
+        return [(value, name)]
+    if isinstance(value, list):
+        return [(item, f"{name}[{i}]")
+                for i, item in enumerate(value) if isinstance(item, Mapping)]
+    return []
 
 
 _EXTRACTORS = {
