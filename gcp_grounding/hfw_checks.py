@@ -87,6 +87,26 @@ the field:
 
 Every one of those raises inside :func:`_place`, which is why the placement call
 runs INSIDE :func:`check_hierarchical_order`'s guarding ``try``.
+
+PLACEMENT IS THE WHOLE ANSWER. Three more defects were all one question — which
+rules actually bear on this packet — answered wrong:
+
+* THE STALE TWIN. The world *without* the proposed rule kept the estate's copy
+  of the rule the proposal REPLACES, so an in-place edit read as having no
+  effect and was additionally accused of being unreachable because of an
+  ancestor policy that is in fact its own pre-edit version. A firewall policy
+  keys its rules by priority, so an estate rule in the same policy at the same
+  priority is that pre-edit version; :func:`_place` drops it before folding.
+  When the slot holds more than one rule on either side the identity cannot be
+  established, and it ABSTAINS naming the ambiguity rather than double-counting.
+* SIBLING PROPOSALS. Only proposals resolving to the SAME attachment node were
+  placed, so one apply adding an outer deny and an inner allow was graded as if
+  each were the only change. Every proposed rule whose resolved node lies on
+  THIS chain is now placed at that node's own level; one whose node is not on it
+  is not on this project's evaluation path and abstains on its own turn as
+  ``claim``, the only proposal it can speak for.
+* NETWORK SCOPE, conservatively and at a recorded price — see the comment on
+  :func:`_rule_networks`, which is the only honest place to read it.
 """
 
 from __future__ import annotations
@@ -229,11 +249,15 @@ def _as_vpc_shape(rule: Mapping[str, Any], *, what: str = "the rule") -> dict[st
     :func:`packet.rule_match` expects.
 
     ``match.src_ip_ranges`` / ``match.dest_ip_ranges`` / ``match.layer4`` become
-    ``source_ranges`` / ``destination_ranges`` / ``layer4``; ``target_resources``
-    and ``target_secure_tags`` both restrict the match exactly the way target
-    tags do in the VPC layer, so they share the ``target_tags`` channel (a
-    self-link contains ``/`` and a secure tag short name does not, so the two
-    can never collide).
+    ``source_ranges`` / ``destination_ranges`` / ``layer4``; ``target_secure_tags``
+    restricts the match exactly the way target tags do in the VPC layer, so it
+    becomes ``target_tags``.
+
+    ``target_resources`` does NOT. It names networks, which is a different
+    dimension: the tag channel is an ``Or`` and nothing in it forbids the solver
+    satisfying two disjoint networks at once, which is the measured false
+    re-open. It becomes ``target_networks``, a key :func:`packet.rule_match`
+    does not read at all, and is consumed only by :func:`_rule_networks`.
 
     An ABSENT or EMPTY ``layer4`` list is rendered as *no* ``layer4`` key — i.e.
     no layer-4 restriction — rather than as ``[]``, which
@@ -264,8 +288,8 @@ def _as_vpc_shape(rule: Mapping[str, Any], *, what: str = "the rule") -> dict[st
         "disabled": disabled,
         "source_ranges": _strings(match, "src_ip_ranges", what=what),
         "destination_ranges": _strings(match, "dest_ip_ranges", what=what),
-        "target_tags": (_strings(rule, "target_secure_tags", what=what)
-                        + _strings(rule, "target_resources", what=what)),
+        "target_tags": _strings(rule, "target_secure_tags", what=what),
+        "target_networks": _strings(rule, "target_resources", what=what),
         "target_service_accounts": _strings(rule, "target_service_accounts",
                                             what=what),
     }
@@ -377,6 +401,113 @@ def _wins_over(a: _Placed, b: _Placed) -> bool:
     if a.level != b.level:
         return a.level < b.level
     return _rank(a.shape) < _rank(b.shape)
+
+
+# -- network scope, kept out of the tag channel -------------------------------
+
+
+def _network_of(link: Any) -> str | None:
+    """A network self-link → its canonical ``projects/<p>/global/networks/<n>``
+    identity, or None when the string names no such pair. A compute API URL, a
+    bare resource path and the spelling the estate's ``firewall_rules`` store
+    all normalize to the same value, so they compare."""
+    if not isinstance(link, str):
+        return None
+    parts = link.split("/")
+    project = network = None
+    for i in range(len(parts) - 1):
+        if parts[i] == "projects" and parts[i + 1]:
+            project = parts[i + 1]
+        elif parts[i] == "networks" and parts[i + 1]:
+            network = parts[i + 1]
+    if project is None or network is None:
+        return None
+    return f"projects/{project}/global/networks/{network}"
+
+
+def _rule_networks(shape: Mapping[str, Any], *,
+                   what: str) -> tuple[frozenset[str], list[str]]:
+    """→ (the networks this rule is scoped to, the scopes that could not be
+    read). A VPC rule names exactly one ``network``; a hierarchical rule names
+    zero or more in ``target_networks``. An EMPTY set with nothing unreadable
+    means the rule is not network-scoped and bears on every network in scope.
+
+    ESCALATION ``ESC-GX-HFW-NETWORK-DIMENSION``. Two rules on different networks
+    cannot match one packet, and the algebra has no way to say so: there is no
+    network dimension in :class:`packet.PacketVars`, and OR-ing self-links into
+    the target-tag channel let the solver satisfy two disjoint networks at once
+    — MEASURED as a false ``contradicted hfw_reopen`` whose witness packet
+    cannot exist. The axiom that would close it properly is a network variable
+    constrained to EXACTLY ONE captured network, so ``rule_match`` conjoins
+    ``network == <self-link>`` and two disjoint scopes are unsat by
+    construction. That is a packet-algebra change and is out of scope here.
+
+    THE PRICE OF THE LOCAL MITIGATION, recorded here because it is a real one.
+    Dropping a PROVABLY disjoint peer is sound. But ``unverified`` PASSES the
+    gate, so ABSTAINING on an undecidable overlap converts a would-be block into
+    a pass: this trades a false contradiction for a possible missed one. It is
+    acceptable only because the abstention is LOUD — one ``unverified`` on the
+    hierarchical channel naming both sides' networks and every rule it declined
+    to compare — and because it is bounded by the axiom above. It is never
+    spelled as silence, and it is never widened to cover the decidable case:
+    two scopes that provably intersect, and a rule scoped to no network at all,
+    are compared exactly as before.
+    """
+    scoped = shape.get("network")          # a VPC rule names exactly one
+    if isinstance(scoped, str) and scoped:
+        one = _network_of(scoped)
+        return ((frozenset([one]), []) if one is not None
+                else (frozenset(), [scoped]))
+    links = _strings(shape, "target_networks", what=what)
+    nets: set[str] = set()
+    unreadable: list[str] = []
+    for link in links:
+        one = _network_of(link)
+        if one is None:
+            unreadable.append(link)
+        else:
+            nets.add(one)
+    return frozenset(nets), unreadable
+
+
+def _render_scope(nets: frozenset[str], unreadable: Sequence[str]) -> str:
+    parts = sorted(nets) + [f"{link} (not a network self-link)"
+                            for link in unreadable]
+    return ", ".join(parts) if parts else "every network"
+
+
+def _network_scoped(mine: _Placed, placed: Sequence[_Placed]) -> tuple[list, list]:
+    """→ (comparable, undecided). *comparable* is every rule whose network scope
+    provably overlaps the proposal's — the proposal itself always among them;
+    *undecided* holds ``(placed, networks, unreadable)`` for the ones whose
+    overlap could not be decided. A rule PROVABLY disjoint from the proposal is
+    in neither: it cannot bear on a packet on the proposal's networks."""
+    mine_nets, mine_unreadable = _rule_networks(mine.shape, what=mine.label)
+    comparable: list[_Placed] = []
+    undecided: list[tuple[_Placed, frozenset[str], list[str]]] = []
+    for other in placed:
+        if other is mine:
+            comparable.append(other)
+            continue
+        nets, unreadable = _rule_networks(other.shape, what=other.label)
+        if mine_unreadable or unreadable:
+            undecided.append((other, nets, unreadable))
+        elif mine_nets and nets and not (mine_nets & nets):
+            continue                       # provably disjoint — never compared
+        else:
+            comparable.append(other)
+    return comparable, undecided
+
+
+def _undecidable_scope(mine: _Placed, undecided: Sequence[tuple]) -> str:
+    """The LOUD abstention: both sides' networks, and every rule declined."""
+    mine_nets, mine_unreadable = _rule_networks(mine.shape, what=mine.label)
+    declined = "; ".join(f"{other.label} scoped to {_render_scope(nets, bad)}"
+                         for other, nets, bad in undecided)
+    return (f"the proposed rule is scoped to "
+            f"{_render_scope(mine_nets, mine_unreadable)} and whether that can "
+            f"hold one packet together with {declined} could not be decided, so "
+            f"those rules were DECLINED rather than compared")
 
 
 # -- resolution ---------------------------------------------------------------
@@ -596,9 +727,53 @@ def _place(claim, ctx, proposals: Sequence[Any]) -> tuple[Any, Any]:
     if orphaned is not None:
         return None, _abstain(claim, orphaned)
 
+    # EVERY PROPOSED RULE IN THIS DOCUMENT, resolved BEFORE the estate is read.
+    # A sibling attaching at another node is still part of the same apply and
+    # still decides packets in this project, so it is placed at ITS OWN node's
+    # level; one whose node is not on this chain is not on this project's
+    # evaluation path at all and abstains on its own turn as `claim`, the only
+    # proposal it can speak for. Resolving them first is also what lets the
+    # estate walk below recognise the rule each one replaces.
+    proposed: list[tuple[Any, _Placed]] = []
+    for other in proposals:
+        other_rule = other.fields().get("rule")
+        if not isinstance(other_rule, Mapping):
+            continue
+        at = nodes if other is claim else _attachment_nodes(other, ctx)
+        if len(at) != 1 or at[0] not in chain:
+            continue
+        proposed.append((other, _Placed(
+            level=chain.index(at[0]), node=at[0],
+            label=f"{other.value} ({other.location})",
+            shape=_as_vpc_shape(other_rule,
+                                what=f"the proposed rule {other.value!r} "
+                                     f"({other.location})"),
+            rule=other_rule)))
+
+    mine = next((entry for other, entry in proposed if other is claim), None)
+    if mine is None:  # pragma: no cover - the claim's own node was placed above
+        return None, _abstain(claim, "the proposed rule could not be placed in the "
+                                     "evaluation order")
+
+    # THE STALE TWIN. A firewall policy keys its rules by priority, so the slot
+    # (policy, priority) identifies a rule: an estate rule in a slot a proposal
+    # occupies is that proposal's own PRE-EDIT version, not a second rule. Two
+    # proposals in one slot leave no way to say which of them replaces it.
+    edits: dict[tuple[str, Any], list[str]] = {}
+    for other, entry in proposed:
+        edits.setdefault((other.value, entry.shape.get("priority")),
+                         []).append(entry.label)
+    doubled = _ambiguous_slots(edits)
+    if doubled:
+        return None, _abstain(claim, f"this proposal edits the same rule slot more "
+                                     f"than once — {doubled} — so the estate rule "
+                                     f"each one replaces cannot be identified")
+
     placed: list[_Placed] = []
     # captured policy -> how many rules it actually contributed to the fold.
     contributed: dict[str, int] = {}
+    # slot -> the estate rules dropped as the pre-edit version of a proposal.
+    replaced: dict[tuple[str, Any], list[str]] = {}
     for level, name in enumerate(chain):
         attached = snapshot.firewall_policies_attached_to(name)
         if attached is UNKNOWN:  # pragma: no cover - guarded above
@@ -610,11 +785,15 @@ def _place(claim, ctx, proposals: Sequence[Any]) -> tuple[Any, Any]:
             records = _rule_records(policy, what=what)
             contributed[policy_name] = contributed.get(policy_name, 0) + len(records)
             for i, estate_rule in enumerate(records):
-                placed.append(_Placed(
-                    level=level, node=name,
-                    label=f"{policy_name} rule[{i}] priority "
-                          f"{estate_rule.get('priority')}",
-                    shape=_as_vpc_shape(estate_rule, what=what), rule=estate_rule))
+                shape = _as_vpc_shape(estate_rule, what=what)
+                label = (f"{policy_name} rule[{i}] priority "
+                         f"{estate_rule.get('priority')}")
+                slot = (policy_name, shape.get("priority"))
+                if slot in edits:
+                    replaced.setdefault(slot, []).append(label)
+                    continue    # the proposal's own copy, before the edit
+                placed.append(_Placed(level=level, node=name, label=label,
+                                      shape=shape, rule=estate_rule))
 
     # The fold consumed nothing from a chain that claims more than one level:
     # "the N-level order decides every packet identically" would be a statement
@@ -622,35 +801,31 @@ def _place(claim, ctx, proposals: Sequence[Any]) -> tuple[Any, Any]:
     if len(chain) > 1 and not sum(contributed.values()):
         return None, _abstain(claim, _nothing_folded(chain, contributed))
 
+    twinned = _ambiguous_slots(replaced)
+    if twinned:
+        return None, _abstain(claim, f"the captured policy holds more than one rule "
+                                     f"in a slot this proposal edits — {twinned} — "
+                                     f"so the rule being replaced cannot be "
+                                     f"identified")
+
     vpc = _vpc_rules(snapshot, project, rule)
     vpc_level = len(chain)
     for record in vpc:
         placed.append(_Placed(level=vpc_level, node=project,
                               label=_vpc_rule_name(snapshot, record),
                               shape=record))
-
-    level_of_node = chain.index(node)
-    mine: _Placed | None = None
-    for other in proposals:
-        other_rule = other.fields().get("rule")
-        if not isinstance(other_rule, Mapping):
-            continue
-        if other is not claim and _attachment_nodes(other, ctx) != nodes:
-            continue  # a rule for a different policy/level in the same document
-        entry = _Placed(level=level_of_node, node=node,
-                        label=f"{other.value} ({other.location})",
-                        shape=_as_vpc_shape(
-                            other_rule,
-                            what=f"the proposed rule {other.value!r} "
-                                 f"({other.location})"),
-                        rule=other_rule)
-        placed.append(entry)
-        if other is claim:
-            mine = entry
-    if mine is None:  # pragma: no cover - claim is always one of `proposals`
-        return None, _abstain(claim, "the proposed rule could not be placed in the "
-                                     "evaluation order")
+    placed.extend(entry for _other, entry in proposed)
     return (project, chain, placed, mine, vpc, direction), None
+
+
+def _ambiguous_slots(slots: Mapping[tuple[str, Any], list[str]]) -> str:
+    """The ``(policy, priority)`` slots holding more than one rule, rendered —
+    or the empty string. A slot with two occupants leaves no way to say which
+    rule an in-place edit replaces, and guessing would either drop a live rule
+    or count the edited one twice."""
+    return "; ".join(sorted(
+        f"{policy} priority {priority} ({', '.join(labels)})"
+        for (policy, priority), labels in slots.items() if len(labels) > 1))
 
 
 def _policy_key(snapshot: GcpSnapshot, record: Mapping[str, Any]) -> str:
@@ -856,9 +1031,19 @@ def check_hierarchical_order(ctx) -> list[Verdict]:
                 z3,
                 tags=sorted(ctx.snapshot.network_tags or ()),
                 service_accounts=sorted(ctx.snapshot.service_accounts or ()))
-            verdicts.extend(_finding_unreachable(z3, v, claim, mine, placed))
-            verdicts.extend(_finding_reopen(z3, v, claim, mine, placed))
-            verdicts.extend(_finding_delta(z3, v, claim, mine, chain, placed,
+            # A rule on a provably disjoint network cannot decide a packet on
+            # the proposal's, so it is dropped from every comparison; one whose
+            # overlap could not be decided is declined by the two pairwise
+            # findings — LOUDLY, see _rule_networks — but stays in the fold,
+            # which is a whole-order statement and must not lose a level to an
+            # undecidable read. Both are bounded by ESC-GX-HFW-NETWORK-DIMENSION.
+            comparable, undecided = _network_scoped(mine, placed)
+            if undecided:
+                verdicts.append(_abstain(claim, _undecidable_scope(mine, undecided)))
+            folded = comparable + [other for other, _nets, _bad in undecided]
+            verdicts.extend(_finding_unreachable(z3, v, claim, mine, comparable))
+            verdicts.extend(_finding_reopen(z3, v, claim, mine, comparable))
+            verdicts.extend(_finding_delta(z3, v, claim, mine, chain, folded,
                                            vpc_rules, direction, project))
         except UnsupportedPacket as exc:
             logger.debug("hierarchical order check abstained: %s", exc)
