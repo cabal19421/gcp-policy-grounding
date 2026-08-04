@@ -32,6 +32,7 @@ from gcp_grounding.vpcsc_checks import (
     DOCUMENT_CHECKS, PAIR_CHECKS, check_perimeter_estate, check_perimeter_pair,
 )
 from gcp_grounding.vpcsc_claims import perimeter_claims
+from tests.lineno_invariant import assert_no_line_numbers
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gcp"
 POLICIES = FIXTURES / "policies"
@@ -321,3 +322,53 @@ def test_the_estate_check_defers_to_the_baseline(estate):
     # same removal would be reported twice.
     assert check_perimeter_estate(ctx) == []
     assert check_perimeter_pair(ctx)
+
+
+# -- the shared lineno invariant ----------------------------------------------
+
+
+def _variants(perimeter: dict) -> list[dict]:
+    """The committed perimeter with one field changed per copy — the shapes
+    ``_compare`` and ``_widening`` branch on that no committed document has:
+    a missing side block, a REGULAR→BRIDGE demotion, a different name, an
+    emptied policy list and an absent policy key."""
+    status = perimeter["status"]
+    return [
+        {k: v for k, v in perimeter.items() if k != "status"},
+        {k: v for k, v in perimeter.items() if k != "spec"},
+        dict(perimeter, perimeterType="PERIMETER_TYPE_BRIDGE"),
+        dict(perimeter, name=NAME.replace("/prod", "/other")),
+        dict(perimeter, status=dict(status, egressPolicies=[])),
+        dict(perimeter,
+             status={k: v for k, v in status.items() if k != "egressPolicies"}),
+    ]
+
+
+def test_no_vpcsc_verdict_carries_a_line_number(estate, partial, monkeypatch):
+    """Every arm of this module reports ``lineno`` 0 — see lineno_invariant.
+
+    Drives the three committed perimeters and the variants above over both
+    estate snapshots, each as every other's ``--baseline`` (plus a
+    non-perimeter one), and the whole matrix again with the builtin backend
+    forced — the only way to reach the z3-absent widening abstention here.
+    """
+    docs = [load(n) for n in ("vpcsc_perimeter.json",
+                              "vpcsc_perimeter_shrunk.json",
+                              "vpcsc_perimeter_dry_run.json")]
+    docs += _variants(docs[0])
+    reports = []
+    for builtin in (False, True):
+        if builtin:
+            monkeypatch.setattr("gcp_grounding.preflight.get_solver",
+                                lambda *a, **k: get_solver(prefer="builtin"))
+        for doc in docs:
+            for snapshot in (estate, partial):
+                reports.append(ground_policy(doc, snapshot))
+                for other in docs + [load("iam_policy_good.json")]:
+                    reports.append(ground_policy(doc, snapshot, baseline=other))
+
+    # Non-vacuity: the drive really decides, in all three directions.
+    assert {v.status for r in reports for v in vpcsc(r)} == {
+        "unverified", "grounded", "contradicted"}
+    for report in reports:
+        assert_no_line_numbers(report)

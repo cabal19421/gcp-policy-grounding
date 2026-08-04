@@ -33,6 +33,7 @@ from gcp_grounding.knowledge import GcpSnapshot
 from gcp_grounding.preflight import ground_policy
 from gcp_grounding.report import PolicyReport
 from gcp_grounding.sec_evidence import SEC_REPORT_SCHEMA
+from tests.lineno_invariant import assert_no_line_numbers
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gcp"
 POLICIES = FIXTURES / "policies"
@@ -455,3 +456,38 @@ def test_a_single_promises_json_file_is_accepted(capsys, clean_artifacts):
     assert code == 0
     assert [r["id"] for r in json.loads(stdout)["sec"]["requirements"]] == [
         "clean-no-primitive-owner", "clean-no-public-principals"]
+
+
+# -- the shared lineno invariant ----------------------------------------------
+
+
+def test_no_sec_verdict_carries_a_line_number(clean_artifacts, stalled_artifacts,
+                                              tmp_path):
+    """Every verdict the requirements channel adds reports ``lineno`` 0 — see
+    lineno_invariant.
+
+    The sec carry verdicts are minted with the same ``Verdict(..., 0, ...)``
+    shape as the domain checks and reach the report through
+    ``ground_policy(..., rules=...)`` — what ``verify-policy --requirements``
+    calls. Both committed corpora are driven, compiled the way the CLI
+    compiles them, plus an empty artifact directory for the no-rules path.
+    """
+    import gcp_grounding.sec_rules as sec_rules
+
+    snapshot = GcpSnapshot.load(SNAPSHOT)
+    empty = tmp_path / "no-artifacts"
+    empty.mkdir()
+    reports = []
+    for artifacts in (clean_artifacts, stalled_artifacts, empty):
+        rules, carried = sec_rules.load_directory(artifacts)
+        assert all(v.lineno == 0 for v in carried), \
+            [(v.status, v.kind, v.target, v.lineno) for v in carried]
+        for policy in (GOOD, BAD):
+            reports.append(ground_policy(policy, snapshot, rules=rules))
+            reports.append(ground_policy(policy, snapshot, baseline=GOOD,
+                                         rules=rules))
+
+    # Non-vacuity: the requirements channel really spoke.
+    assert any(v.kind.startswith("sec:") for r in reports for v in r.verdicts)
+    for report in reports:
+        assert_no_line_numbers(report)
