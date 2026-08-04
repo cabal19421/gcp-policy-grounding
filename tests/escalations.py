@@ -1,16 +1,37 @@
-"""The append-only register of clauses this suite could not satisfy in place.
+"""The APPEND-ONLY escalation register: clauses that cannot be satisfied.
 
-House rule 4 — ESCALATE, DO NOT ROUTE AROUND. When a task's clause cannot be
-satisfied where it was asked for, the cheapest honest path is to say so by
-name: an entry here, and the spec-literal assertion landed under
-``pytest.mark.xfail(strict=True, reason=<id>)``. That is a GREEN, named state.
-Rewriting the assertion to fit the code instead is a review FAIL.
+House rule 4 — ESCALATE, DO NOT ROUTE AROUND. When a clause of
+`designs/gcp-gx-fixes.md` cannot be satisfied where it was asked for, the
+cheapest honest path is to say so by name: an entry here, and the spec-literal
+assertion landed under ``pytest.mark.xfail(strict=True, reason=<the escalation
+id>)``. That is a GREEN, NAMED state. Rewriting the assertion to fit the code
+instead is a review FAIL.
 
 Entries are APPEND-ONLY: an id, once published, is quoted from ``xfail``
 reasons and from module docstrings, so removing or renaming one silently
-detaches those references. An escalation is CLOSED by landing its
-``product_fix`` and deleting the ``xfail`` — the entry stays, with
-``closed_by`` naming the change.
+detaches those references. An escalation is CLOSED by landing its fix and
+deleting the ``xfail`` — the entry stays, with ``closed_by`` naming the change.
+
+``strict=True`` is what stops an escalation from being forgotten: the day the
+owning task lands the fix, the xfail becomes an XPASS and the suite goes RED,
+which forces the entry to be retired deliberately rather than by rot.
+
+This file is deliberately NOT frozen — every task may append to it. Its
+self-test, ``tests/test_gcp_escalations.py``, IS frozen: it asserts that every
+:data:`ESCALATIONS` node id really carries a STRICT xfail whose reason names its
+id, that ids are unique, and that a required-id tuple is still a subset of this
+register, so a mandated escalation cannot be quietly deleted.
+
+TWO REGISTERS, ONE FILE. :data:`ESCALATIONS` is the xfail-governed register:
+every entry names the pytest node whose strict xfail carries it, which is what
+the frozen self-test walks. :data:`PRODUCT_ESCALATIONS` is for an escalation
+whose subject is PRODUCT code that a test task may not edit — vendored
+``gcp_grounding/core/`` above all — where there is no assertion to xfail
+because the honest test already passes and it is the product that is wrong.
+Such an entry carries ``product_fix`` and ``residual_risk`` instead of a
+``node_id``, and is quoted from the module that works around it. Both tuples
+are append-only; neither entry may be moved to the other register to make a
+schema fit.
 """
 
 from __future__ import annotations
@@ -20,9 +41,34 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Escalation:
-    """One clause that could not be satisfied where it was asked for."""
+    """One clause that could not be satisfied, and where its xfail lives.
 
-    #: Stable id, quoted from ``xfail`` reasons. Never reused, never renamed.
+    ``id``            stable handle, named in the xfail ``reason``. Never
+                      reused, never renamed.
+    ``clause``        the VERBATIM design text that cannot be satisfied.
+    ``unsatisfiable`` why it cannot be satisfied here — the measured fact, not
+                      an opinion.
+    ``owner_task``    the task id that raised it.
+    ``node_id``       the pytest node carrying the strict-xfailed assertion.
+    """
+
+    id: str
+    clause: str
+    unsatisfiable: str
+    owner_task: str
+    node_id: str
+
+
+@dataclass(frozen=True)
+class ProductEscalation:
+    """One clause blocked by PRODUCT code a test task may not edit.
+
+    There is no assertion to xfail: the honest test passes, and it is the
+    product that is wrong, so the entry records the fix and what is exposed
+    until it lands rather than a node id.
+    """
+
+    #: Stable id, quoted from the module that works around it.
     id: str
     #: The clause, in the design's own words.
     clause: str
@@ -38,6 +84,43 @@ class Escalation:
 
 ESCALATIONS: tuple[Escalation, ...] = (
     Escalation(
+        id="ESC-GX-SPEC-001",
+        clause="asserts the clause still occurs in some file under `designs/`",
+        unsatisfiable=(
+            "`designs/` is git-ignored repo-wide and is tracked on no branch, so "
+            "it exists only in the main checkout: a clean clone, a CI container "
+            "and every git worktree carry NO design corpus at all, and the clause "
+            "anchor can only be resolved by following this worktree's `.git` "
+            "pointer file back to the main checkout, or skipped loudly when even "
+            "that fails. Tracking the corpus, or vendoring the clause text into "
+            "the repo, is what would close it."
+        ),
+        owner_task="gx-spec-register",
+        node_id=("tests/test_gcp_spec_assertions.py::"
+                 "test_the_design_corpus_is_tracked_in_the_repository"),
+    ),
+    Escalation(
+        id="ESC-GX-SPEC-002",
+        clause="every owner must be a task id in this document",
+        unsatisfiable=(
+            "`SA-SECAST-CALLED-ONCE` pins the strict `calls[\"n\"] == 1` counter "
+            "proof in tests/test_gcp_sec_ast.py, which today carries the weakened "
+            "`<= 1` that zero calls satisfies; that module is owned by "
+            "`sx-sec-ast`, a task of the PREDECESSOR design document, and no task "
+            "in gcp-gx-fixes.md owns it — so the entry cannot name an in-document "
+            "owner without either dropping the pin or inventing an owner that "
+            "will never land. Adding a task to this document that owns "
+            "tests/test_gcp_sec_ast.py is what would close it."
+        ),
+        owner_task="gx-spec-register",
+        node_id=("tests/test_gcp_spec_assertions.py::"
+                 "test_every_awaiting_owner_is_a_task_in_this_document"),
+    ),
+)
+
+
+PRODUCT_ESCALATIONS: tuple[ProductEscalation, ...] = (
+    ProductEscalation(
         id="ESC-HOOKRUNNER-NO-Z3-BANNER",
         clause=(
             "assert_passed's byte-empty-both-streams contract must hold in the "
@@ -77,3 +160,9 @@ ESCALATIONS: tuple[Escalation, ...] = (
         ),
     ),
 )
+
+
+# Escalation owners that are not tasks of designs/gcp-gx-fixes.md. Empty today;
+# it exists so a later escalation raised by a predecessor-document task has an
+# append-only home and is never forced to edit the frozen self-test.
+OUT_OF_DOCUMENT_OWNER_TASKS: frozenset[str] = frozenset()
