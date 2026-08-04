@@ -12,10 +12,13 @@ tf plan yields one honest ``unverified``, with it the bundles ground for real.
 
 import importlib.util
 import json
+import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from gcp_grounding import preflight
 from gcp_grounding.core.solver import get_solver
 from gcp_grounding.knowledge import GcpSnapshot
 from gcp_grounding.preflight import DOCUMENT_KINDS, detect_kind, ground_policy
@@ -36,6 +39,21 @@ def snap() -> GcpSnapshot:
 
 def load(name: str) -> dict:
     return json.loads((POLICIES / name).read_text(encoding="utf-8"))
+
+
+def assert_no_line_numbers(report) -> None:
+    """The documented invariant, asserted once and applied per fail-open path.
+
+    ``reasoner.ground_existence``'s own clause: a policy document is JSON, not
+    source, so there is no line to point at — every verdict carries lineno 0
+    and the json-path location leads the message instead (the precedent is
+    ``test_gcp_reasoner.py::test_bad_role_suggests_the_near_miss``, which pins
+    ``reader.lineno == 0``). Each caller pins its path's identity — status,
+    kind, target and the reason named in the message — alongside this, so the
+    branch is shown to have decided something and not merely been reached.
+    """
+    assert all(v.lineno == 0 for v in report.verdicts), \
+        [(v.status, v.kind, v.target, v.lineno) for v in report.verdicts]
 
 
 # -- auto-detection ---------------------------------------------------------
@@ -161,28 +179,37 @@ def test_invalid_json_fails_open_to_unverified(snap, tmp_path):
     report = ground_policy(broken, snap)
     assert report.ok  # unverified is honest ignorance, not a gate failure
     [v] = report.verdicts
-    assert (v.status, v.kind) == ("unverified", "document")
+    assert (v.status, v.kind, v.target) == ("unverified", "document", str(broken))
     assert "not valid JSON" in v.message and str(broken) in v.message
+    assert_no_line_numbers(report)
 
 
 def test_missing_file_fails_open_to_unverified(snap, tmp_path):
-    report = ground_policy(tmp_path / "does_not_exist.json", snap)
+    missing = tmp_path / "does_not_exist.json"
+    report = ground_policy(missing, snap)
     [v] = report.verdicts
-    assert (v.status, v.kind) == ("unverified", "document")
+    assert (v.status, v.kind, v.target) == ("unverified", "document", str(missing))
     assert "could not be read" in v.message
+    assert_no_line_numbers(report)
     # With a baseline, the undecided new⊆old comparison is on the record too.
-    with_baseline = ground_policy(tmp_path / "does_not_exist.json", snap,
-                                  baseline={"bindings": []})
-    assert [(v.status, v.kind) for v in with_baseline.verdicts] == [
-        ("unverified", "document"), ("unverified", "subset")]
+    with_baseline = ground_policy(missing, snap, baseline={"bindings": []})
+    assert [(v.status, v.kind, v.target) for v in with_baseline.verdicts] == [
+        ("unverified", "document", str(missing)),
+        ("unverified", "subset", "iam-policy")]
+    document, subset = with_baseline.verdicts
+    assert "could not be read" in document.message
+    assert "new⊆old was not decided" in subset.message and str(missing) in subset.message
+    assert_no_line_numbers(with_baseline)
 
 
 def test_unrecognized_document_fails_open_to_unverified(snap):
     report = ground_policy({"totally": "unrelated"}, snap)
     assert report.ok
     [v] = report.verdicts
-    assert (v.status, v.kind) == ("unverified", "document")
-    assert "not recognized" in v.message
+    assert (v.status, v.kind, v.target) == ("unverified", "document",
+                                            "<policy object>")
+    assert "not recognized" in v.message and "['totally']" in v.message
+    assert_no_line_numbers(report)
 
 
 def test_non_utf8_bytes_fail_open_to_unverified(snap, tmp_path):
@@ -234,13 +261,38 @@ def test_recognized_document_with_zero_extractable_claims_is_unverified(snap, do
     assert "nothing checkable" in v.message
 
 
+@pytest.mark.parametrize("doc", [
+    # A mis-cased 'Bindings' array: recognized as an IAM policy on etag +
+    # version, yet the grant it carries is invisible to the extractor. An
+    # absent `bindings` key is NOT an empty allow policy.
+    {"etag": "BwX=", "version": 3,
+     "Bindings": [{"role": "roles/owner", "members": ["allUsers"]}]},
+    # etag + version and no bindings key at all — the same absence, with
+    # nothing hiding behind it. Still "never looked", not "nothing to see".
+    {"etag": "BwX=", "version": 3},
+])
+def test_absent_bindings_key_is_unverified_not_legitimately_empty(snap, doc):
+    assert detect_kind(doc) == "iam_policy"
+    report = ground_policy(doc, snap)
+    assert report.ok  # unverified is honest ignorance, not a gate failure
+    [v] = report.verdicts
+    assert (v.status, v.kind, v.target) == ("unverified", "document",
+                                            "<policy object>")
+    assert "detected iam_policy content" in v.message
+    assert "nothing checkable" in v.message
+    assert_no_line_numbers(report)
+
+
 def test_legitimately_empty_iam_policy_yields_no_verdicts(snap):
-    # An empty allow policy asserts nothing: zero claims is the honest
-    # outcome, not ignorance — no unverified verdict to record.
-    for doc in ({"etag": "BwX=", "version": 3},
-                {"etag": "BwX=", "version": 3, "bindings": []}):
-        report = ground_policy(doc, snap)
-        assert report.ok and report.verdicts == []
+    # Only an explicit `bindings: []` asserts nothing: zero claims is the
+    # honest outcome there, not ignorance — no unverified verdict to record.
+    report = ground_policy({"etag": "BwX=", "version": 3, "bindings": []}, snap)
+    assert report.ok and report.verdicts == []
+    # An absent key is a different shape and does not get that pass.
+    absent = ground_policy({"etag": "BwX=", "version": 3}, snap)
+    assert absent.ok
+    [v] = absent.verdicts
+    assert (v.status, v.kind) == ("unverified", "document")
 
 
 # -- baseline (new⊆old) opt-in ----------------------------------------------
@@ -273,11 +325,17 @@ def test_baseline_subset_comparison(snap):
 
 
 def test_baseline_against_non_iam_document_is_unverified(snap):
-    report = ground_policy(POLICIES / "org_policy_good.json", snap,
-                           baseline={"bindings": []})
-    [subset_v] = [v for v in report.verdicts if v.kind == "subset"]
-    assert subset_v.status == "unverified"
-    assert "not an IAM policy" in subset_v.message
+    # The abstention has to name the kind that was actually detected: reading
+    # every document as 'unrecognized' (or rendering a None kind as "None")
+    # would make the abstention lie about what the gate saw.
+    for doc, detected in ((POLICIES / "org_policy_good.json", "org_policy"),
+                          ({"totally": "unrelated"}, "unrecognized")):
+        report = ground_policy(doc, snap, baseline={"bindings": []})
+        [subset_v] = [v for v in report.verdicts if v.kind == "subset"]
+        assert (subset_v.status, subset_v.target) == ("unverified", "iam-policy")
+        assert f"detected as {detected}" in subset_v.message
+        assert "not an IAM policy" in subset_v.message
+        assert_no_line_numbers(report)
 
 
 def test_unrecognized_baseline_shape_is_unverified_not_contradicted(snap):
@@ -288,10 +346,119 @@ def test_unrecognized_baseline_shape_is_unverified_not_contradicted(snap):
     for baseline in ({"policy": new}, load("org_policy_good.json")):
         report = ground_policy(new, snap, baseline=baseline)
         [subset_v] = [v for v in report.verdicts if v.kind == "subset"]
-        assert subset_v.status == "unverified"
+        assert (subset_v.status, subset_v.target) == ("unverified", "iam-policy")
         assert "baseline" in subset_v.message
         assert "not recognized" in subset_v.message
         assert report.counts()["contradicted"] == 0 and report.ok
+        assert_no_line_numbers(report)
+
+
+# -- the fail-open paths no bundle reaches ------------------------------------
+
+
+def test_claim_kind_no_layer_decides_is_unverified_naming_the_kind(snap, monkeypatch):
+    # Defensive-only in this checkout: no extractor emits a kind outside the
+    # existence kinds plus 'cel'/'constraint_value'. The module promises every
+    # extracted claim receives exactly one verdict, so a stub claim (the layers
+    # duck-type them: kind/value/location) is the honest way to reach it.
+    stub = SimpleNamespace(kind="network_tag_ref", value="web-tier",
+                           location="bindings[0].condition.expression")
+    monkeypatch.setattr(preflight, "iam_policy_claims", lambda doc: [stub])
+    report = ground_policy({"bindings": [{"role": "roles/viewer",
+                                          "members": ["user:alice@acme.example"]}]},
+                           snap)
+    assert report.ok  # an undecided kind is ignorance, not a gate failure
+    [v] = report.verdicts
+    assert (v.status, v.kind, v.target) == ("unverified", "network_tag_ref",
+                                            "web-tier")
+    assert "no offline check is wired" in v.message
+    assert "network_tag_ref" in v.message and stub.location in v.message
+    assert_no_line_numbers(report)
+
+
+def test_tf_plan_without_its_extractor_is_unverified(snap, monkeypatch):
+    # The accessor resolves gcp_grounding.tf_claims dynamically; where that
+    # module is not part of a checkout it returns None and the plan is
+    # recorded unread rather than crashing on the import.
+    monkeypatch.setattr(preflight, "_tf_plan_extractor", lambda: None)
+    plan = POLICIES / "tf_plan_good.json"
+    report = ground_policy(plan, snap)
+    assert report.ok
+    [v] = report.verdicts
+    assert (v.status, v.kind, v.target) == ("unverified", "document", str(plan))
+    assert "terraform plan" in v.message
+    assert "gcp_grounding.tf_claims" in v.message
+    assert_no_line_numbers(report)
+
+
+def test_claim_extraction_raising_fails_open_to_unverified(snap, monkeypatch):
+    def boom(doc):
+        raise TypeError("members was not iterable")
+
+    monkeypatch.setattr(preflight, "iam_policy_claims", boom)
+    report = ground_policy({"bindings": [{"role": "roles/viewer",
+                                          "members": ["user:alice@acme.example"]}]},
+                           snap)
+    assert report.ok  # a broken extractor is not a hallucination
+    [v] = report.verdicts
+    assert (v.status, v.kind, v.target) == ("unverified", "document",
+                                            "<policy object>")
+    assert "iam_policy claim extraction failed" in v.message
+    assert "members was not iterable" in v.message
+    assert_no_line_numbers(report)
+
+
+def test_claim_extraction_failure_logs_its_traceback(snap, monkeypatch, caplog):
+    def boom(doc):
+        raise TypeError("members was not iterable")
+
+    monkeypatch.setattr(preflight, "iam_policy_claims", boom)
+    # Nothing in this package calls setup_logging (which turns propagation off
+    # on the 'harness' logger); pin that, so this assertion keeps reading the
+    # channel the gate actually writes to.
+    monkeypatch.setattr(logging.getLogger("harness"), "propagate", True)
+    with caplog.at_level(logging.DEBUG, logger="harness.gcp_grounding.preflight"):
+        report = ground_policy({"bindings": [{"role": "roles/viewer",
+                                              "members": ["user:alice@acme.example"]}]},
+                               snap)
+    [record] = [r for r in caplog.records
+                if "claim extraction failed" in r.getMessage()]
+    # The swallowed exception must reach the log with its traceback: without
+    # `exc_info` the record still HAS the field, holding the literal False, so
+    # truthiness — not `is not None` — is what says the traceback is on it.
+    assert record.exc_info, record.exc_info
+    assert record.exc_info[0] is TypeError
+    assert [v.status for v in report.verdicts] == ["unverified"]
+
+
+def test_unreadable_baseline_is_unverified_not_contradicted(snap, tmp_path):
+    missing = tmp_path / "old_policy.json"
+    new = {"version": 3, "etag": "BwX=", "bindings": [
+        {"role": "roles/viewer", "members": ["user:alice@acme.example"]}]}
+    report = ground_policy(new, snap, baseline=missing)
+    # An unreadable old side is ignorance about new⊆old, never a contradiction.
+    assert report.ok and report.counts()["contradicted"] == 0
+    [subset_v] = [v for v in report.verdicts if v.kind == "subset"]
+    assert (subset_v.status, subset_v.target) == ("unverified", "iam-policy")
+    assert str(missing) in subset_v.message and "could not be read" in subset_v.message
+    assert "new⊆old was not decided" in subset_v.message
+    assert_no_line_numbers(report)
+
+
+def test_subset_check_raising_value_error_is_unverified(snap, monkeypatch):
+    def boom(doc, old_doc, solver):
+        raise ValueError("the policies disagree on the member vocabulary")
+
+    monkeypatch.setattr(preflight, "check_policy_subset", boom)
+    old = {"version": 3, "etag": "BwX=", "bindings": [
+        {"role": "roles/viewer", "members": ["user:alice@acme.example"]}]}
+    report = ground_policy(dict(old), snap, baseline=old)
+    assert report.ok and report.counts()["contradicted"] == 0
+    [subset_v] = [v for v in report.verdicts if v.kind == "subset"]
+    assert (subset_v.status, subset_v.target) == ("unverified", "iam-policy")
+    assert "new⊆old was not decided" in subset_v.message
+    assert "disagree on the member vocabulary" in subset_v.message
+    assert_no_line_numbers(report)
 
 
 # -- the aggregate across all bundles ----------------------------------------
