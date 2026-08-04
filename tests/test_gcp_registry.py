@@ -51,6 +51,17 @@ if HAVE_TF:
 else:
     _BUILTIN_TF_TYPES = {}
 
+#: The whole-document checks each landed domain module owns. A domain module
+#: that is part of this checkout must contribute exactly its own row (and every
+#: registered document check must belong to some gcp_grounding module), so a
+#: gutted DOCUMENT_CHECKS tuple or a check that quietly moves module goes red in
+#: test_no_providers_is_byte_identical rather than passing as "contributes
+#: nothing".
+DOCUMENT_CHECK_OWNERS = {
+    "gcp_grounding.org_checks": {"check_org_estate"},
+    "gcp_grounding.hfw_checks": {"check_hierarchical_order"},
+}
+
 STUB = "gcp_grounding_stub_provider"
 
 CEL_GOOD = 'request.time < timestamp("2027-01-01T00:00:00Z")'
@@ -168,23 +179,30 @@ def test_no_providers_is_byte_identical(snap, name, expected):
     # The registry must not contribute anything that changes these baseline
     # (non-firewall/non-armor/…) fixtures' grounding. As domain modules land in
     # this checkout (fw_claims, hfw_claims, armor_claims, vpcsc_claims, …) they
-    # may register tf extractors for their own google resource types, but NEW
-    # types: never shadowing a built-in, and never matching the iam / org
+    # may register tf extractors for their own google resource types, but only
+    # NEW types: never shadowing a built-in, and never matching the iam / org
     # resource types these fixtures use, so the registry contributes nothing to
     # *their* reports. The invariant therefore relaxes from "registry is empty"
     # to "registry never shadows a built-in tf type", which keeps the gate
     # byte-identical to before the seam existed. (_BUILTIN_TF_TYPES is
     # tf_claims._EXTRACTORS, guarded by HAVE_TF so a checkout without the
     # terraform extractor still runs this assertion rather than ImportError-ing.)
-    # Every registered document check is owned by a landed gcp_grounding domain
-    # module — the seam never picks up a stray provider — and
-    # gcp_grounding.org_checks in particular owns exactly one, check_org_estate,
-    # and contributes no terraform extractor at all.
-    assert all(f.__module__.startswith("gcp_grounding.")
-               for f in registry.document_checks())
-    assert {f.__name__ for f in registry.document_checks()
-            if f.__module__ == "gcp_grounding.org_checks"} == {"check_org_estate"}
     assert set(registry.tf_extractors()).isdisjoint(_BUILTIN_TF_TYPES)
+
+    # Whole-document checks: every one is owned by a landed gcp_grounding domain
+    # module — the seam never picks up a stray provider — and each module in
+    # DOCUMENT_CHECK_OWNERS that is part of this checkout contributes EXACTLY the
+    # checks named there, no more and no fewer. Asserted per owning module, so a
+    # new domain landing adds its own row instead of loosening anyone else's.
+    # Each of these returns no verdict for a document that makes none of its
+    # domain's claims, which is what the byte-identical assertion below proves.
+    by_module: dict[str, set] = {}
+    for fn in registry.document_checks():
+        assert fn.__module__.startswith("gcp_grounding."), fn
+        by_module.setdefault(fn.__module__, set()).add(fn.__name__)
+    for module, names in DOCUMENT_CHECK_OWNERS.items():
+        if importlib.util.find_spec(module) is not None:
+            assert by_module.get(module, set()) == names, module
     assert registry.claim_checks("role") == ()
     fixture_types = {"google_project_iam_binding", "google_project_iam_member",
                      "google_project_iam_policy", "google_project_iam_custom_role",
