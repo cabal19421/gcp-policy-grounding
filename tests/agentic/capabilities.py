@@ -268,6 +268,21 @@ def _firewall_policy_rule(src_ip_ranges: list[str]) -> dict:
 
 
 def _security_policy(src_ip_ranges: list[str]) -> dict:
+    """A whole Cloud Armor policy proposing one allow at priority 100 in front of
+    a deny at 1000, with the terminal default rule the API requires.
+
+    ALL THREE RULES ARE PART OF THE FIXTURE, not decoration. A whole-policy
+    document carries its own complete rule list — ``armor_checks`` reads the
+    estate only for a STANDALONE rule resource — so the deny this allow may or
+    may not bypass has to be in the document. And Cloud Armor rejects a policy
+    with no rule at priority 2147483647, which ``armor_checks`` contradicts on
+    this family's own ``armor_default`` channel: a near-twin that trips THAT is
+    not a near-twin at all, it makes the good half of the probe fire and the
+    capability measure DEAD.
+
+    The two documents therefore differ in exactly the thing under test: whether
+    the priority-100 allow reaches the range the deny at 1000 protects.
+    """
     return _tf_plan("google_compute_security_policy.edge",
                     "google_compute_security_policy", {
                         "name": "acme-edge-waf",
@@ -275,6 +290,17 @@ def _security_policy(src_ip_ranges: list[str]) -> dict:
                             "action": "allow", "priority": 100, "preview": False,
                             "match": [{"versioned_expr": "SRC_IPS_V1",
                                        "config": [{"src_ip_ranges": src_ip_ranges}]}],
+                        }, {
+                            "action": "deny(403)", "priority": 1000,
+                            "preview": False,
+                            "match": [{"versioned_expr": "SRC_IPS_V1",
+                                       "config": [{"src_ip_ranges":
+                                                   ["203.0.113.0/24"]}]}],
+                        }, {
+                            "action": "allow", "priority": 2147483647,
+                            "preview": False,
+                            "match": [{"versioned_expr": "SRC_IPS_V1",
+                                       "config": [{"src_ip_ranges": ["*"]}]}],
                         }],
                     })
 

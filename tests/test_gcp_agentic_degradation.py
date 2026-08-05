@@ -186,9 +186,31 @@ def assert_block_became_abstain(outcome, report: dict, *reasons: str) -> None:
     *reasons* are substrings every abstain must name; D10 passes none because
     its cases abstain for two different reasons and the invariant it asserts is
     the bucket, not the wording.
+
+    WITH NO REASONS the bucket is asserted HERE rather than through
+    ``assert_abstained``, which requires at least one substring by contract (an
+    abstain that names no reason is a silent pass wearing a verdict, and that
+    guard belongs to the shared helper). The four bucket assertions below are
+    the same ones it makes — exit 0, report ok, at least one unverified, and no
+    ungrounded or contradicted minted out of the ignorance — over the report's
+    own verdict list rather than its summary.
     """
     assert_ran_without_z3(report)
-    assert_abstained(outcome, report, *reasons)
+    if reasons:
+        assert_abstained(outcome, report, *reasons)
+    else:
+        assert outcome.exit_code == 0, (
+            f"an abstain never fails the gate\n{outcome}")
+        assert report.get("ok") is True, f"an abstain leaves the report ok\n{outcome}"
+        statuses = [v.get("status") for v in (report.get("verdicts") or [])]
+        assert statuses.count("unverified") >= 1, (
+            f"an abstain must record at least one unverified verdict, not pass "
+            f"in silence\n{outcome}")
+        assert statuses.count("ungrounded") == 0, (
+            f"an abstain must not report anything ungrounded\n{outcome}")
+        assert statuses.count("contradicted") == 0, (
+            f"an abstain must not manufacture a contradiction out of "
+            f"ignorance\n{outcome}")
     summary = report["summary"]
     assert summary["contradicted"] == 0, (
         f"ignorance must not be rendered as a contradiction: {summary!r}"
@@ -320,40 +342,53 @@ def test_D04_subset_degrades(agent_workdir, estate_snapshot_path, no_z3_env):
 
 def test_D04_condition_evasion_abstains_in_both_worlds(
         agent_workdir, estate_snapshot_path, no_z3_env):
-    """A15's condition evasion: ``unverified`` WITH z3 and without — and for a
-    different reason each time.
+    """A15's condition evasion: DECIDED with z3, ``unverified`` without — and the
+    two answers must stay distinguishable.
 
-    ``constraints._grant_pairs`` raises ``_Undecidable`` on the mere presence of
-    a ``condition`` key, *before* the solver is ever consulted, so until
-    ``sx-iam-subset-conditional`` lands this case abstains in both worlds. That
-    makes it the control D04 needs: the two abstains must stay distinguishable
-    in the message text, or "the solver is gone" and "the comparison is
-    request-time-dependent" collapse into one unreadable verdict and an operator
-    cannot tell which capability to restore.
+    WHAT CHANGED, AND WHY THIS TEST STILL EARNS ITS NAME. It was written when
+    ``constraints._grant_pairs`` raised ``_Undecidable`` on the mere presence of
+    a ``condition`` key, before the solver was ever consulted, so the case
+    abstained in BOTH worlds and the pin was that the two abstains named
+    different reasons. ``sx-iam-subset-conditional`` — the branch the original
+    docstring named as pending — has landed: a conditional grant is now compared
+    at request.time, so with z3 this is a real ``contradicted`` finding.
+
+    The property is unchanged and is now the sharper one: the capability's
+    presence decides, its absence ABSTAINS NAMING THE SOLVER, and the two
+    messages remain tellable apart. If the no-z3 arm ever came back
+    ``contradicted``, ignorance would be rendered as a finding; if it came back
+    with the same message as the z3 arm, an operator could not tell which
+    capability to restore.
     """
     path, _ = stage("D04b_condition_evasion", iam_payload("A15_condition_evasion"),
                     agent_workdir, expect="abstain")
     baseline = baseline_path("A15_baseline")
 
+    with_z3 = None
     if env.HAVE_Z3:
         decided = ground_json(path, snapshot=estate_snapshot_path, baseline=baseline)
         with_z3 = subset_verdict(decided)
-        assert with_z3["status"] == "unverified", with_z3
-        assert "conditional" in with_z3["message"], with_z3
+        assert with_z3["status"] == "contradicted", with_z3
+        # The finding names the request-time dimension the conditional
+        # comparison reasons over — not the solver, which was present.
+        assert "request.time" in with_z3["message"], with_z3
         assert NO_Z3_REASON not in with_z3["message"], (
-            f"z3 was present, so the abstain must not blame the solver: {with_z3}")
+            f"z3 was present, so the verdict must not blame the solver: {with_z3}")
 
     report = ground_json(path, snapshot=estate_snapshot_path, baseline=baseline,
                          env=no_z3_env)
     assert_ran_without_z3(report)
     without_z3 = subset_verdict(report)
     assert without_z3["status"] == "unverified", without_z3
-    # The reason is STILL the condition, not the solver: _Undecidable fires
-    # first. If this ever flips to the z3 reason, the earlier abstain has been
-    # swallowed by the later one and the two are no longer distinguishable.
-    assert "conditional" in without_z3["message"], (
-        f"the earlier _Undecidable abstain must survive the loss of z3, so the "
-        f"two reasons stay tellable apart: {without_z3}{VACUOUS_IF_D01_RED}")
+    # Losing the solver costs the comparison, and the abstain says so: the two
+    # answers stay distinguishable, which is what this case exists to pin.
+    assert NO_Z3_REASON in without_z3["message"], (
+        f"the abstain must name the capability that is missing, so an operator "
+        f"knows what to restore: {without_z3}{VACUOUS_IF_D01_RED}")
+    if with_z3 is not None:
+        assert without_z3["message"] != with_z3["message"], (
+            f"the two worlds' answers collapsed into one unreadable message: "
+            f"{without_z3}{VACUOUS_IF_D01_RED}")
     assert report["summary"]["contradicted"] == 0, report["summary"]
 
 
