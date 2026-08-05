@@ -74,7 +74,7 @@ import importlib
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from . import packet
+from . import evidence, packet
 from .armor_claims import DEFAULT_RULE_PRIORITY
 from .constraints import _z3_module
 from .core.log import get_logger
@@ -140,12 +140,32 @@ class _Encoder:
             self._armor_vars = self._expr.armor_vars(self.z3, self.packet_vars.src)
         return self._armor_vars
 
-    def match(self, rule: Mapping[str, Any]):
-        """The z3 predicate for a normalized rule's ``match``."""
+    def match(self, rule: Mapping[str, Any], what: str = "an Armor rule", *,
+              ranges_are: Any = list):
+        """The z3 predicate for a rule's ``match``.
+
+        BOTH SIDES REACH HERE and only one of them is normalized: a PROPOSED
+        rule arrives as ``armor_claims``' payload, which refuses a rule whose
+        match carries neither ``config.srcIpRanges`` nor ``expr`` by marking it
+        ``unsupported``; an EXISTING rule arrives as a snapshot record, where an
+        absent or wrong-typed ``match`` is exactly the shape the evidence channel
+        exists for. Substituting ``{}`` for an unread match encodes the rule as
+        matching NO PACKET — a deny that never fires, which is a permissive rule
+        wearing a denial — so every read here goes through
+        :func:`gcp_grounding.evidence.scalar` and abstains for the rule instead.
+
+        *ranges_are* is the sequence type THE CALLER's side guarantees for
+        ``src_ip_ranges``, and it is a parameter because the two sides genuinely
+        differ: a claim payload carries a ``list``, and
+        ``GcpSnapshot._tuplify`` freezes a captured record's lists into
+        ``tuple``s. Declaring it per side is what keeps "present with the wrong
+        shape" a real abstention instead of a type test wide enough to admit the
+        string that fakes an empty collection.
+        """
         unsupported = rule.get("unsupported")
         if unsupported:
             raise _Unencodable(str(unsupported))
-        match = rule.get("match") or {}
+        match = _read_or_abstain(rule, "match", dict, what)
         expression = match.get("expr")
         if expression:
             armor_vars = self._vars()  # _Unencodable when armor_expr is absent
@@ -155,7 +175,12 @@ class _Encoder:
                 raise _Unencodable("expression is too deeply nested to translate") from None
             except Exception as exc:  # UnsupportedArmorExpr / UnsupportedPacket
                 raise _Unencodable(f"{type(exc).__name__}: {exc}") from None
-        ranges = [_range(item) for item in (match.get("src_ip_ranges") or ())]
+        # No `expr`, so the ranges ARE the match: an absent 'src_ip_ranges' says
+        # nothing about which packets this rule matches, and reading it as "no
+        # ranges" would encode the rule as never firing.
+        ranges = [_range(item)
+                  for item in _read_or_abstain(match, "src_ip_ranges",
+                                               ranges_are, f"{what}'s match")]
         try:
             return packet.any_cidr_match(self.z3, self.packet_vars.src, ranges)
         except packet.UnsupportedPacket as exc:
@@ -174,6 +199,23 @@ class _Encoder:
                 logger.debug("could not render origin.region_code from the model",
                              exc_info=True)
         return source, region
+
+
+def _read_or_abstain(container: Any, key: str, expected: Any, what: str):
+    """*container[key]* through the evidence channel, as this module's own
+    per-rule abstain.
+
+    ``evidence.scalar`` needs no ledger, which matters here: these checks are
+    also called directly, and the typed abstain must not depend on an invoker
+    having opened one. The :class:`~gcp_grounding.evidence.NotEvaluated` is
+    CONVERTED rather than propagated so one unreadable rule abstains for itself
+    while every other rule in the policy is still decided — propagating it would
+    collapse the whole check into a single unverified.
+    """
+    try:
+        return evidence.scalar(container, key, what=what, type=expected)
+    except evidence.NotEvaluated as exc:
+        raise _Unencodable(exc.reason) from None
 
 
 def _range(item: Any) -> Any:
@@ -237,7 +279,17 @@ def _check_default_rule(rules) -> list[Verdict]:
                         f"{DEFAULT_RULE_PRIORITY} — Cloud Armor requires one and the "
                         f"policy would be rejected")]
     claim, fields = default
-    action = str(fields.get("action") or "")
+    try:
+        # An action the payload does not carry must NOT read as a denial: every
+        # branch below grades this rule, and "" is not an allow, so the empty
+        # substitution would report a rule nobody read as a clean deny-by-default.
+        action = evidence.scalar(fields, "action", type=str,
+                                 what=f"the default rule of {policy}")
+    except evidence.NotEvaluated as exc:
+        return [Verdict("unverified", "armor_default", policy, 0,
+                        f"{claim.location}: the default rule at priority "
+                        f"{DEFAULT_RULE_PRIORITY} {exc.reason} — whether traffic "
+                        f"matching no earlier rule is denied was not decided")]
     if _is_allow(action):
         return [Verdict("grounded", "armor_default", policy, 0,
                         f"{claim.location}: default rule allows all traffic — this "
@@ -270,15 +322,20 @@ def _check_priority_order(rules, ctx) -> list[Verdict]:
     for claim, fields in rules:
         rule_id = _rule_id(_policy_of(claim, fields), fields, claim.location)
         try:
-            term = encoder.match(fields)
+            term = encoder.match(fields, f"the proposed rule {rule_id}")
             priority = fields.get("priority")
             if not isinstance(priority, int) or isinstance(priority, bool):
                 raise _Unencodable(f"priority {priority!r} is not an integer")
+            # The ACTION decides whether this rule's packets are permitted, so an
+            # unread one may not default to a denial: `_Rule.action` feeds
+            # `_is_allow` in both solver checks below.
+            action = _read_or_abstain(fields, "action", str,
+                                      f"the proposed rule {rule_id}")
         except _Unencodable as exc:
             verdicts.append(_unencodable_verdict(rule_id, claim.location, exc))
             continue
         proposed.append(_Rule(id=rule_id, location=claim.location, priority=priority,
-                              action=str(fields.get("action") or ""), term=term))
+                              action=action, term=term))
 
     existing, estate_verdicts = _estate_rules(ctx, rules, encoder, where)
     verdicts += estate_verdicts
@@ -388,20 +445,40 @@ def _estate_rules(ctx, rules, encoder: _Encoder,
                                     f"rules could not be read — the priority-bypass "
                                     f"check against them was not made"))
             continue
-        for index, rule in enumerate(record.get("rules") or ()):
+        # THE THIRD ABSTENTION, and the one the other two make obvious: a record
+        # whose 'rules' cannot be read is not a policy with no rules. Reading it
+        # as `()` sweeps zero existing rules, finds no deny to bypass, and grades
+        # the proposal grounded against a policy nobody read.
+        try:
+            existing_rules = evidence.scalar(
+                record, "rules", type=tuple,
+                what=f"the snapshot's cloud_armor_policies record for {name!r}")
+        except evidence.NotEvaluated as exc:
+            verdicts.append(Verdict("unverified", "armor_bypass", name, 0,
+                                    f"{where}: the snapshot's record for {name!r} "
+                                    f"{exc.reason}, so its existing rules could not "
+                                    f"be read — the priority-bypass check against "
+                                    f"them was not made"))
+            continue
+        for index, rule in enumerate(existing_rules):
             location = f"snapshot.cloud_armor_policies[{name!r}].rules[{index}]"
             rule_id = _rule_id(name, rule, location)
             try:
-                term = encoder.match(rule)
+                term = encoder.match(rule, f"the existing rule {rule_id}",
+                                     ranges_are=tuple)
                 priority = rule.get("priority")
                 if not isinstance(priority, int) or isinstance(priority, bool):
                     raise _Unencodable(f"priority {priority!r} is not an integer")
+                # Same reason as the proposed side: an existing rule whose action
+                # is unread must not be modelled as a deny (nothing bypasses it)
+                # nor as an allow (it bypasses everything).
+                action = _read_or_abstain(rule, "action", str,
+                                         f"the existing rule {rule_id}")
             except _Unencodable as exc:
                 verdicts.append(_unencodable_verdict(rule_id, location, exc))
                 continue
             out.append(_Rule(id=rule_id, location=location, priority=priority,
-                             action=str(rule.get("action") or ""), term=term,
-                             existing_in=name))
+                             action=action, term=term, existing_in=name))
     return out, verdicts
 
 
@@ -409,10 +486,30 @@ def _estate_rules(ctx, rules, encoder: _Encoder,
 
 
 def _check_expr_vocabulary(rules) -> list[Verdict]:
+    """CHECK 4, and the one read here that is LEGITIMATELY OPTIONAL.
+
+    ``referenced_expr_ids`` is present only on a rule whose match is an
+    expression that calls ``evaluatePreconfiguredExpr``: a plain CIDR rule
+    references no curated id, and abstaining because the key is absent would put
+    an abstention on every config-shaped rule in the estate. So the read declares
+    ``absent=[]`` explicitly — the operative half of the evidence contract is the
+    other one, that a ``referenced_expr_ids`` which IS there and is not a list is
+    unread rather than empty, and that no longer passes silently.
+    """
     curated = _preconfigured_expr_ids()
     verdicts: list[Verdict] = []
     for claim, fields in rules:
-        for expr_id in fields.get("referenced_expr_ids") or ():
+        try:
+            referenced = evidence.scalar(
+                fields, "referenced_expr_ids", type=list, absent=[],
+                what=f"the rule at {claim.location}")
+        except evidence.NotEvaluated as exc:
+            verdicts.append(Verdict("unverified", "armor_expr", claim.value, 0,
+                                    f"{claim.location}: {exc.reason} — the "
+                                    f"preconfigured WAF expressions this rule "
+                                    f"references were not checked"))
+            continue
+        for expr_id in referenced:
             if expr_id in curated:
                 continue
             verdicts.append(Verdict("unverified", "armor_expr", expr_id, 0,

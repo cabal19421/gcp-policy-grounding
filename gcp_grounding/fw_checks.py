@@ -47,7 +47,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from . import fw_claims
+from . import evidence, fw_claims
 from .constraints import _z3_module
 from .core.log import get_logger
 from .core.report import Verdict
@@ -120,14 +120,29 @@ def _network_of(rule: Mapping[str, Any]) -> str:
 def _universe(rules: Sequence[Mapping[str, Any]]) -> tuple[list[str], list[str]]:
     """The sorted tag and service-account universes *rules* mention, on either
     side of either field. Sorted so the formula a given pair of documents
-    produces is byte-stable run to run."""
+    produces is byte-stable run to run.
+
+    ALL FOUR FIELDS ARE LEGITIMATELY OPTIONAL, and that is why the reads declare
+    ``absent=[]`` instead of abstaining: a firewall rule that names no source
+    tags is the common case, not an unreadable one, and a rule set whose every
+    member abstained on the absence of ``source_tags`` would decide nothing at
+    all. ``fw_claims``' two normalizers set all four keys for every rule they
+    emit, so an ABSENT key here means the mapping came from somewhere else; a key
+    that IS present and is not a list is unread rather than empty, and that half
+    now abstains through the evidence channel instead of being silently swept
+    into an empty universe — a tag universe that lost a member makes every
+    tag-scoped rule compare as if the tag could never be set.
+    """
     tags: set[str] = set()
     accounts: set[str] = set()
-    for rule in rules:
+    for index, rule in enumerate(rules):
+        what = f"firewall rule {_rule_name(rule)!r} (rule {index})"
         for field in ("source_tags", "target_tags"):
-            tags.update(t for t in (rule.get(field) or ()) if isinstance(t, str))
+            entries = evidence.scalar(rule, field, what=what, type=list, absent=[])
+            tags.update(t for t in entries if isinstance(t, str))
         for field in ("source_service_accounts", "target_service_accounts"):
-            accounts.update(e for e in (rule.get(field) or ()) if isinstance(e, str))
+            entries = evidence.scalar(rule, field, what=what, type=list, absent=[])
+            accounts.update(e for e in entries if isinstance(e, str))
     return sorted(tags), sorted(accounts)
 
 
