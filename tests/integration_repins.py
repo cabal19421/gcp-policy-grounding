@@ -148,8 +148,16 @@ REPINS: tuple[Repin, ...] = (
             "Both halves are now asserted where the branch asserted one: "
             "assert_blocked for the run, and assert_sec_channel_abstained — the "
             "same three-bucket assertion narrowed to the sec: kinds — for the "
-            "promise, so neither half can hide the other. The exit code is pinned "
-            "in both arms rather than only the live one."
+            "promise, so neither half can hide the other. The branch's other "
+            "casualty is repaired too: its "
+            "`assert estate_outcome.exit_code == 0, estate_outcome` had been "
+            "deleted from the not-live arm and nothing replaced it, so that arm "
+            "pinned no run outcome at all; assert_blocked plus the exit-code "
+            "assertion now sit OUTSIDE the `if live:` and hold in both worlds, "
+            "which is what `drive`'s unconditional \"block\" expectation claims. "
+            "The firewall family decides that finding whether or not the sec "
+            "chain compiled, so there is no world left where the label is "
+            "unbacked."
         ),
         superseded_by=(
             "The one-terraform-entry-point routing (a72bf27: cli._ground reaches "

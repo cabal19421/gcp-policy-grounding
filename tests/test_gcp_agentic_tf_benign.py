@@ -870,12 +870,24 @@ def test_the_promise_abstains_over_terraform_and_is_live_over_the_estate(tmp_pat
         reopened = assert_recorded(estate_report, kind="firewall_reopen",
                                   target=FIREWALL.rsplit("/", 1)[-1])
         assert reopened["status"] == "contradicted", reopened
-        assert_blocked(estate_outcome, "tcp/22")
-        assert estate_outcome.exit_code == 2, (
-            f"the widening edit was not blocked over the estate\n{estate_outcome}")
     else:
         assert "not registered" in decided["message"], decided
         assert "not enforcing" in estate_outcome.stderr, estate_outcome
+    # THE RUN'S OWN OUTCOME, PINNED IN BOTH WORLDS — outside the `if live:` where
+    # it used to sit. The widening edit is a finding the FILE's claims carry
+    # (`firewall_exposure` over a world-open tcp/22), which the firewall family
+    # decides whether or not the sec chain compiled, so `drive`'s unconditional
+    # "block" expectation above must be true in both arms or one of them is a
+    # label with nothing behind it. This is also where
+    # `agent/tx-agentic-tf-benign`'s deleted `estate_outcome.exit_code == 0` left
+    # a hole: its premise (no claim is extracted from a .tf.json) was retired by
+    # the one-terraform-entry-point routing, and the honest replacement is the
+    # exit code the routing really produces, asserted where the branch asserted
+    # one — the not-live arm — rather than only where it was convenient. See
+    # tests/integration_repins.py::RP-TFBENIGN-PROMISE-RUN-BUCKET.
+    assert_blocked(estate_outcome, "tcp/22")
+    assert estate_outcome.exit_code == 2, (
+        f"the widening edit was not blocked over the estate\n{estate_outcome}")
     assert_sec_channel_abstained(estate_report, PROMISE_COLLECTION)
     assert_claims_nothing_safe(estate_report, PROMISE_ID)
 
