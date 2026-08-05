@@ -813,9 +813,10 @@ def test_no_org_verdict_carries_a_line_number(snap, partial):
 
     Drives the committed org documents over both estate snapshots, each as
     another's ``--baseline``, and over the priors CHECK 2 needs, built with
-    ``with_org_policy``. Two arms carry no committed document of their own —
-    a proposal naming no node, one setting ``allowAll`` — so each is driven
-    from a committed fixture with that one field changed.
+    ``with_org_policy``. Arms carrying no committed document of their own — a
+    proposal naming no node, one setting ``allowAll``, the three unreadable
+    proposal payloads and a record that records no rule — are each driven from
+    a committed fixture with that one field changed.
     """
     docs = [load(n) for n in ("org_policy_good.json", "org_policy_bad.json",
                               "org_policy_disabled.json",
@@ -824,15 +825,39 @@ def test_no_org_verdict_carries_a_line_number(snap, partial):
     unnamed["constraint"] = DOMAINS
     allow_all = copy.deepcopy(docs[3])
     allow_all["spec"]["rules"] = [{"allowAll": True}]
+    # The proposal side of the honesty contract: a rule carrying no value-type
+    # key, a `rules` that is not an array, and an ambiguous two-key rule.
+    unreadable = [dict(docs[3], spec=dict(docs[3]["spec"], rules=r))
+                  for r in ([{}], "nope", [{"allowAll": True, "denyAll": True}])]
     narrow = with_org_policy(snap, NODE, DOMAINS, [rule(allowed_values=["C01abcdef"])])
     wide = with_org_policy(snap, NODE, DOMAINS, [rule(allow_all=True)])
     enforcing = with_org_policy(snap, NODE, DOMAINS, [rule(enforce=True)])
+    # A record that records NOTHING is not a record of non-enforcement.
+    no_rule = with_org_policy(snap, NODE, DOMAINS, [])
 
     reports = [ground_policy(d, s) for d in docs for s in (snap, partial)]
     reports += [ground_policy(d, snap, baseline=b) for d in docs for b in docs]
     reports += [ground_policy(docs[3], s) for s in (narrow, wide, enforcing)]
     reports += [ground_policy(d, s) for d in (unnamed, allow_all)
                 for s in (narrow, snap)]
+    # The four arms no committed fixture reaches, each pinned to have DECIDED —
+    # status, target and the reason it names, the proposal side also naming
+    # WHICH node it was read against — so the lineno 0 beside it is a
+    # decision's, not some fail-open branch's.
+    unreached = [(ground_policy(docs[3], no_rule),
+                  ("carries no rule to read (its 'rules' list is present and "
+                   "holds no records)",))]
+    unreached += [(ground_policy(d, snap), (why, f"at {NODE} could not be read"))
+                  for d, why in zip(unreadable, (
+                      "carries none of the value-type keys",
+                      "spec.rules is not an array, got str",
+                      "carries 2 value-type keys (allowAll, denyAll) at once"))]
+    for report, reasons in unreached:
+        assert any(v.status == "unverified" and v.target == DOMAINS
+                   and all(r in v.message for r in reasons)
+                   for v in enforcement(report)), \
+            [(v.status, v.message) for v in enforcement(report)]
+    reports += [r for r, _ in unreached]
 
     # Non-vacuity: the drive really decides, in all three directions.
     assert {v.status for r in reports for v in enforcement(r)} == {

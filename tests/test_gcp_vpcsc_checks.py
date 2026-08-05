@@ -757,13 +757,36 @@ def _variants(perimeter: dict) -> list[dict]:
     ]
 
 
+def _unreadable_priors(perimeter: dict) -> list[tuple[dict, str, str]]:
+    """``(prior, kind, the reason it must name)`` per OLD-side abstention — the
+    committed perimeter with one field changed per copy into a shape nothing
+    can READ. Every ``_variants`` entry above is well-formed, so none of them
+    reaches an unreadable protection field (``vpcsc_checks.py:253``), a policy
+    list that is not a list (:575), or a readable policy whose axis cannot be
+    read (:587)."""
+    status = perimeter["status"]
+    return [
+        (dict(perimeter, status=dict(status, resources=REMOVED_PROJECT)),
+         "vpcsc_protection",
+         "'resources' could not be read ('status.resources' is str, not a list)"),
+        (dict(perimeter, status=dict(status, egressPolicies="nope")),
+         "vpcsc_egress", "'status.egress_policies' is str, not a list"),
+        (dict(perimeter, status=dict(status, egressPolicies=[
+            {"egressFrom": {"identities": "not-a-list"},
+             "egressTo": {"operations": []}}])),
+         "vpcsc_egress",
+         "egress identity axis could not be read ('identities' is str, not a list)"),
+    ]
+
+
 def test_no_vpcsc_verdict_carries_a_line_number(estate, partial, monkeypatch):
     """Every arm of this module reports ``lineno`` 0 — see lineno_invariant.
 
     Drives the three committed perimeters and the variants above over both
     estate snapshots, each as every other's ``--baseline`` (plus a
-    non-perimeter one), and the whole matrix again with the builtin backend
-    forced — the only way to reach the z3-absent widening abstention here.
+    non-perimeter one), the unreadable priors below, and the whole matrix again
+    with the builtin backend forced — the only way to reach the z3-absent
+    widening abstention here.
     """
     docs = [load(n) for n in ("vpcsc_perimeter.json",
                               "vpcsc_perimeter_shrunk.json",
@@ -779,6 +802,16 @@ def test_no_vpcsc_verdict_carries_a_line_number(estate, partial, monkeypatch):
                 reports.append(ground_policy(doc, snapshot))
                 for other in docs + [load("iam_policy_good.json")]:
                     reports.append(ground_policy(doc, snapshot, baseline=other))
+    for prior, kind, reason in _unreadable_priors(docs[0]):
+        report = ground_policy(docs[0], estate, baseline=prior)
+        reports.append(report)
+        # Identity, not shape: each path is pinned to have DECIDED — status,
+        # kind, target and the reason it names — so the lineno 0 beside it is
+        # a decision's, not some fail-open branch's.
+        assert any(v.status == "unverified" and v.kind == kind
+                   and v.target == NAME and reason in v.message
+                   for v in vpcsc(report)), [(v.kind, v.message) for v in
+                                             vpcsc(report)]
 
     # Non-vacuity: the drive really decides, in all three directions.
     assert {v.status for r in reports for v in vpcsc(r)} == {
