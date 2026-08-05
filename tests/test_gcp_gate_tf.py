@@ -279,7 +279,15 @@ def test_two_interpolations_yield_exactly_two_unresolved_verdicts(tf_gate, tmp_p
     assert len(downgraded) == 2
     assert all("a clean result cannot be claimed" in v.message
                for v in downgraded)
-    assert file.status == "unverified"
+    # NOTHING here is clean. The status read `unverified` on the branch that
+    # wrote this, when no firewall checker existed; the firewall domain has since
+    # landed and this body opens tcp/22 to 0.0.0.0/0, which is a finding in its
+    # own right — so the honest status is the stronger `failed`. The two kinds
+    # below pin WHY, so the change of status stays attributable to the firewall
+    # domain and can never come from the interpolation path this test is about.
+    assert file.status == "failed"
+    assert {v.kind for v in file.verdicts if v.status == "contradicted"} == {
+        "firewall_exposure", "firewall_reopen"}
 
 
 def test_a_tf_json_widening_reaches_the_pair_tier():

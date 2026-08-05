@@ -506,12 +506,22 @@ def test_a_bare_state_representation_is_read_at_the_state_source():
 # -- the ONE claims path ---------------------------------------------------
 
 
-#: The two claims the DELETE RULE adds and the committed plan cannot: today
-#: ``tf_claims`` reads only ``change.after``, so a deleted IAM member yields
-#: nothing but its type reference. Naming them is what keeps this pin honest —
-#: it is a statement about the delete rule, not a licence for the extraction
+#: The claims the DELETE RULE adds and the committed plan cannot: today
+#: ``tf_claims`` reads only ``change.after``, so a deleted resource yields
+#: nothing but its type reference. Naming them ALL is what keeps this pin honest
+#: — it is a statement about the delete rule, not a licence for the extraction
 #: path to drift.
+#:
+#: The IAM pair is what the branch that wrote this measured. The firewall pair is
+#: the same delete rule read by the firewall extractor that landed with the
+#: network domain: the deleted google_compute_firewall yields its rule claim and
+#: the network reference inside it, from prior state, for exactly the same reason
+#: the deleted IAM member does.
 DELETE_RULE_CLAIMS = [
+    ("firewall_rule", "deny-ssh-external",
+     "google_compute_firewall.deny-ssh-external[0]"),
+    ("network_ref", "projects/acme-prod/global/networks/vpc-main",
+     "google_compute_firewall.deny-ssh-external[0].network"),
     ("principal", "group:data-eng@acme.example",
      "google_project_iam_member.legacy-viewer.member"),
     ("role", "roles/viewer", "google_project_iam_member.legacy-viewer.role"),

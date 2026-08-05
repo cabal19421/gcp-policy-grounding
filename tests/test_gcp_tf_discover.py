@@ -156,7 +156,19 @@ NON_STEALING = [
 
 
 def test_the_matrix_covers_all_seven_committed_policy_fixtures():
-    assert len(sorted(POLICIES.glob("*.json"))) == 7
+    """Every committed policy fixture is in the non-stealing matrix, and the
+    inventory is pinned so a new one cannot arrive uncovered.
+
+    The matrix is glob-derived, so coverage is asserted structurally — one case
+    per fixture plus the snapshot — and the count is the pin that makes growth
+    VISIBLE. It read 7 on the branch that wrote this; the integrated tree
+    commits the firewall / hierarchical-firewall / Cloud Armor / VPC-SC / deny
+    and terraform fixtures the domain tasks brought with them, and every one of
+    them is exercised by the parametrized case below.
+    """
+    fixtures = sorted(POLICIES.glob("*.json"))
+    assert len(NON_STEALING) == len(fixtures) + 1  # + snapshot.json
+    assert len(fixtures) == 23
 
 
 @pytest.mark.parametrize("path", NON_STEALING)
