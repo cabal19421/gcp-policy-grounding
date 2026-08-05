@@ -4,7 +4,7 @@
   ],
   "captured_at": "2026-07-18T09:30:00Z",
   "cloud_armor_policies": {
-    "armor-policy-prod": {
+    "projects/acme-prod/global/securityPolicies/armor-policy-prod": {
       "rules": [
         {
           "action": "deny(403)",

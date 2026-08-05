@@ -647,9 +647,31 @@ class GcpSnapshot:
         return self.hierarchical_firewall_policies.get(name)
 
     def cloud_armor_policy(self, name: str) -> Mapping[str, Any] | None | Unknown:
+        """The captured Cloud Armor policy — resolving a BARE policy name against
+        the captured table when exactly one row carries that leaf name.
+
+        The table is keyed ``projects/<project>/global/securityPolicies/<name>``,
+        as :data:`gcp_grounding.identity.CATEGORY_SPECS` requires, but a
+        terraform ``google_compute_security_policy_rule`` names its parent policy
+        bare (``security_policy = "armor-policy-prod"``), so a proposed rule
+        carries no project to qualify it with. Resolving the leaf name here does
+        NOT mint a key from a guess: the project comes from the captured row
+        itself, and an ambiguous leaf name (two projects, one policy name) stays
+        None rather than picking one. That is the same shape as
+        :meth:`hierarchy_node`'s alias resolution, and it is why
+        ``identity.canonical_key`` can keep refusing a bare name outright —
+        minting an identity and finding an existing one are different questions.
+        """
         if self.cloud_armor_policies is None:
             return UNKNOWN
-        return self.cloud_armor_policies.get(name)
+        record = self.cloud_armor_policies.get(name)
+        if record is not None or "/" in name:
+            return record
+        matches = [value for key, value in self.cloud_armor_policies.items()
+                   if key.rsplit("/", 1)[-1] == name]
+        if len(matches) == 1:
+            return matches[0]
+        return None
 
     def vpc_sc_perimeter(self, name: str) -> Mapping[str, Any] | None | Unknown:
         if self.vpc_sc_perimeters is None:
