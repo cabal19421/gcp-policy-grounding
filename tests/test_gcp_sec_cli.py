@@ -13,10 +13,23 @@ Two tests pin it from both sides: a corpus with a rejected promise must emit
 exactly that line without ``--abstain-notes`` and with the environment unset,
 and a corpus where everything compiled must emit byte-nothing.
 
+COMPILING NOTHING MUST NOT PASS. The walker never raises on a missing directory
+and a report over zero verdicts is trivially ``ok``, so all four degenerate front
+doors — a nonexistent directory, an empty one, a document with no promise block,
+and a path that is a regular file — used to exit 0 printing PASSED with every
+count zero and byte-empty stderr, ``--check`` included. ``_compile_floor`` is
+pinned here from each of those four sides, plus the orphan artifact whose source
+document was deleted and the two-document corpus whose SECOND document carries
+the rejection.
+
 Environment-honest: without z3 no witness can be minted, so every promise
-compiles to ``unverified`` rather than ``compiled`` and the enforcing/stalled
-split this module measures does not exist. Those tests branch on the detected
-backend rather than asserting a z3-shaped world.
+compiles to ``unverified`` rather than ``compiled``, no rule is admitted, and
+the enforcing/stalled split this module measures does not exist. Every test that
+needs a minted witness is SKIPPED there rather than returning early — a bare
+``return`` reports as a pass while asserting nothing, which is exactly the
+vacuity these tests exist to remove — and :data:`_needs_no_z3` carries the
+mirror-image assertions: on the fallback backend the compile still exits 0 with
+every promise unverified, and the pickup says so out loud.
 """
 
 import importlib.util
@@ -50,6 +63,17 @@ CLEAN_CORPUS = SEC / "clean"
 STALLED_CORPUS = SEC / "stalled"
 
 HAVE_Z3 = get_solver().backend == "z3"
+
+#: A minted witness needs a solver, so without one nothing reaches ``compiled``
+#: and there is no enforcing/stalled split to measure. An explicit SKIP, never a
+#: bare ``return``: a skipped assertion is visible in the run, a returned one
+#: reports as a pass while asserting nothing.
+_needs_z3 = pytest.mark.skipif(
+    not HAVE_Z3, reason="no solver: no promise compiles, so nothing enforces")
+#: The mirror image — the positive assertions about the fallback backend, which
+#: only mean anything when the solver really is absent.
+_needs_no_z3 = pytest.mark.skipif(
+    HAVE_Z3, reason="a solver is available, so the fallback backend is not live")
 
 
 def invoke(capsys, *argv: str) -> tuple[int, str, str]:
@@ -209,9 +233,260 @@ def test_llm_degrades_to_a_note_instead_of_failing(capsys, tmp_path):
         assert "--llm" in err or err == ""
 
 
+# -- the front door: compiling nothing must not pass ---------------------------
+#
+# MEASURED before the fix, all four exiting 0 with `PASSED [z3] grounded=0
+# ungrounded=0 contradicted=0 unverified=0` on stdout and byte-empty stderr, in
+# --check too:
+#
+#   $ .venv/bin/python -m pytest -q tests/test_gcp_sec_cli.py \
+#       -k "front_door or not_a_directory"
+#   5 failed
+#
+# so a CI job whose corpus directory was renamed was green forever, including in
+# the mode whose whole purpose is keeping committed artifacts honest.
+
+
+def _corpus(tmp_path, name: str, body: str) -> Path:
+    corpus = tmp_path / name
+    corpus.mkdir()
+    (corpus / "requirements.md").write_text(body, encoding="utf-8")
+    return corpus
+
+
+def _promise_doc(promise_id: str, role: str) -> str:
+    """One requirement document carrying exactly one promise over *role*."""
+    return (f"---\ndomain: iam\nstate: proposal\nseverity: high\n---\n\n"
+            f"# Requirements\n\n## No {role} grants\n\n"
+            f"No binding may grant {role}.\n\n"
+            f"```promise\nid: {promise_id}\nmode: refute\n"
+            f"vocab: role {role}\nsmt:\n"
+            f"  exists b in iam_bindings\n"
+            f'    cmp eq field b.role str "{role}"\n```\n')
+
+
+def test_front_door_an_empty_directory_does_not_pass(capsys, tmp_path):
+    """An existing directory with no requirement document at all.
+
+    The walker returns an empty tuple, a report over zero verdicts is trivially
+    ``ok`` and ``any`` over an empty sequence is False, so every ingredient of
+    the exit code says "fine" while nothing was examined.
+    """
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    code, stdout, err = invoke(capsys, "compile-requirements", str(empty),
+                               "--snapshot", str(SNAPSHOT),
+                               "--out", str(tmp_path / "compiled"))
+    assert code == 1
+    assert "nothing was compiled" in stdout
+    assert str(empty) in stdout
+    assert err == ""
+
+
+def test_front_door_a_document_with_no_promise_block_does_not_pass(capsys, tmp_path):
+    """A document that parses and yields ZERO promises is the same silence with
+    a file in the way."""
+    corpus = _corpus(tmp_path, "prose",
+                     "---\ndomain: iam\n---\n\n# Requirements\n\nProse only.\n")
+    code, stdout, _ = invoke(capsys, "compile-requirements", str(corpus),
+                             "--snapshot", str(SNAPSHOT),
+                             "--out", str(tmp_path / "compiled"))
+    assert code == 1
+    assert "nothing was compiled" in stdout
+
+
+def test_front_door_an_empty_directory_does_not_pass_check_either(capsys, tmp_path):
+    """--check is the mode whose whole purpose is keeping committed artifacts
+    honest, so it is the one that must not be green over an empty walk."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    code, stdout, _ = invoke(capsys, "compile-requirements", str(empty),
+                             "--snapshot", str(SNAPSHOT),
+                             "--out", str(tmp_path / "compiled"), "--check")
+    assert code == 1
+    assert "nothing was compiled" in stdout
+
+
+def test_a_missing_directory_is_a_usage_error(capsys, tmp_path):
+    """Exit 2, which the module docstring reserves for usage errors: naming a
+    corpus that is not there is the operator naming the wrong thing, not a
+    finding about any requirement."""
+    missing = tmp_path / "not-there"
+    code, stdout, err = invoke(capsys, "compile-requirements", str(missing),
+                               "--snapshot", str(SNAPSHOT),
+                               "--out", str(tmp_path / "compiled"))
+    assert code == 2
+    assert stdout == ""
+    assert err.splitlines() == [
+        f"gcp-ground compile-requirements: error: {missing} is not a directory "
+        f"— there is no requirement corpus to compile"]
+
+
+def test_a_regular_file_is_a_usage_error(capsys, tmp_path):
+    """Same exit code and same reason for a path that exists but is a file."""
+    document = tmp_path / "requirements.md"
+    document.write_text("# not a directory\n", encoding="utf-8")
+    code, stdout, err = invoke(capsys, "compile-requirements", str(document),
+                               "--snapshot", str(SNAPSHOT),
+                               "--out", str(tmp_path / "compiled"))
+    assert code == 2
+    assert stdout == ""
+    assert "is not a directory" in err
+
+
+def test_an_unwritable_output_directory_is_a_usage_error(capsys, tmp_path):
+    """It used to raise PermissionError out of main(), which the shell reports as
+    exit 1 — the code the docstring gives to a REJECTED promise. Where the
+    artifacts go is a usage decision and reports as one, on one line."""
+    out = tmp_path / "readonly"
+    out.mkdir()
+    out.chmod(0o500)
+    try:
+        code, stdout, err = invoke(capsys, "compile-requirements",
+                                   str(CLEAN_CORPUS), "--snapshot", str(SNAPSHOT),
+                                   "--out", str(out))
+    finally:
+        out.chmod(0o700)
+    assert code == 2
+    assert stdout == ""
+    assert "the artifacts could not be written to" in err
+    assert str(out) in err
+
+
+def test_check_reports_an_orphan_artifact_whose_source_was_deleted(capsys, tmp_path):
+    """THE ARTIFACT THAT OUTLIVES ITS REQUIREMENT.
+
+    ``sec_rules.load_directory`` globs the output directory and loads whatever it
+    finds, so an artifact left behind by a deleted document keeps being ENFORCED.
+    ``--check`` only ever compared the files a fresh compile produced, so it
+    never looked at the one nobody produced.
+    """
+    corpus = _corpus(tmp_path, "corpus",
+                     _promise_doc("orphan-me", "roles/bigquery.jobUser"))
+    out = tmp_path / "compiled"
+    assert compile_corpus(corpus, out) == 0
+    capsys.readouterr()
+    assert (out / "requirements.promises.json").is_file()
+    (corpus / "requirements.md").unlink()
+    code, stdout, _ = invoke(capsys, "compile-requirements", str(corpus),
+                             "--snapshot", str(SNAPSHOT), "--out", str(out),
+                             "--check")
+    assert code == 1
+    assert "an orphan artifact" in stdout
+    assert "requirements.promises.json" in stdout
+    # The file is still there and --requirements would still load it: the point
+    # of the verdict is that CI now says so instead of passing.
+    assert (out / "requirements.promises.json").is_file()
+
+
+def test_a_file_that_is_not_an_artifact_is_not_an_orphan(capsys, tmp_path):
+    """The control for the orphan channel: only ``*.promises.json`` is an
+    artifact this compile could have produced. An output directory is an ordinary
+    directory — a README, a ``.gitkeep``, an editor's backup — and calling those
+    orphans would fail every honest CI job that keeps one."""
+    corpus = _corpus(tmp_path, "corpus",
+                     _promise_doc("keeps-its-source", "roles/bigquery.jobUser"))
+    out = tmp_path / "compiled"
+    assert compile_corpus(corpus, out) == 0
+    capsys.readouterr()
+    (out / "README.md").write_text("how these artifacts are reviewed\n",
+                                   encoding="utf-8")
+    (out / ".gitkeep").write_text("", encoding="utf-8")
+    code, stdout, _ = invoke(capsys, "compile-requirements", str(corpus),
+                             "--snapshot", str(SNAPSHOT), "--out", str(out),
+                             "--check")
+    assert code == 0
+    assert "orphan" not in stdout
+
+
+def test_a_second_document_carrying_the_rejection_still_fails_the_compile(
+        capsys, tmp_path):
+    """MULTI-DOCUMENT COVERAGE.
+
+    The one multi-document test in this suite puts its rejection in the
+    alphabetically FIRST file, so truncating the merge to ``results[0]`` survives
+    it. Here the first document compiles cleanly and the SECOND carries the
+    hallucinated role, so the exit code and the render can only be right if every
+    result reached the merged report.
+    """
+    corpus = tmp_path / "two"
+    corpus.mkdir()
+    (corpus / "aaa.md").write_text(
+        _promise_doc("two-first-clean", "roles/bigquery.jobUser"), encoding="utf-8")
+    (corpus / "zzz.md").write_text(
+        _promise_doc("two-second-rejected", "roles/bigquery.reader"),
+        encoding="utf-8")
+    out = tmp_path / "compiled"
+    code, stdout, _ = invoke(capsys, "compile-requirements", str(corpus),
+                             "--snapshot", str(SNAPSHOT), "--out", str(out))
+    assert code == 1
+    assert "zzz.md" in stdout
+    assert "roles/bigquery.reader" in stdout
+    assert sorted(p.name for p in out.iterdir()) == ["aaa.promises.json",
+                                                     "zzz.promises.json"]
+
+
+def test_a_corpus_outside_the_repo_says_its_paths_are_not_anchored(capsys, tmp_path):
+    """PARTIAL, per the design's Non-goals.
+
+    ``sec_compile._repo_relative`` anchors a recorded source path against the
+    nearest ``pyproject.toml``; with no such ancestor it falls back to a
+    CWD-relative path, so the artifact's bytes depend on where the compile ran
+    from. An abstention, not a failure — the compile is honest, its recorded
+    paths are merely not portable — so the exit code is untouched and only the
+    silence is removed. The residual risk is ESC-GX-SECCLI-001.
+    """
+    corpus = _corpus(tmp_path, "outside",
+                     _promise_doc("outside-repo", "roles/bigquery.jobUser"))
+    code, stdout, _ = invoke(capsys, "compile-requirements", str(corpus),
+                             "--snapshot", str(SNAPSHOT),
+                             "--out", str(tmp_path / "compiled"))
+    assert code == 0
+    assert "no pyproject.toml ancestor" in stdout
+    assert "ESC-GX-SECCLI-001" in stdout
+
+
+def test_a_corpus_inside_the_repo_is_silent_about_anchoring(capsys, tmp_path):
+    """The control: the anchoring note must not fire on the committed corpus, or
+    it is noise on every healthy run."""
+    code, stdout, _ = invoke(capsys, "compile-requirements", str(CLEAN_CORPUS),
+                             "--snapshot", str(SNAPSHOT),
+                             "--out", str(tmp_path / "compiled"))
+    assert code == 0
+    assert "pyproject.toml" not in stdout
+
+
+@pytest.mark.xfail(strict=True, reason="ESC-GX-SECCLI-001: a corpus with no "
+                                       "pyproject.toml ancestor records "
+                                       "cwd-relative source paths")
+def test_check_outside_the_repo_does_not_report_spurious_drift(
+        capsys, tmp_path, monkeypatch):
+    """THE SPEC-LITERAL ASSERTION behind ESC-GX-SECCLI-001.
+
+    Compiling and then checking a byte-identical corpus must be a fixed point
+    wherever either run happened. It is not: the recorded source path is
+    ``os.path.relpath(document, os.getcwd())`` whenever no ``pyproject.toml``
+    ancestor exists, so a ``--check`` from a different working directory
+    re-renders a different ``source.file`` and reports drift on a corpus nobody
+    touched. Root-cause path anchoring is out of scope per the Non-goals.
+    """
+    corpus = _corpus(tmp_path, "outside",
+                     _promise_doc("outside-repo", "roles/bigquery.jobUser"))
+    out = tmp_path / "compiled"
+    assert compile_corpus(corpus, out) == 0
+    capsys.readouterr()
+    monkeypatch.chdir(tmp_path)
+    code, stdout, _ = invoke(capsys, "compile-requirements", str(corpus),
+                             "--snapshot", str(SNAPSHOT), "--out", str(out),
+                             "--check")
+    assert "does not match a fresh compile" not in stdout
+    assert code == 0
+
+
 # -- verify-policy --requirements: the pickup ----------------------------------
 
 
+@_needs_z3
 def test_requirements_add_sec_verdicts(capsys, clean_artifacts):
     code, stdout, _ = invoke(capsys, "verify-policy", str(GOOD),
                              "--snapshot", str(SNAPSHOT),
@@ -221,6 +496,7 @@ def test_requirements_add_sec_verdicts(capsys, clean_artifacts):
     assert "clean-no-primitive-owner" in stdout
 
 
+@_needs_z3
 def test_json_carries_one_top_level_sec_object(capsys, clean_artifacts):
     code, stdout, _ = invoke(capsys, "verify-policy", str(GOOD),
                              "--snapshot", str(SNAPSHOT),
@@ -232,9 +508,8 @@ def test_json_carries_one_top_level_sec_object(capsys, clean_artifacts):
     assert doc["sec"]["sec_schema"] == SEC_REPORT_SCHEMA
     assert [r["id"] for r in doc["sec"]["requirements"]] == [
         "clean-no-primitive-owner", "clean-no-public-principals"]
-    if HAVE_Z3:
-        assert {w["role"] for w in doc["sec"]["witnesses"]} == {"pinned-positive",
-                                                               "pinned-negative"}
+    assert {w["role"] for w in doc["sec"]["witnesses"]} == {"pinned-positive",
+                                                            "pinned-negative"}
 
 
 def test_empty_requirements_directory_still_emits_the_sec_object(capsys, tmp_path):
@@ -243,6 +518,14 @@ def test_empty_requirements_directory_still_emits_the_sec_object(capsys, tmp_pat
     A consumer that turned requirements on must be able to tell "no rules
     loaded" (``sec.requirements == []``) from "requirements are off" (no ``sec``
     key), which it cannot do if a failed compile silently changes the document.
+
+    RE-PINNED: this test used to assert ``err == ""`` for exactly this
+    configuration, and that expectation WAS the bug. A resolved source that
+    loaded zero rules is the state a clean checkout and a fresh CI container
+    reach by default — the directory is there, the environment variable is
+    exported, and the compiler has not run — and silence there is precisely what
+    the module docstring says must never be indistinguishable from the rule
+    working. The exit code is untouched: this is a notice, never a block.
     """
     empty = tmp_path / "empty"
     empty.mkdir()
@@ -250,7 +533,9 @@ def test_empty_requirements_directory_still_emits_the_sec_object(capsys, tmp_pat
                                "--snapshot", str(SNAPSHOT),
                                "--requirements", str(empty), "--format", "json")
     assert code == 0
-    assert err == ""
+    assert err.splitlines() == [
+        f"gcp-ground verify-policy: 0 compiled requirement(s) loaded from "
+        f"{empty} — nothing is being enforced (see compile-requirements)"]
     doc = json.loads(stdout)
     assert doc["sec"]["requirements"] == []
     assert doc["sec"]["witnesses"] == []
@@ -276,6 +561,7 @@ def test_without_requirements_the_document_is_byte_identical(capsys):
     assert "sec" not in json.loads(stdout)
 
 
+@_needs_z3
 def test_requirements_env_is_honoured(capsys, monkeypatch, clean_artifacts):
     """Configuring the env var once is how a hook or CI job turns requirements
     on globally."""
@@ -314,6 +600,7 @@ def test_hook_fails_open_on_an_unreadable_requirements_directory(
     assert str(missing) in err
 
 
+@_needs_z3
 def test_hook_announces_a_requirement_that_is_not_enforcing(
         capsys, monkeypatch, stalled_artifacts):
     """THE ASSERTION THAT A BROKEN REQUIREMENT IS NOT SILENT.
@@ -323,8 +610,6 @@ def test_hook_announces_a_requirement_that_is_not_enforcing(
     ``unverified`` and the gate exits 0 with empty stderr. Exactly one line, and
     the exit code is untouched.
     """
-    if not HAVE_Z3:
-        return  # without z3 nothing compiles, so there is no enforcing/stalled split
     code, stdout, err = run_hook(capsys, monkeypatch, "--snapshot", str(SNAPSHOT),
                                  "--requirements", str(stalled_artifacts),
                                  event=hook_event(GOOD))
@@ -335,10 +620,17 @@ def test_hook_announces_a_requirement_that_is_not_enforcing(
         f"(see compile-requirements) — {stalled_artifacts}"]
 
 
+@_needs_z3
 def test_hook_is_byte_silent_when_every_requirement_compiled(
         capsys, monkeypatch, clean_artifacts):
     """The control: the notice must not fire on a healthy configuration, or it
-    becomes noise and gets switched off."""
+    becomes noise and gets switched off.
+
+    Needs the solver for the same reason the stalled tests do — with none, no
+    promise is admitted, so this configuration is not healthy, it is the
+    zero-rules one, and its notice is asserted by
+    :func:`test_no_solver_pickup_says_nothing_is_enforcing`.
+    """
     code, stdout, err = run_hook(capsys, monkeypatch, "--snapshot", str(SNAPSHOT),
                                  "--requirements", str(clean_artifacts),
                                  event=hook_event(GOOD))
@@ -347,11 +639,51 @@ def test_hook_is_byte_silent_when_every_requirement_compiled(
     assert err == ""
 
 
+@_needs_z3
+def test_hook_announces_a_directory_whose_artifact_was_deleted(
+        capsys, monkeypatch, clean_artifacts):
+    """THE HIGHEST-PROBABILITY REAL-WORLD FAILURE.
+
+    Compiled output is GENERATED, so a clean checkout and a fresh CI container
+    both reach this state by default: the directory is present, the environment
+    variable is exported, and nothing was ever compiled into it. The notice used
+    to derive its trigger from the carry verdicts, and a source with no artifacts
+    produces none — zero verdicts, an empty stalled set, no line — which is
+    byte-identical to the healthy control asserted directly above.
+    """
+    (clean_artifacts / "requirements.promises.json").unlink()
+    code, stdout, err = run_hook(capsys, monkeypatch, "--snapshot", str(SNAPSHOT),
+                                 "--requirements", str(clean_artifacts),
+                                 event=hook_event(GOOD))
+    assert code == 0  # a notice, never a block
+    assert stdout == ""
+    assert err.splitlines() == [
+        f"gcp-ground --hook: 0 compiled requirement(s) loaded from "
+        f"{clean_artifacts} — nothing is being enforced (see "
+        f"compile-requirements)"]
+
+
+@_needs_z3
+def test_text_mode_names_the_requirements_when_the_artifact_was_deleted(
+        capsys, clean_artifacts):
+    """The same state in the mode an operator runs by hand: PASSED on stdout is
+    fine, but it must not be the ONLY thing said about the requirements."""
+    (clean_artifacts / "requirements.promises.json").unlink()
+    code, stdout, err = invoke(capsys, "verify-policy", str(GOOD),
+                               "--snapshot", str(SNAPSHOT),
+                               "--requirements", str(clean_artifacts))
+    assert code == 0
+    assert "PASSED" in stdout
+    assert err.splitlines() == [
+        f"gcp-ground verify-policy: 0 compiled requirement(s) loaded from "
+        f"{clean_artifacts} — nothing is being enforced (see "
+        f"compile-requirements)"]
+
+
+@_needs_z3
 def test_notice_also_fires_outside_hook_mode(capsys, stalled_artifacts):
     """Same signal, ``verify-policy:`` prefix — the operator running by hand
     needs it just as much as the one running a hook."""
-    if not HAVE_Z3:
-        return
     code, _, err = invoke(capsys, "verify-policy", str(GOOD),
                           "--snapshot", str(SNAPSHOT),
                           "--requirements", str(stalled_artifacts))
@@ -361,12 +693,11 @@ def test_notice_also_fires_outside_hook_mode(capsys, stalled_artifacts):
         f"enforcing (see compile-requirements) — {stalled_artifacts}"]
 
 
+@_needs_z3
 def test_rejected_promise_stays_visible_as_an_unverified_carry_verdict(
         capsys, stalled_artifacts):
     """The notice is the operator signal; the carry verdict is the record. Both
     exist, and neither changes the exit code."""
-    if not HAVE_Z3:
-        return
     code, stdout, _ = invoke(capsys, "verify-policy", str(GOOD),
                              "--snapshot", str(SNAPSHOT),
                              "--requirements", str(stalled_artifacts),
@@ -382,9 +713,8 @@ def test_rejected_promise_stays_visible_as_an_unverified_carry_verdict(
 # -- --explain -----------------------------------------------------------------
 
 
+@_needs_z3
 def test_explain_prints_the_sexpr_and_both_witnesses(capsys, clean_artifacts):
-    if not HAVE_Z3:
-        return
     code, stdout, err = invoke(capsys, "verify-policy", str(GOOD),
                                "--snapshot", str(SNAPSHOT),
                                "--requirements", str(clean_artifacts),
@@ -407,14 +737,13 @@ def test_explain_without_requirements_has_no_sec_block(capsys):
 # -- the compiled artifacts actually enforce -----------------------------------
 
 
+@_needs_z3
 def test_a_compiled_requirement_can_refute_a_policy(capsys, tmp_path, monkeypatch):
     """End-to-end: a promise compiled by stage 1 refutes a real document.
 
     Without this the pickup could be inert — every rule registered, none of them
     ever deciding anything — and every other test here would still pass.
     """
-    if not HAVE_Z3:
-        return
     corpus = tmp_path / "corpus"
     corpus.mkdir()
     (corpus / "requirements.md").write_text(
@@ -445,6 +774,7 @@ def test_a_compiled_requirement_can_refute_a_policy(capsys, tmp_path, monkeypatc
     assert "roles/bigquery.jobUser" in fired[0]["message"]
 
 
+@_needs_z3
 def test_a_single_promises_json_file_is_accepted(capsys, clean_artifacts):
     """``--requirements`` takes an artifact directory or one ``*.promises.json``."""
     artifact = clean_artifacts / "requirements.promises.json"
@@ -455,3 +785,47 @@ def test_a_single_promises_json_file_is_accepted(capsys, clean_artifacts):
     assert code == 0
     assert [r["id"] for r in json.loads(stdout)["sec"]["requirements"]] == [
         "clean-no-primitive-owner", "clean-no-public-principals"]
+
+
+# -- the fallback backend, asserted POSITIVELY ---------------------------------
+#
+# Every test above that needs a minted witness is SKIPPED without a solver, and a
+# suite of skips asserts nothing about the world it skipped. These two say what
+# the no-solver world must look like, and they only run there.
+
+
+@_needs_no_z3
+def test_no_solver_compile_exits_zero_with_every_promise_unverified(
+        capsys, tmp_path):
+    """Honest ignorance never fails the gate: with no backend no witness can be
+    minted, so every promise lands ``unverified`` and the compile still exits 0.
+    An artifact is still written — it simply carries no admitted promise."""
+    out = tmp_path / "compiled"
+    code, stdout, _ = invoke(capsys, "compile-requirements", str(CLEAN_CORPUS),
+                             "--snapshot", str(SNAPSHOT), "--out", str(out),
+                             "--format", "json")
+    assert code == 0
+    doc = json.loads(stdout)
+    assert doc["ok"] is True
+    statuses = {v["target"]: v["status"] for v in doc["verdicts"]}
+    assert statuses == {"clean-no-primitive-owner": "unverified",
+                        "clean-no-public-principals": "unverified"}
+    written = json.loads(
+        (out / "requirements.promises.json").read_text(encoding="utf-8"))
+    assert {p["status"] for p in written["promises"]} == {"unverified"}
+
+
+@_needs_no_z3
+def test_no_solver_pickup_says_nothing_is_enforcing(capsys, clean_artifacts):
+    """And the pickup does not pretend otherwise. No promise was admitted, so no
+    rule loaded, so the zero-rules notice fires — the same line a fresh CI
+    container gets, for the same reason: nothing is being enforced."""
+    code, stdout, err = invoke(capsys, "verify-policy", str(GOOD),
+                               "--snapshot", str(SNAPSHOT),
+                               "--requirements", str(clean_artifacts))
+    assert code == 0
+    assert "PASSED" in stdout
+    assert err.splitlines() == [
+        f"gcp-ground verify-policy: 0 compiled requirement(s) loaded from "
+        f"{clean_artifacts} — nothing is being enforced (see "
+        f"compile-requirements)"]

@@ -138,6 +138,31 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_sec_rules.py::"
                  "test_compiled_rule_instance_is_usable_as_a_dict_key"),
     ),
+    Escalation(
+        id="ESC-GX-SECCLI-001",
+        clause=("the recorded source paths are then cwd-relative and the check "
+                "mode reports spurious drift"),
+        unsatisfiable=(
+            "`sec_compile._repo_relative` anchors a recorded source path against "
+            "the nearest `pyproject.toml`, and with no such ancestor falls back "
+            "to `os.path.relpath(document, os.getcwd())` — so the artifact's "
+            "bytes depend on the working directory the compile ran from, and a "
+            "`--check` run from a different one re-renders a different "
+            "`source.file` and reports drift on a corpus nobody touched. The "
+            "clause names this as the SYMPTOM of unanchored paths and the task "
+            "body declares root-cause path anchoring out of scope per the "
+            "Non-goals, carrying only the partial mitigation: the compile now "
+            "REFUSES SILENCE about it, emitting an `unverified` sec:compile "
+            "verdict that names the directory and this id. Anchoring the "
+            "recorded path to the corpus directory itself — or storing it "
+            "absolute — in `gcp_grounding/sec_compile.py` is what would close "
+            "it, and that module is outside this task's declared path, "
+            "`gcp_grounding/cli.py`."
+        ),
+        owner_task="gx-sec-cli-zero-rules",
+        node_id=("tests/test_gcp_sec_cli.py::"
+                 "test_check_outside_the_repo_does_not_report_spurious_drift"),
+    ),
 )
 
 
