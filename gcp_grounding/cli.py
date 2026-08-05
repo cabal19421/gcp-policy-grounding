@@ -381,7 +381,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from . import discovery, drift, engine, explain_state, freshness, merge, provenance, redact, sources
+from . import discovery, drift, engine, explain_state, freshness, gate, merge, provenance, redact, sources
 # Imported by NAME rather than as the module, because ``baseline`` is also the
 # name of a CLI flag and of more than one local here — a shadowed module is a
 # NameError waiting for the one branch nobody exercised.
@@ -1282,8 +1282,31 @@ def _ground(args: argparse.Namespace, settings: discovery.Settings,
                        problem=current.problem)
     notes = notes + tuple(current.notes)
 
+    # TERRAFORM CONFIGURATION IS ONE ENTRY POINT, and this is it: a `.tf` or
+    # `.tf.json` edit is assembled into a synthetic plan and prepared by
+    # `gate.terraform_proposal` — the SAME call `gate.PolicyGroundingGate`
+    # makes. Preparing the raw `{"resource": ...}` body here instead was the
+    # retired second route: `detect_kind` does not recognize terraform's JSON
+    # configuration syntax, so the body yielded kind None, no claim was
+    # extracted, no per-resource counterpart was named, and a registered pair
+    # check demanded a decision this route never made.
+    tf_note = ""
+    raw_hcl = gate.terraform_route(path)
     document, error = _read_json(path)
-    if error is not None:
+    if raw_hcl is not None:
+        built = gate.terraform_proposal(path, raw=raw_hcl)
+        if built.proposal is None:
+            report = GroundingReport()
+            report.backend = get_solver().backend
+            report.add(Verdict("unverified", "document", path, 0, built.note))
+            for verdict in carried:
+                report.add(verdict)
+            return _Ground(report=_finish_report(report,
+                                                 current.snapshot or snapshot,
+                                                 notes),
+                           current=current)
+        proposal, tf_note = built.proposal, built.note
+    elif error is not None:
         # There is no proposal to prepare. The one loader's fail-open shape is
         # still the honest answer, and it already says what could not be read.
         report = ground_policy(path, snapshot, baseline=args.baseline, rules=rules)
@@ -1292,13 +1315,19 @@ def _ground(args: argparse.Namespace, settings: discovery.Settings,
         return _Ground(report=_finish_report(report, current.snapshot or snapshot,
                                              notes),
                        current=current)
-
-    proposal = engine.prepare_proposal(document, detect_kind(document), source=path)
+    else:
+        proposal = engine.prepare_proposal(document, detect_kind(document),
+                                           source=path)
     result = engine.evaluate(
         proposal, current, engine.RuleSet(compiled=tuple(rules),
                                           carry_verdicts=tuple(carried)),
         options=_eval_options(args, settings, path))
     report = result.report
+    if tf_note:
+        # The raw-`.tf` subset-read note, on the same kind the gate puts it on
+        # (`proposal:unresolved`, one of `gate.ALWAYS_REPORT_KINDS`), so a
+        # statically read HCL file says so on both routes.
+        report.add(Verdict("unverified", engine.UNRESOLVED_KIND, path, 0, tf_note))
     if args.baseline is not None:
         report.add(_explicit_baseline_verdict(document, args.baseline))
     return _Ground(report=_finish_report(report, current.snapshot or snapshot, notes),

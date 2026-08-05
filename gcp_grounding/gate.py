@@ -100,7 +100,8 @@ from .report import PolicyReport
 logger = get_logger(__name__)
 
 __all__ = ["FILE_STATUSES", "RISK_LEVELS", "GATE_SCHEMA", "ALWAYS_REPORT_KINDS",
-           "FileResult", "GateResult", "PolicyGroundingGate"]
+           "FileResult", "GateResult", "PolicyGroundingGate",
+           "TerraformProposal", "terraform_route", "terraform_proposal"]
 
 #: Per-file outcome: "failed" = ungrounded/contradicted verdicts (fails the
 #: gate); "unverified" = the gate could not judge the file (never fails it);
@@ -382,6 +383,158 @@ def _tf_json_triples(document: Any, facts: Any
     return tuple((f"{resource_type}.{name}", resource_type,
                   _tf_json_body(body, "", facts))
                  for resource_type, name, body in _tf_json_entries(document))
+
+
+# -- THE ONE TERRAFORM ENTRY POINT --------------------------------------------
+
+
+@dataclass(frozen=True)
+class TerraformProposal:
+    """One terraform CONFIGURATION file read as a PROPOSAL.
+
+    ``proposal`` is a :class:`gcp_grounding.engine.Proposal` over the SYNTHETIC
+    PLAN :func:`gcp_grounding.tfsource.plan.as_plan_document` assembled, or
+    ``None`` when the file could not be read at all or this checkout cannot
+    grade terraform. ``note`` is the sentence that says which of those happened
+    — always present when ``proposal`` is ``None``, and non-empty for a raw
+    ``.tf`` that WAS read, because a static HCL read is a subset read and must
+    say so.
+    """
+
+    proposal: Any = None
+    note: str = ""
+
+
+def terraform_route(path: str) -> bool | None:
+    """``True`` for raw HCL, ``False`` for ``.tf.json``, ``None`` when *path* is
+    not terraform CONFIGURATION.
+
+    The one suffix decision, so :meth:`PolicyGroundingGate._check_one` and
+    :func:`gcp_grounding.cli._ground` cannot disagree about which files are a
+    terraform proposal. ``.tf.json`` is tested BEFORE ``.tf`` because it ends
+    with both, and ``.tfstate`` is deliberately not terraform CONFIGURATION:
+    state is never a proposal.
+    """
+    lower = path.lower()
+    if not lower.endswith(_TERRAFORM_SUFFIXES):
+        return None
+    return not lower.endswith(".tf.json")
+
+
+def read_tf_json(path: str, facts: Any) -> tuple[Any, tuple[str, ...], str]:
+    """``.tf.json`` through ``json.load`` and NO parser at all.
+
+    Loaded through the one fail-open loader :meth:`PolicyGroundingGate.
+    _ground_with_state` already uses, so "not valid JSON" is phrased in exactly
+    one place.
+    """
+    document, source, error = preflight._load_document(path)
+    if error is not None:
+        return None, (), f"{source}: {error} — nothing was checked"
+    return _tf_json_triples(document, facts), (), ""
+
+
+def read_hcl(path: str) -> tuple[Any, tuple[str, ...], str]:
+    """Raw ``.tf`` through :mod:`gcp_grounding.tfsource.hcl`.
+
+    The reader is resolved LAZILY — a checkout without the ``tfsource``
+    subpackage must degrade rather than fail — and reports an unresolved path
+    for the CONTAINING resource of every ``dynamic`` block and every
+    ``count``/``for_each``. Nothing is stripped here: those paths are REPORTED,
+    and the engine's downgrade rule turns every ``grounded`` on the document
+    into ``unverified``.
+    """
+    hcl = _tf_module("hcl")
+    if hcl is None:
+        return None, (), _HCL_ABSENT_NOTE.format(path=path)
+    if os.path.isdir(path):
+        triples, unresolved = hcl.parse_config_dir(path)
+    else:
+        triples, unresolved = hcl.parse_config_file(path)
+    return (triples,
+            tuple(unresolved) + (_HCL_SUBSET_PATH.format(path=path),),
+            _HCL_READ_NOTE.format(path=path))
+
+
+def build_tf_proposal(engine: Any, facts: Any, plan: Any, path: str,
+                      triples: Iterable[tuple[str, str, Mapping[str, Any]]],
+                      unresolved: Iterable[str]) -> Any:
+    """ASSEMBLE THEN PREPARE, and it is normative in that order.
+
+    The synthetic plan document is built FIRST, from the raw block bodies, with
+    :func:`gcp_grounding.tfsource.plan.as_plan_document`; then
+    :func:`gcp_grounding.engine.prepare_proposal` is called EXACTLY ONCE on the
+    assembled plan. One call yields one :class:`~gcp_grounding.engine.Proposal`
+    whose ``unresolved`` tuple is single-sourced, so the ``proposal:unresolved``
+    verdicts and the every-``grounded``-becomes-``unverified`` downgrade both
+    key off the same tuple. Calling ``prepare_proposal`` per block body instead
+    would produce N throwaway proposals whose ``unresolved`` tuples are free to
+    be dropped while only the sanitized documents are kept — and dropping them
+    loses the downgrade entirely, turning an interpolated firewall into a clean
+    pass.
+
+    The PER-BODY pass here is the sanitize half only, and it exists so every
+    path can be RE-PREFIXED WITH ITS RESOURCE ADDRESS before the final proposal
+    is constructed: the tuples are UNIONED, re-prefixed, and handed to the
+    single ``prepare_proposal`` call as ``unknown_paths``, in exactly the
+    spelling :meth:`gcp_grounding.tfsource.hcl.HclRead.unresolved_paths` uses,
+    so the two arms name the same attribute the same way and the set collapses
+    duplicates instead of double-reporting them.
+
+    The proposal is handed to the engine as a TERRAFORM-PLAN-kind proposal, so
+    ``tf_claims.terraform_plan_claims`` and every extractor registered through
+    ``registry.tf_extractors`` apply unchanged. There is never a second
+    extractor table.
+    """
+    objects = []
+    paths = {str(entry) for entry in unresolved}
+    for address, resource_type, values in triples:
+        sanitized, stripped = facts.strip_unresolved(values)
+        paths.update(f"{address}.{removed}" for removed in stripped)
+        objects.append(facts.TfObject(
+            address=address, type=resource_type,
+            name=address.rsplit(".", 1)[-1],
+            source=_HCL_PROPOSED, side="proposed", values=sanitized))
+    document = plan.as_plan_document(objects)
+    return engine.prepare_proposal(document, engine.TF_PLAN_KIND,
+                                   source=path,
+                                   unknown_paths=sorted(paths))
+
+
+def terraform_proposal(path: str, *, raw: bool) -> TerraformProposal:
+    """THE ONE ENTRY POINT for grading a ``.tf`` / ``.tf.json`` file.
+
+    Every caller — :class:`PolicyGroundingGate` and
+    :func:`gcp_grounding.cli._ground` alike — reaches
+    ``plan.as_plan_document`` → ``engine.prepare_proposal`` through here and
+    NEVER by preparing the raw ``{"resource": ...}`` body as a proposal of its
+    own. That second route was retired because ``preflight.detect_kind`` does
+    not recognize terraform's JSON configuration syntax: the raw body yielded
+    kind ``None``, no claim was extracted, no per-resource counterpart was ever
+    named, and a registered pair check therefore demanded a decision the CLI
+    route never made.
+
+    Never raises: an unreadable file, an unrecognized shape or a reader that is
+    not part of this checkout all come back as ``proposal=None`` plus the note
+    that says so.
+    """
+    engine = _optional("engine")
+    facts = _optional("facts")
+    plan = _tf_module("plan")
+    missing = ("gcp_grounding.engine" if engine is None else
+               "gcp_grounding.facts" if facts is None else
+               "gcp_grounding.tfsource.plan" if plan is None else "")
+    if missing:
+        return TerraformProposal(
+            note=_TF_ENGINE_ABSENT_NOTE.format(path=path, missing=missing))
+    triples, unresolved, note = (read_hcl(path) if raw
+                                 else read_tf_json(path, facts))
+    if triples is None:
+        return TerraformProposal(note=note)
+    return TerraformProposal(
+        proposal=build_tf_proposal(engine, facts, plan, path, triples,
+                                   unresolved),
+        note=note)
 
 
 @dataclass(frozen=True)
@@ -730,9 +883,9 @@ class PolicyGroundingGate:
         lower = path.lower()
         if lower.endswith(".tfstate"):
             return self._state_source_file(path, backend)
-        if lower.endswith(_TERRAFORM_SUFFIXES):
-            return self._check_terraform(path, backend,
-                                         raw=not lower.endswith(".tf.json"))
+        raw = terraform_route(path)
+        if raw is not None:
+            return self._check_terraform(path, backend, raw=raw)
         if lower.endswith(".json"):
             if lower.endswith(_CANDIDATE_SUFFIXES):
                 report, state = self._ground(path, backend)
@@ -861,25 +1014,13 @@ class PolicyGroundingGate:
     def _terraform_report(self, path: str, backend: str, *, raw: bool
                           ) -> tuple[GroundingReport, tuple[Mapping[str, Any], ...],
                                      bool]:
+        # THE ONE ENTRY POINT, shared with `cli._ground`: assemble the synthetic
+        # plan, then prepare it exactly once. See `terraform_proposal`.
+        built = terraform_proposal(path, raw=raw)
+        if built.proposal is None:
+            return self._note_only(path, backend, built.note)
+        proposal, note = built.proposal, built.note
         engine = _optional("engine")
-        facts = _optional("facts")
-        plan = _tf_module("plan")
-        missing = ("gcp_grounding.engine" if engine is None else
-                   "gcp_grounding.facts" if facts is None else
-                   "gcp_grounding.tfsource.plan" if plan is None else "")
-        if missing:
-            return self._note_only(path, backend,
-                                   _TF_ENGINE_ABSENT_NOTE.format(path=path,
-                                                                 missing=missing))
-        if raw:
-            triples, unresolved, note = self._read_hcl(path)
-        else:
-            triples, unresolved, note = self._read_tf_json(path, facts)
-        if triples is None:
-            return self._note_only(path, backend, note)
-
-        proposal = self._tf_proposal(engine, facts, plan, path, triples,
-                                     unresolved)
         view = self._state_for(path)
         if view is None:
             # No current state configured: today's plain grounding, reached
@@ -914,85 +1055,6 @@ class PolicyGroundingGate:
         report.backend = backend
         report.add(Verdict("unverified", "document", path, 0, note))
         return report, (), True
-
-    def _read_tf_json(self, path: str, facts: Any
-                      ) -> tuple[Any, tuple[str, ...], str]:
-        """``.tf.json`` through ``json.load`` and NO parser at all.
-
-        Loaded through the one fail-open loader :func:`_ground_with_state`
-        already uses, so "not valid JSON" is phrased in exactly one place.
-        """
-        document, source, error = preflight._load_document(path)
-        if error is not None:
-            return None, (), f"{source}: {error} — nothing was checked"
-        return _tf_json_triples(document, facts), (), ""
-
-    def _read_hcl(self, path: str) -> tuple[Any, tuple[str, ...], str]:
-        """Raw ``.tf`` through :mod:`gcp_grounding.tfsource.hcl`.
-
-        The reader is resolved LAZILY — a checkout without the ``tfsource``
-        subpackage must degrade rather than fail — and reports an unresolved
-        path for the CONTAINING resource of every ``dynamic`` block and every
-        ``count``/``for_each``. The gate strips nothing itself: it REPORTS
-        those paths, and the engine's downgrade rule turns every ``grounded``
-        on the document into ``unverified``.
-        """
-        hcl = _tf_module("hcl")
-        if hcl is None:
-            return None, (), _HCL_ABSENT_NOTE.format(path=path)
-        if os.path.isdir(path):
-            triples, unresolved = hcl.parse_config_dir(path)
-        else:
-            triples, unresolved = hcl.parse_config_file(path)
-        return (triples,
-                tuple(unresolved) + (_HCL_SUBSET_PATH.format(path=path),),
-                _HCL_READ_NOTE.format(path=path))
-
-    @staticmethod
-    def _tf_proposal(engine: Any, facts: Any, plan: Any, path: str,
-                     triples: Iterable[tuple[str, str, Mapping[str, Any]]],
-                     unresolved: Iterable[str]) -> Any:
-        """ASSEMBLE THEN PREPARE, and it is normative in that order.
-
-        The synthetic plan document is built FIRST, from the raw block bodies,
-        with :func:`gcp_grounding.tfsource.plan.as_plan_document`; then
-        :func:`gcp_grounding.engine.prepare_proposal` is called EXACTLY ONCE on
-        the assembled plan. One call yields one :class:`~gcp_grounding.engine.
-        Proposal` whose ``unresolved`` tuple is single-sourced, so the
-        ``proposal:unresolved`` verdicts and the every-``grounded``-becomes-
-        ``unverified`` downgrade both key off the same tuple. Calling
-        ``prepare_proposal`` per block body instead would produce N throwaway
-        proposals whose ``unresolved`` tuples are free to be dropped while only
-        the sanitized documents are kept — and dropping them loses the
-        downgrade entirely, turning an interpolated firewall into a clean pass.
-
-        The PER-BODY pass here is the sanitize half only, and it exists so
-        every path can be RE-PREFIXED WITH ITS RESOURCE ADDRESS before the
-        final proposal is constructed: the tuples are UNIONED, re-prefixed, and
-        handed to the single ``prepare_proposal`` call as ``unknown_paths``, in
-        exactly the spelling
-        :meth:`gcp_grounding.tfsource.hcl.HclRead.unresolved_paths` uses, so
-        the two arms name the same attribute the same way and the set collapses
-        duplicates instead of double-reporting them.
-
-        The proposal is handed to the engine as a TERRAFORM-PLAN-kind proposal,
-        so ``tf_claims.terraform_plan_claims`` and every extractor registered
-        through ``registry.tf_extractors`` apply unchanged. There is never a
-        second extractor table.
-        """
-        objects = []
-        paths = {str(entry) for entry in unresolved}
-        for address, resource_type, values in triples:
-            sanitized, stripped = facts.strip_unresolved(values)
-            paths.update(f"{address}.{removed}" for removed in stripped)
-            objects.append(facts.TfObject(
-                address=address, type=resource_type,
-                name=address.rsplit(".", 1)[-1],
-                source=_HCL_PROPOSED, side="proposed", values=sanitized))
-        document = plan.as_plan_document(objects)
-        return engine.prepare_proposal(document, engine.TF_PLAN_KIND,
-                                       source=path,
-                                       unknown_paths=sorted(paths))
 
     def _ground(self, path: str, backend: str
                 ) -> tuple[GroundingReport, tuple[Mapping[str, Any], ...]]:

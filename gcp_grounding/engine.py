@@ -87,7 +87,7 @@ import importlib
 from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Mapping, Sequence
 
-from . import baseline, compare, constraints, drift, facts, preflight, provenance, redact, registry
+from . import baseline, claims as claims_module, compare, constraints, drift, facts, preflight, provenance, redact, registry
 from .core.log import get_logger
 from .core.report import GroundingReport, Verdict
 from .core.solver import get_solver
@@ -662,10 +662,19 @@ def _run_pair(kind: str | None, document: Any, entry: Any,
     """
     fn = registry.pair_check(kind)
     if fn is not None:
+        # THE CLAIMS ARE THE PROPOSED SIDE. A registered pair check reads
+        # ``ctx.claims`` for the NEW rule set (``fw_checks.check_packet_set_pair``
+        # does, and abstains with "no VPC firewall rule was extracted from the
+        # document" when it is empty), so handing it an empty tuple made every
+        # registered pair check structurally undecidable: the check ran, said it
+        # could not compare, and the row it was dispatched for was never judged.
         ctx = CheckContext(snapshot=vocabulary, solver=solver, document=document,
-                           document_kind=kind, source=proposal.source, claims=(),
+                           document_kind=kind, source=proposal.source,
+                           claims=_pair_claims(kind, document),
                            baseline=entry.document, baseline_kind=entry.kind)
-        return tuple(registry.run_pair_check(fn, ctx)), str(kind)
+        row = entry.key or entry.target.key
+        return tuple(_addressed(v, row)
+                     for v in registry.run_pair_check(fn, ctx)), str(kind)
     if kind == "iam_policy":
         try:
             return (constraints.check_policy_subset(document, entry.document, solver),), \
@@ -678,6 +687,51 @@ def _run_pair(kind: str | None, document: Any, entry: Any,
                     f"'{entry.key or entry.target.key}', but no widening check is "
                     f"defined for document kind {kind!r} — the change was NOT compared "
                     f"against it"),), str(kind)
+
+
+def _pair_claims(kind: str | None, document: Any) -> tuple[Any, ...]:
+    """The claims the PROJECTED PROPOSED document makes, for a pair check that
+    reads them.
+
+    The same extractor resolution ``preflight._extract_claims`` uses — the
+    registry's document extractor, with the two built-in kinds spelled out — so
+    the pair tier and the claim tier read one document the same way. Extraction
+    trouble is empty claims plus a debug line: the check's own "nothing was
+    extracted" abstention is the honest answer and it already exists.
+    """
+    if kind is None or not isinstance(document, Mapping):
+        return ()
+    if kind == "iam_policy":
+        extract: Any = claims_module.iam_policy_claims
+    elif kind == "org_policy":
+        extract = claims_module.org_policy_claims
+    else:
+        extract = registry.document_extractor(kind)
+    if extract is None:
+        return ()
+    try:
+        return tuple(extract(document))
+    except Exception:                   # noqa: BLE001 — the engine never raises
+        logger.debug("the pair tier could not extract %s claims from the projected "
+                     "proposal", kind, exc_info=True)
+        return ()
+
+
+def _addressed(verdict: Verdict, row: str) -> Verdict:
+    """*verdict* re-addressed to the ROW the pair tier was dispatched for.
+
+    ``registry.PAIR_CHECKS`` is dispatched once per baseline entry, so its
+    findings are about that row — but a check names its own answer's scope in
+    ``target`` (``fw_checks`` names the ``(network, direction)`` group), which
+    leaves a per-row report with no verdict addressed to the row. The check's
+    own spelling is kept in the message rather than dropped, and the built-in
+    new⊆old comparison is deliberately NOT re-addressed: its ``iam-policy``
+    target is the historical one and is pinned elsewhere.
+    """
+    if not row or verdict.target == row:
+        return verdict
+    return replace(verdict, target=row,
+                   message=f"{verdict.message} [pair scope {verdict.target}]")
 
 
 def _attributed(verdict: Verdict, entry: Any) -> Verdict:

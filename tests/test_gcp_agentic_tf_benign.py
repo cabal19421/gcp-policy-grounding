@@ -26,23 +26,29 @@ through the real hook. Everything else that touches promises in this repository
 is unit-level with documents built in code.
 
 WHAT THIS CHECKOUT CAN AND CANNOT DECIDE, stated once so no branch below reads
-as a hedge. The CLI's ``--hook`` path grounds a document through
-``preflight.detect_kind`` and ``engine.prepare_proposal``; terraform's own JSON
-CONFIGURATION syntax is assembled into a synthetic plan by
-:mod:`gcp_grounding.gate`, which no CLI path reaches. So a ``.tf.json`` edit is
-recognized as a policy candidate, is grounded, and yields state / baseline /
-provenance verdicts — but no CLAIM is extracted from it, and therefore no
-attribute path is reported for an interpolation inside it. A terraform PLAN
-document IS recognized, which is why the after-unknown case is the one arm that
-exercises the proposal-side unknown handling end to end. Every place that
-distinction bites, the test BRANCHES on the capability and asserts the honest
-answer for the world it is actually in — the discipline
-:mod:`tests.agentic.env` and :mod:`tests.agentic.tfrepo` use throughout. It
-never skips.
+as a hedge. THERE IS ONE TERRAFORM ENTRY POINT and both routes reach it: a
+``.tf`` / ``.tf.json`` edit is assembled into a synthetic plan by
+``gcp_grounding.tfsource.plan.as_plan_document`` and prepared exactly once by
+``engine.prepare_proposal``, and ``cli._ground`` makes that same call rather than
+preparing the raw ``{"resource": ...}`` body — which ``preflight.detect_kind``
+does not recognize, so the retired second route extracted no claim, named no
+per-resource counterpart, and left a registered pair check demanding a decision
+it never made. Consequences the cases below rely on: a ``.tf.json`` edit yields
+CLAIMS (so a widening edit is a finding in its own right, and an interpolation
+inside it IS reported as an unresolved attribute path), and the baseline rows are
+DIFF-SCOPED — a configuration file declares every resource of its module, and the
+rows are the ones the edit CHANGES relative to their current counterpart, plus
+whatever row the operator DECLARED the file is a proposal for. A resource the
+edit does not touch is byte-quiet. A terraform PLAN document is already a diff
+and is never re-scoped, which is why the after-unknown case still exercises the
+proposal-side unknown handling end to end. Every place a capability question
+bites, the test BRANCHES and asserts the honest answer for the world it is
+actually in — the discipline :mod:`tests.agentic.env` and
+:mod:`tests.agentic.tfrepo` use throughout. It never skips.
 
 SUBPROCESSES: thirteen, every one through :mod:`tests.agentic.hookrunner`, which
 counts them against the suite-wide ceiling — four passing cases, seven
-abstentions and the promise arm's two. Every message assertion that does not
+abstentions and the promise arm's two blocks. Every message assertion that does not
 need the process boundary goes through :func:`ground`, the in-process helper,
 which runs the SAME ``cli.main`` entry point on the SAME code path (``--hook``
 and normal mode share ``cli._ground``) and reads the machine document instead of
@@ -62,8 +68,9 @@ import pytest
 
 from gcp_grounding import cli, registry
 from tests.agentic import env, hookrunner, tfrepo
-from tests.agentic.asserts import (assert_abstained, assert_no_verdictless_pass,
-                                   assert_passed, assert_recorded)
+from tests.agentic.asserts import (assert_abstained, assert_blocked,
+                                   assert_no_verdictless_pass, assert_passed,
+                                   assert_recorded)
 from tests.agentic.fake_agent import FakeAgent
 from tests.agentic.hookrunner import bound_subprocess_budget  # noqa: F401
 
@@ -211,6 +218,32 @@ def verdicts_of(report, *, kind=None, status=None, prefix=None) -> list:
             continue
         out.append(verdict)
     return out
+
+
+def assert_sec_channel_abstained(report, *needles: str) -> None:
+    """The REQUIREMENT channel abstained, whatever the rest of the run decided.
+
+    :func:`tests.agentic.asserts.assert_abstained` is a WHOLE-RUN assertion — it
+    requires exit 0 — and the promise arms below run a document that carries a
+    finding of its own, so the run blocks while the promise abstains. This is the
+    same three-bucket assertion narrowed to the ``sec:`` kinds: at least one
+    ``unverified`` naming its reason, and no ``grounded``, ``ungrounded`` or
+    ``contradicted`` manufactured out of the same ignorance.
+    """
+    sec = verdicts_of(report, prefix="sec:")
+    assert needles, ("an abstention on the requirement channel that names no "
+                     "reason is a silent pass wearing a verdict")
+    unverified = [v for v in sec if v["status"] == "unverified"]
+    assert unverified, f"nothing on the sec: channel abstained: {sec}"
+    for status in ("grounded", "ungrounded", "contradicted"):
+        assert not [v for v in sec if v["status"] == status], (
+            f"the requirement channel reported {status} out of the same "
+            f"ignorance it abstained on: {sec}")
+    joined = "\n".join(str(v.get("message")) for v in unverified)
+    for needle in needles:
+        assert needle in joined, (
+            f"expected {needle!r} in the requirement channel's unverified "
+            f"messages: {joined}")
 
 
 def assert_claims_nothing_safe(report, needle: str = "") -> None:
@@ -424,7 +457,14 @@ def test_an_interpolated_source_range_is_never_quoted_as_a_value(repo):
                     "abstain", extra_argv=tfrepo.hook_argv(repo))
     report = ground(repo.tf_json_path, snapshot=repo.snapshot_path,
                     extra_argv=tfrepo.hook_argv(repo))
-    assert_abstained(outcome, report)
+    # THE REASON IS NAMED, which this call did not require when it was written:
+    # `assert_abstained` grew the "an abstain that names no reason is not an
+    # abstain" guard afterwards, and a bare call now fails on the guard rather
+    # than on the product. Naming the reason is what this module's own doctrine
+    # demands anyway — the substring is the one the unresolved-path verdict and
+    # the downgrade suffix both carry, so the abstention must SAY why it could
+    # not decide, not merely be one.
+    assert_abstained(outcome, report, "could not be resolved statically")
     assert INTERPOLATION not in json.dumps(report), (
         f"{INTERPOLATION!r} reached the report as a value — a claim carrying an "
         f"interpolation grades a string terraform never intended")
@@ -736,6 +776,38 @@ def test_the_promise_abstains_over_terraform_and_is_live_over_the_estate(tmp_pat
     at all, and what must still hold — in BOTH arms — is that the requirement is
     visibly not enforcing rather than silently absent, and that it never grades
     the estate clean.
+
+    TWO EXPECTATIONS WERE RE-PINNED TO THE INTEGRATED SEMANTICS, and both are
+    consequences of decisions this document does not own.
+
+    ONE, the RUN blocks in both arms. A ``.tf.json`` edit is now routed through
+    the one terraform entry point (``plan.as_plan_document`` →
+    ``engine.prepare_proposal``, the call ``gcp_grounding.gate`` makes), so the
+    file's OWN claims are extracted and the widening edit is a finding in its own
+    right: ``firewall_exposure`` contradicts a world-open tcp/22 rule and the
+    hook exits 2. When this arm was written the CLI prepared the raw
+    ``{"resource": ...}`` body instead, ``detect_kind`` recognized nothing, no
+    claim was extracted and the same run exited 0 — which is why it asked for an
+    abstain. The subject of the arm is the PROMISE, and the promise still
+    abstains; ``assert_abstained`` is a whole-run assertion and cannot express
+    that, so the run half is asserted with :func:`assert_blocked` and the promise
+    half against the promise's own verdict.
+
+    TWO, the promise ABSTAINS in arm two as well, and the pair is asserted on
+    what actually differs. ``provenance`` caps a category any TERRAFORM source
+    contributed to at ``partial``, and arm two configures the terraform state
+    beside the estate snapshot, so ``firewall_rules`` is partial there too and
+    the universal-negative gate refuses to decide a promise that reasons from
+    absence. ``--completeness complete`` does not lift that cap and must not:
+    the alternative is an estate-wide clean bill of health from a view that sees
+    part of the estate. The promise could only be CONTRADICTED by a witness, and
+    the estate this suite commits holds no open-SSH rule — the widened rule lives
+    in the PROPOSAL, which is the ``proposed_firewall_rules`` collection this
+    promise deliberately does not quantify over. So the live-over-the-estate half
+    is pinned where it is real: over the estate an estate-tier check DECIDES the
+    widening (``firewall_reopen`` contradicts), and over a terraform-only view
+    nothing about the estate is decided at all. A rule that abstains everywhere
+    is still not a cautious rule, and that is exactly what the pair below asserts.
     """
     live = tfrepo.HAVE_SEC_RULES and tfrepo.HAVE_SEC_DOMAINS
 
@@ -745,7 +817,7 @@ def test_the_promise_abstains_over_terraform_and_is_live_over_the_estate(tmp_pat
     assert status == ("compiled" if live else "unverified"), status
     payload = edited(tf_only, tfrepo.TF_JSON_NAME, widen_the_source_range)
     tf_outcome = drive(tf_only, "P01_promise_over_terraform", tfrepo.TF_JSON_NAME,
-                       payload, "abstain", extra_argv=tfrepo.hook_argv(tf_only))
+                       payload, "block", extra_argv=tfrepo.hook_argv(tf_only))
     tf_report = ground(tf_only.tf_json_path, snapshot=tf_only.snapshot_path,
                        extra_argv=tfrepo.hook_argv(tf_only))
 
@@ -753,7 +825,12 @@ def test_the_promise_abstains_over_terraform_and_is_live_over_the_estate(tmp_pat
     assert promise["status"] == "unverified", (
         f"an estate-wide negative was decided from a terraform-only view: {promise}")
     assert PROMISE_COLLECTION in promise["message"], promise
-    assert_abstained(tf_outcome, tf_report, PROMISE_COLLECTION)
+    # The PROMISE abstains and the promise's ignorance is on the record; the RUN
+    # blocks, because the widening edit is a finding the file's own claims carry.
+    # Both halves, so neither can hide the other.
+    assert_sec_channel_abstained(tf_report, PROMISE_COLLECTION)
+    assert_claims_nothing_safe(tf_report, PROMISE_ID)
+    assert_blocked(tf_outcome, "tcp/22")
     if live:
         assert "complete" in promise["message"] or "partial" in promise["message"], (
             f"the abstention does not name the incomplete view: {promise}")
@@ -762,6 +839,10 @@ def test_the_promise_abstains_over_terraform_and_is_live_over_the_estate(tmp_pat
         assert "not enforcing" in tf_outcome.stderr, (
             f"a requirement that cannot run must say so on the agent-visible "
             f"stream\n{tf_outcome}")
+    # NOTHING ABOUT THE ESTATE WAS DECIDED from a terraform-only view: the half
+    # that makes arm two's answer mean something.
+    assert not verdicts_of(tf_report, kind="firewall_reopen", status="contradicted"), (
+        "a terraform-only view decided an estate-tier firewall question")
 
     # ARM TWO — the merged agentic estate too, declaring the category complete.
     estate = tfrepo.build_tf_repo(tmp_path / "estate")
@@ -769,21 +850,33 @@ def test_the_promise_abstains_over_terraform_and_is_live_over_the_estate(tmp_pat
     payload = edited(estate, tfrepo.TF_JSON_NAME, widen_the_source_range)
     extra = tfrepo.hook_argv(estate, extra=("--completeness", "complete"))
     estate_outcome = drive(estate, "P02_promise_over_the_estate",
-                           tfrepo.TF_JSON_NAME, payload, "block" if live else "abstain",
+                           tfrepo.TF_JSON_NAME, payload, "block",
                            extra_argv=extra)
     estate_report = ground(estate.tf_json_path, snapshot=estate.snapshot_path,
                            extra_argv=extra)
     decided = assert_recorded(estate_report, kind="sec:vpc_firewall", target=PROMISE_ID)
 
+    assert decided["status"] == "unverified", decided
     if live:
-        assert decided["status"] == "contradicted", decided
+        # THE CAP, NAMED. A category any terraform source contributed to is
+        # 'partial', and this arm configures the terraform state beside the
+        # estate snapshot, so the promise may not discharge a negative from it —
+        # `--completeness complete` does not buy that and must not.
+        assert PROMISE_COLLECTION in decided["message"], decided
+        assert "partial" in decided["message"], decided
+        # ... AND THE EDIT IS STILL BLOCKED, over the estate, by a check that
+        # DID compare against it. This is the half arm one cannot have: a
+        # witness-shaped estate question is decided here and abstained there.
+        reopened = assert_recorded(estate_report, kind="firewall_reopen",
+                                  target=FIREWALL.rsplit("/", 1)[-1])
+        assert reopened["status"] == "contradicted", reopened
+        assert_blocked(estate_outcome, "tcp/22")
         assert estate_outcome.exit_code == 2, (
-            f"the promise did not block the widening edit\n{estate_outcome}")
+            f"the widening edit was not blocked over the estate\n{estate_outcome}")
     else:
-        assert decided["status"] == "unverified", decided
         assert "not registered" in decided["message"], decided
-        assert estate_outcome.exit_code == 0, estate_outcome
         assert "not enforcing" in estate_outcome.stderr, estate_outcome
+    assert_sec_channel_abstained(estate_report, PROMISE_COLLECTION)
     assert_claims_nothing_safe(estate_report, PROMISE_ID)
 
 

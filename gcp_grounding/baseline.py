@@ -91,7 +91,7 @@ import importlib
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
-from . import facts, identity, provenance
+from . import compare, facts, identity, provenance
 from .core.log import get_logger
 from .core.report import Verdict
 from .knowledge import GcpSnapshot
@@ -994,6 +994,149 @@ def _plan_objects(document: Any) -> tuple[Any, ...]:
     return tuple(read.proposed)
 
 
+def proposed_records(objects: Sequence[Any], hints: Hints
+                     ) -> dict[str, tuple[str, str, Mapping[str, Any]]]:
+    """``terraform address → (category, key, record)`` for every MANAGED object.
+
+    The PROPOSED side of a configuration edit, canonicalised through the same
+    ``canonical_from_object`` the capture side and :func:`_terraform_targets`
+    use, so one resource cannot acquire two spellings across the comparison.
+    This is what makes the CHANGED SET computable: the record here and the
+    current record on the resolved entry are two views of one row, which is
+    exactly the pairing :mod:`gcp_grounding.compare` exists to answer.
+    """
+    mapping_module = _mapping_module()
+    if mapping_module is None:
+        return {}
+    context = mapping_module.MapContext(
+        project=hints.project, project_number=hints.project_number,
+        region=hints.region, organization=hints.organization, folder=hints.folder,
+        access_policy=hints.access_policy, aliases=_aliases(hints))
+    out: dict[str, tuple[str, str, Mapping[str, Any]]] = {}
+    for obj in objects:
+        if not mapping_module.is_managed(obj):
+            continue
+        resolved = mapping_module.canonical_from_object(obj, context)
+        if resolved is None:
+            continue
+        category, key, record = resolved
+        if not isinstance(key, str) or not key or not isinstance(record, Mapping):
+            continue
+        out[str(getattr(obj, "address", ""))] = (category, key, record)
+    return out
+
+
+def declared_rows(hints: Hints, source: str) -> frozenset[tuple[str, str]]:
+    """The ``(category, key)`` rows the OPERATOR declared this document changes.
+
+    The ``--target`` flag and the config file's ``targets`` map, read through the
+    same :func:`_hinted_target` resolution order and NEVER from a file name. A
+    declaration is a statement about scope — ``--target``'s own help calls it
+    "which estate row this document is a proposal for" — so it is what decides
+    which rows a multi-resource configuration file is speaking about, in
+    preference to any inference. Empty when nobody said.
+    """
+    category = hints.category
+    value = ""
+    if isinstance(hints.target, str) and hints.target.strip():
+        value = hints.target.strip()
+    else:
+        value = str(hints.targets.get(hints.source or source, "")).strip()
+    if not value or not category:
+        return frozenset()
+    key, _reason = _canonical(category, hints,
+                              **_accepted_parts(category, hints, value))
+    return frozenset({(category, key)}) if key else frozenset()
+
+
+def _is_a_computed_plan(document: Any) -> bool:
+    """Whether *document* is a ``terraform show -json`` PLAN rather than an
+    ASSEMBLED configuration.
+
+    THE LINE THE DIFF SCOPE IS DRAWN ON. A computed plan IS a diff: terraform
+    resolved the whole module against the state and wrote out
+    ``resource_changes``, so every resource in it is one the apply will touch and
+    the caller has already scoped the proposal. A configuration file is NOT a
+    diff — it declares every resource of its module whether the edit touched it
+    or not, and :func:`gcp_grounding.tfsource.plan.as_plan_document` assembles
+    exactly such a document (``planned_values`` and no ``resource_changes``),
+    which is the shape the scope below applies to.
+    """
+    return isinstance(document, Mapping) and bool(document.get("resource_changes"))
+
+
+def _changes_the_row(entry: "BaselineEntry",
+                     proposed: Mapping[str, Any] | None) -> bool | None:
+    """Whether this proposal CHANGES the row *entry* resolved.
+
+    ``True`` / ``False`` where the two records can be compared, and ``None``
+    where they cannot — an unqueried, ambiguous or opaque counterpart is not
+    evidence either way, and a comparator that refuses the pair
+    (:class:`gcp_grounding.compare.Incomparable`) has said exactly that.
+
+    An ABSENT counterpart is a change: the proposal creates a row that is not
+    there. Only a difference that MATTERS counts — ``compare`` already ignores
+    the volatile bookkeeping fields two views of one unchanged resource always
+    disagree about, so an etag or a terraform address never makes a resource
+    look edited.
+    """
+    if entry.status == "absent":
+        return True
+    if proposed is None or entry.record is None or \
+            entry.status not in ("resolved", "conflict", "stale"):
+        return None
+    try:
+        diffs = compare.compare(entry.target.category, entry.record, proposed)
+    except compare.Incomparable as exc:
+        logger.debug("the changed set could not compare '%s': %s",
+                     entry.target.key, exc)
+        return None
+    return bool(diffs)
+
+
+def _scoped(entries: Sequence["BaselineEntry"],
+            records: Mapping[str, tuple[str, str, Mapping[str, Any]]],
+            declared: frozenset[tuple[str, str]]
+            ) -> tuple[tuple[int, ...], tuple[str, ...]]:
+    """THE DIFF SCOPE: the entries this proposal actually speaks about.
+
+    A configuration file declares every resource of its module, and a gate that
+    emits a verdict or an abstention for each of them reports N-1 rows about an
+    edit that touched one — noise that gets a guardrail switched off, and noise
+    that buries the row that moved. So a row is IN SCOPE when it is one the
+    operator DECLARED this file is a proposal for, or when the proposed record
+    and the current record demonstrably DIFFER.
+
+    A row that cannot be compared at all is in scope UNLESS the operator
+    declared the scope: with no declaration, "I could not look" is the honest
+    thing to say about every row the file names (it is a configuration defect
+    and this suite's headline distinction), and with one, the operator has
+    already said which row this file is about and the tool speaks about the
+    others only when it can SHOW a difference. Nothing here can turn a
+    difference into silence: an entry whose records differ is always kept.
+
+    Returns the kept entries' INDICES plus the keys dropped, for the debug line.
+    """
+    if not records:
+        return tuple(range(len(entries))), ()
+    by_address = {address: value for address, value in records.items() if address}
+    kept: list[int] = []
+    dropped: list[str] = []
+    for index, entry in enumerate(entries):
+        row = (entry.target.category, entry.target.key)
+        proposed = None
+        found = by_address.get(entry.target.address)
+        if found is not None and (found[0], found[1]) == row:
+            proposed = found[2]
+        changed = _changes_the_row(entry, proposed)
+        if row in declared or changed is True or \
+                (changed is None and not declared):
+            kept.append(index)
+        else:
+            dropped.append(entry.target.key)
+    return tuple(kept), tuple(dropped)
+
+
 def _terraform_targets(objects: Sequence[Any], hints: Hints, source: str
                        ) -> tuple[tuple[TargetRef, ...], tuple[Verdict, ...]]:
     """One target per terraform-MANAGED resource, keyed through the same
@@ -1357,12 +1500,33 @@ def derive(document: Any, kind: str | None, current: Any, *,
     targets, verdicts = targets_for(document, kind, hints, source=source)
     entries: list[BaselineEntry] = []
     collected: list[Verdict] = list(verdicts)
+    ambiguities: dict[int, tuple[Verdict, ...]] = {}
     for target in targets:
         entry, ambiguity = resolve(target, snapshot, ledger)
+        ambiguities[len(entries)] = tuple(ambiguity)
         entries.append(entry)
+
+    # THE DIFF SCOPE, applied before a single row is put on the record: a
+    # configuration file names every resource of its module, and only the ones
+    # this edit CHANGES are rows this proposal is speaking about. Verdicts are
+    # emitted for the kept entries alone, so an untouched resource is byte-quiet
+    # rather than one more abstention nobody reads. A non-terraform proposal is
+    # ONE row by construction and nothing below moves for it.
+    objects = () if _is_a_computed_plan(document) else (
+        tuple(hints.objects) or (_plan_objects(document) if kind in TF_KINDS else ()))
+    records = proposed_records(objects, hints) if objects else {}
+    kept, dropped = _scoped(entries, records, declared_rows(hints, source))
+    if dropped:
+        logger.debug("baseline.derive(%s): %d row(s) left byte-quiet because the "
+                     "proposal does not change them: %s", source or kind,
+                     len(dropped), ", ".join(dropped))
+    for index in kept:
+        entry = entries[index]
+        ambiguity = ambiguities.get(index, ())
         collected.extend(ambiguity)
         if not ambiguity and entry.status != "resolved":
             collected.append(status_verdict(entry))
+    entries = [entries[index] for index in kept]
     collected.extend(key_mismatch_verdicts(entries, snapshot, ledger))
 
     notes: list[str] = []
