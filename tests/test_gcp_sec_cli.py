@@ -865,3 +865,24 @@ def test_no_sec_verdict_carries_a_line_number(clean_artifacts, stalled_artifacts
     assert any(v.kind.startswith("sec:") for r in reports for v in r.verdicts)
     for report in reports:
         assert_no_line_numbers(report)
+
+
+def test_no_compile_floor_verdict_carries_a_line_number(tmp_path):
+    """All three floor verdicts at once — nothing compiled, an orphan
+    artifact, no ``pyproject.toml`` ancestor — each reporting lineno 0. A
+    corpus is a DIRECTORY, so there is no line to point at (lineno_invariant),
+    and each verdict's identity is pinned beside it so the floor is shown to
+    have decided three things. No render prints a lineno, in any format."""
+    from gcp_grounding.cli import _compile_floor
+    sec_parse = importlib.import_module("gcp_grounding.sec_parse")
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "ghost.promises.json").write_text("{}", encoding="utf-8")
+    verdicts = _compile_floor(sec_parse, str(corpus), str(out), [])
+    assert [(v.status, v.target, v.lineno) for v in verdicts] == [
+        ("ungrounded", str(corpus), 0),
+        ("ungrounded", str(out / "ghost.promises.json"), 0),
+        ("unverified", str(corpus), 0)]

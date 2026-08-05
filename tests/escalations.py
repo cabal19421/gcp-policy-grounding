@@ -205,6 +205,31 @@ ESCALATIONS: tuple[Escalation, ...] = (
 
 PRODUCT_ESCALATIONS: tuple[ProductEscalation, ...] = (
     ProductEscalation(
+        id="ESC-GX-DEBTCLI-001",
+        clause=('THE HOOK PLUMBING STRING GUARDS: `_hook_bash` at 882 '
+                '`event.get("tool_name") or "Bash"`'),
+        why=(
+            "Measurably EQUIVALENT: both consumers discard it. "
+            "bash_mutation.bash_mutation_verdicts opens `del source  # "
+            "reserved`, and _bash_hook_lines renders _bash_report(..., "
+            "source=source).render('human') then drops line 0 with `[1:]` — "
+            "the one line the source appears on. So no exit code, rendered "
+            "line, verdict or log record differs between `or` and `and`: this "
+            "is house rule 7's measured-equivalence route, not an argument. "
+            "Measured at cli.py:1926, that mutant alone, PASSED."
+        ),
+        product_fix=(
+            "Show the label the arm already threads — keep _bash_report's "
+            "header line, or name the tool on the timing line — or drop the "
+            "parameter and stop threading a value nothing reads."
+        ),
+        residual_risk=(
+            "A blocked command's report never says WHICH tool ran it: an "
+            "operator reading hook stderr cannot tell a Bash invocation from "
+            "an MCP shell one, and the field that would is dropped."
+        ),
+    ),
+    ProductEscalation(
         id="ESC-HOOKRUNNER-NO-Z3-BANNER",
         clause=(
             "assert_passed's byte-empty-both-streams contract must hold in the "

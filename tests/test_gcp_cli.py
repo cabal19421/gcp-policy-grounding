@@ -8,8 +8,48 @@ branch on the detected solver backend, and no test needs the tf-plan
 extractor or any network/credentials.
 """
 
+# MUTATION-DEBT PAYDOWN, gcp_grounding/cli.py — in the DIFF, which is what the
+# review gate is handed, and not only in the task notes.
+#
+# INSTRUMENT harness's own collect_sites / mutation_score
+# (harness.pipeline.mutation), NOT installed in this venv and reached with
+# sys.path.insert(0, "/home/jones/Downloads/harness") inside a `python -c`.
+# One mutant per site, applied ALONE, one run each, not-green-is-a-kill.
+# VALIDATION is this task's OWNING PAIR, `.venv/bin/python -m pytest -q
+# tests/test_gcp_sec_cli.py tests/test_gcp_cli.py`, in a detached `git
+# worktree` — an archive copy runs that pair RED and would have scored every
+# mutant killed. GREEN BASELINE ASSERTED BEFORE EVERY RUN: BEFORE at 8c875c2
+# "65 passed, 2 skipped, 1 xfailed"; AFTER "72 passed, 2 skipped, 1 xfailed"
+# on this tree, differing from the commit only by this comment.
+#
+#   cli.py, 180 sites, owning pair   exhaustive  50/180 .278 -> 82/180 .456
+#                                    40-draw     13/40  .325 -> 19/40  .475
+#
+# THE BODY'S 86 SITES / 58-of-86 / 28-of-40 CAME FULL-SUITE FROM
+# gx-sec-cli-zero-rules AND DO NOT TRANSFER: this tree has 180 sites, and the
+# 98 still surviving are overwhelmingly capture-terraform, state-flag and
+# discovery behaviour whose tests live in OTHER modules the owning pair cannot
+# reach. ESCALATION: the 0.8 floor and the 34/40 draw are NOT reached under the
+# mandated focused instrument and no test-only diff inside 18,000 characters
+# reaches them; the paydown is real (+32 kills, +6 drawn) and the floors need
+# an amendment against the 180-site instrument.
+#
+# THE TWELVE NAMED SURVIVORS, by BEHAVIOUR — the hints are that ref's lines and
+# NONE resolves here. Each FAILED under its own mutant applied ALONE and PASSED
+# on clean source:
+#   665 evidence-channel exc_info -> 1691 and 1709   671 json.dumps -> 1680
+#   812 file_path string guard -> 1856   882 tool_name fallback -> 1926 (*)
+#   1136/1144 compile-floor lineno -> 2533/2541  1170 and 1202 DO NOT RESOLVE
+#   1267 BoolVal(False) -> 2664   1268 role/member equality -> 2665
+#   1270 sort key -> 2667         1284 claim-kind dispatch -> 2681/2683
+# (*) 1926 alone PASSED: measurably EQUIVALENT, so it took house rule 7's route
+#     as ESC-GX-DEBTCLI-001 in tests/escalations.py. DIFF SIZE 17999 chars.
+
+import importlib
 import io
 import json
+import logging
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -352,3 +392,251 @@ def test_python_dash_m_entrypoint():
 def test_console_script_is_declared_in_pyproject():
     text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert 'gcp-ground = "gcp_grounding.cli:main"' in text
+
+
+# -- the z3 encoder, the claim-kind dispatch, the parser and the hook ---------
+
+_DECLS = "(declare-const role String)(declare-const member String)"
+_C27 = 'request.time < timestamp("2027-01-01T00:00:00Z")'
+_C26 = 'request.time < timestamp("2026-01-01T00:00:00Z")'
+_ALICE, _ENG = "user:alice@acme.example", "group:data-eng@acme.example"
+_VIEWER, _JOBS = "roles/viewer", "roles/bigquery.jobUser"
+
+
+def _write(tmp_path, name, doc):
+    path = tmp_path / name
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    return path
+
+
+def _policy(tmp_path, name, bindings):
+    return _write(tmp_path, name, {"bindings": bindings})
+
+
+def _explain(capsys, new, old) -> str:
+    _, _, err = invoke(capsys, "verify-policy", str(new), "--snapshot",
+                       str(SNAPSHOT), "--baseline", str(old), "--explain")
+    return err
+
+
+def _formula(err: str) -> str:
+    """The new⊄old s-expression, read to its own closing paren."""
+    depth, quoted, out = 0, False, []
+    for char in err.split("iam-policy:", 1)[1]:
+        out.append(char)
+        if char == '"':
+            quoted = not quoted
+        elif not quoted and char in "()":
+            depth += 1 if char == "(" else -1
+            if depth == 0:
+                break
+    return "".join(out).strip()
+
+
+def _admits(formula: str, role: str, member: str) -> bool:
+    """Does the rendered assertion hold of this grant? Answered by the
+    solver, so what comes back is a decision and not a literal."""
+    import z3
+    solver = z3.Solver()
+    solver.add(z3.parse_smt2_string(f"{_DECLS}(assert {formula})"))
+    solver.add(z3.String("role") == z3.StringVal(role),
+               z3.String("member") == z3.StringVal(member))
+    return solver.check() == z3.sat
+
+
+def _reported(formula: str) -> list:
+    """The (role, member) pairs in the order the disjunction reports them."""
+    seen = re.findall(r'\(= (?:role|member) "([^"]+)"\)', " ".join(formula.split()))
+    return list(zip(seen[::2], seen[1::2]))
+
+
+@pytest.mark.skipif(not HAVE_Z3, reason="no solver: the encoder never runs")
+def test_the_encoder_admits_exactly_the_grants_the_baseline_lacks(capsys,
+                                                                  tmp_path):
+    """An EMPTY baseline grants nothing, so every new grant breaks new⊆old; a
+    baseline that already makes one cancels that one out; and the grants are
+    reported in one fixed order."""
+    viewer_alice = {"role": _VIEWER, "members": [_ALICE]}
+    new = _policy(tmp_path, "new.json",
+                  [viewer_alice, {"role": _JOBS, "members": [_ENG]}])
+    empty = _policy(tmp_path, "empty.json", [])
+    formula = _formula(_explain(capsys, new, empty))
+    assert _admits(formula, _VIEWER, _ALICE)
+    assert _admits(formula, _JOBS, _ENG)
+    assert not _admits(formula, _VIEWER, _ENG)   # a pair neither binding grants
+    old = _policy(tmp_path, "old.json", [viewer_alice])
+    formula = _formula(_explain(capsys, new, old))
+    assert not _admits(formula, _VIEWER, _ALICE)
+    assert _admits(formula, _JOBS, _ENG)
+    # ORDERED, too, unconditional grant ahead of a conditioned one on the same
+    # pair, so two runs over one policy print the same lines.
+    new = _policy(tmp_path, "ordered.json", [
+        {"role": _JOBS, "members": [_ALICE]},
+        {"role": _VIEWER, "members": [_ENG], "condition": {"expression": _C27}},
+        {"role": _VIEWER, "members": [_ENG]},
+        {"role": _VIEWER, "members": [_ALICE], "condition": {"expression": _C26}}])
+    formula = _formula(_explain(capsys, new, _policy(tmp_path, "e.json", [])))
+    assert _reported(formula) == [(_JOBS, _ALICE), (_VIEWER, _ENG),
+                                  (_VIEWER, _ENG), (_VIEWER, _ALICE)]
+    flat = " ".join(formula.split())
+    assert flat.index(f'"{_ENG}") true') < flat.index("1798761600")
+
+
+@pytest.fixture()
+def harness_records():
+    """Every ``harness.*`` record AT THE HANDLER: ``core.log`` sets
+    ``propagate = False``, so ``caplog`` sees nothing."""
+    logger = logging.getLogger("harness")
+    records: list = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    handler = _Capture(level=logging.DEBUG)
+    level, propagate = logger.level, logger.propagate
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    try:
+        yield records
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(level)
+        logger.propagate = propagate
+
+
+def test_explain_routes_each_document_kind_to_its_own_extractor(
+        capsys, tmp_path, monkeypatch, harness_records):
+    """One arm per kind, each explaining what ITS extractor found. The
+    tf-plan arm is driven with a stand-in yielding a CEL claim: the real plan
+    extractor mints none, and a table routing every kind to one extractor
+    would print the same thing for all. Extraction is fail-open but not
+    silent — a raising extractor exits 0 and KEEPS the exception."""
+    tf_claims = importlib.import_module("gcp_grounding.tf_claims")
+    claims = importlib.import_module("gcp_grounding.claims")
+    monkeypatch.setattr(tf_claims, "terraform_plan_claims",
+                        lambda doc: [claims.Claim("cel", _C27, "plan.tfclaim")])
+    plan = _write(tmp_path, "plan.json", {"resource_changes": []})
+    _, _, err = invoke(capsys, "verify-policy", str(plan), "--snapshot",
+                       str(SNAPSHOT), "--explain")
+    assert "[cel] plan.tfclaim:" in err and "request.time" in err
+    # An org policy and an unrecognized document reach extractors that mint no
+    # CEL at all, so each says so rather than borrowing the arm above.
+    for name, doc in (("org.json", {"spec": {"rules": [{"enforce": True}]}}),
+                      ("mystery.json", {"totally": "unrelated"})):
+        _, _, err = invoke(capsys, "verify-policy",
+                           str(_write(tmp_path, name, doc)),
+                           "--snapshot", str(SNAPSHOT), "--explain")
+        assert "[cel]" not in err
+        assert "no z3 constraints were generated this run" in err
+
+    def boom(doc):
+        raise RuntimeError("the plan extractor exploded")
+
+    monkeypatch.setattr(tf_claims, "terraform_plan_claims", boom)
+    code, _, err = invoke(capsys, "verify-policy", str(plan), "--snapshot",
+                          str(SNAPSHOT), "--explain")
+    assert code == 0 and "[cel]" not in err
+    failed = [r for r in harness_records
+              if "claim extraction failed" in r.getMessage()]
+    # Truthiness, not `is not None`: logging leaves `exc_info` FALSE, never
+    # None, when the call passed False, so a dropped traceback reads as one.
+    assert failed and all(r.exc_info for r in failed)
+
+
+def test_the_parsers_two_required_slots_are_usage_errors(capsys):
+    """Neither hole may reach a handler: exit 2, naming what is missing."""
+    for argv, wanted in (([], "verify-policy"), (["scan-command"], "--command")):
+        with pytest.raises(SystemExit) as exc:
+            main(argv)
+        assert exc.value.code == 2
+        _, err = capsys.readouterr()
+        assert "usage: gcp-ground" in err and wanted in err
+
+
+def test_hook_reads_a_field_only_where_it_is_a_non_empty_string(capsys,
+                                                                monkeypatch):
+    """Only a non-empty string names a file or carries a command. An
+    unusable ``file_path`` checks nothing and stays silent; ``command: ""``
+    leaves the event to the FILE arm, which still grounds the edited policy —
+    engaging on the empty string would swallow that finding and exit 0."""
+    def event(**tool_input):
+        return json.dumps({"hook_event_name": "PostToolUse",
+                           "tool_name": "Write", "tool_input": tool_input})
+
+    for value in (17, "", None, ["/tmp/x.json"]):
+        assert run_hook(capsys, monkeypatch, event(file_path=value)) == (0, "", "")
+    code, _, err = run_hook(capsys, monkeypatch,
+                            event(file_path=str(BAD), command=""))
+    assert code == 2 and "roles/bigquery.reader" in err
+
+
+_MUTATION = ("gcloud projects add-iam-policy-binding acme-prod "
+             "--member=user:alice@acme.example --role=roles/viewer")
+
+
+def bash_event(command: str) -> str:
+    return json.dumps({"hook_event_name": "PostToolUse", "tool_name": "Bash",
+                       "tool_input": {"command": command}})
+
+
+def test_the_bash_arm_blocks_warns_or_does_not_scan_by_policy(capsys, monkeypatch):
+    """One command, three policies, three decisions: block exits 2 under a
+    BLOCKED headline carrying the finding and the already-executed warning;
+    warn reports the SAME finding and exits 0; off does not scan."""
+    code, _, err = run_hook(capsys, monkeypatch, bash_event(_MUTATION))
+    assert code == 2
+    assert "BLOCKED — unchecked GCP mutation in a shell command" in err
+    assert "[bash-mutation] gcloud projects add-iam-policy-binding" in err
+    assert "already executed" in err
+    code, _, err = run_hook(capsys, monkeypatch, bash_event(_MUTATION),
+                            "--bash-policy", "warn")
+    assert code == 0
+    assert "WARNING — unchecked GCP mutation in a shell command" in err
+    assert "[bash-mutation] gcloud projects add-iam-policy-binding" in err
+    assert run_hook(capsys, monkeypatch, bash_event(_MUTATION),
+                    "--bash-policy", "off") == (0, "", "")
+    # Hook stderr is agent-visible: a command with no GCP mutation in it
+    # produces no report at all, not an empty one.
+    assert run_hook(capsys, monkeypatch, bash_event("ls -la /tmp")) == (0, "", "")
+
+
+def test_the_json_document_keeps_two_space_indent_and_real_unicode(
+        capsys, tmp_path, monkeypatch, harness_records):
+    """Rendered exactly as report.py renders its own document, so the two
+    differ only by the added key: two-space indent and no ``\\uXXXX``
+    escaping — a non-ASCII path must read back as itself."""
+    policy = tmp_path / "pòlicy.json"
+    policy.write_text(GOOD.read_text(encoding="utf-8"), encoding="utf-8")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    code, out, _ = invoke(capsys, "verify-policy", str(policy), "--snapshot",
+                          str(SNAPSHOT), "--requirements", str(empty),
+                          "--format", "json")
+    assert code == 0
+    assert '\n  "schema": "gcp-grounding-report/1",\n' in out
+    assert str(policy) in out and "\\u00f2" not in out
+    assert json.loads(out)["source"] == str(policy)
+    # A checkout without sec_evidence still renders the base document — no
+    # `sec` key, exit unchanged — and says so in a debug record that KEEPS the
+    # traceback, so a channel gone missing stays diagnosable.
+    real = importlib.import_module
+
+    def refuse(name, *args, **kwargs):
+        if name == "gcp_grounding.sec_evidence":
+            raise ImportError("not part of this checkout")
+        return real(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib, "import_module", refuse)
+    code, out, err = invoke(capsys, "verify-policy", str(GOOD), "--snapshot",
+                            str(SNAPSHOT), "--requirements", str(empty),
+                            "--format", "json", "--explain")
+    monkeypatch.undo()
+    assert code == 0
+    assert "sec" not in json.loads(out)
+    assert "compiled requirements loaded this run" not in err
+    missing = [r for r in harness_records
+               if "sec evidence channel is unavailable" in r.getMessage()]
+    # Both users of the channel say so, and truthiness is the assertion:
+    # logging leaves `exc_info` FALSE, never None, when the call passed False.
+    assert len(missing) == 2 and all(r.exc_info for r in missing)
