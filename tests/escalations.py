@@ -163,6 +163,43 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_sec_cli.py::"
                  "test_check_outside_the_repo_does_not_report_spurious_drift"),
     ),
+    Escalation(
+        id="ESC-GX-TFPROMISE-001",
+        clause="the abstention is only correct if the positive case still works",
+        unsatisfiable=(
+            "THE POSITIVE HALF OF THE PAIR CANNOT BE DEMONSTRATED IN THE MERGED "
+            "TREE, and no assertion inside the module that pins it can make it. "
+            "`test_the_promise_abstains_over_terraform_and_is_live_over_the_estate` "
+            "is written as a PAIR: arm one abstains over a terraform-only view, "
+            "arm two adds the merged agentic estate snapshot, DECLARES the "
+            "category complete, and the `sec:vpc_firewall` promise then decides — "
+            "`contradicted` — which is what stops the abstention being an absent "
+            "rule wearing a cautious face. MEASURED in the integrated tree, arm "
+            "two's promise is `unverified` as well: `provenance` caps any category "
+            "a TERRAFORM source contributed to at 'partial', arm two configures "
+            "the terraform state beside the estate snapshot, and the "
+            "universal-negative gate refuses to discharge a promise that reasons "
+            "from absence over a partial view. `--completeness complete` does not "
+            "lift that cap and must not — the alternative is an estate-wide clean "
+            "bill of health from a view that sees only part of the estate. Nor can "
+            "a witness supply the contradiction: the estate this suite commits "
+            "holds no open-SSH rule, and the widened rule lives in the PROPOSAL, "
+            "i.e. the `proposed_firewall_rules` collection this promise "
+            "deliberately does not quantify over. So the promise abstains in BOTH "
+            "arms. What would CLOSE this sits outside any test module: an estate "
+            "source whose contribution is not capped at 'partial' by a terraform "
+            "sibling, or a committed estate fixture carrying the open-SSH witness "
+            "the promise quantifies over — the provenance and estate-fixture "
+            "owners' decisions, not a test's. Until then the pair's positive half "
+            "is carried on a DIFFERENT channel and asserted there rather than "
+            "assumed: the estate-tier `firewall_reopen` check contradicts the "
+            "widening over the estate and decides nothing over the terraform-only "
+            "view, which the live test now pins on both arms."
+        ),
+        owner_task="tx-agentic-tf-benign",
+        node_id=("tests/test_gcp_agentic_tf_benign.py::"
+                 "test_the_promise_contradicts_the_widening_over_the_estate"),
+    ),
 )
 
 
@@ -209,7 +246,13 @@ PRODUCT_ESCALATIONS: tuple[ProductEscalation, ...] = (
 )
 
 
-# Escalation owners that are not tasks of designs/gcp-gx-fixes.md. Empty today;
-# it exists so a later escalation raised by a predecessor-document task has an
-# append-only home and is never forced to edit the frozen self-test.
-OUT_OF_DOCUMENT_OWNER_TASKS: frozenset[str] = frozenset()
+# Escalation owners that are not tasks of designs/gcp-gx-fixes.md. It exists so
+# an escalation raised against a PREDECESSOR document's task has an append-only
+# home and is never forced to edit the frozen self-test.
+#
+# `tx-agentic-tf-benign` is declared in designs/gcp-tf-source.md, the predecessor
+# document that owns tests/test_gcp_agentic_tf_benign.py; ESC-GX-TFPROMISE-001 is
+# raised against its promise pair and no task of gcp-gx-fixes.md owns that module.
+OUT_OF_DOCUMENT_OWNER_TASKS: frozenset[str] = frozenset({
+    "tx-agentic-tf-benign",
+})

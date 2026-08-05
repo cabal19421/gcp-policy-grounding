@@ -880,6 +880,47 @@ def test_the_promise_abstains_over_terraform_and_is_live_over_the_estate(tmp_pat
     assert_claims_nothing_safe(estate_report, PROMISE_ID)
 
 
+@pytest.mark.xfail(strict=True, reason=(
+    "ESC-GX-TFPROMISE-001: provenance caps a category any terraform source "
+    "contributed to at 'partial', so over the merged estate — with the category "
+    "DECLARED complete — the sec:vpc_firewall promise still abstains instead of "
+    "contradicting the widening, and the estate this suite commits holds no "
+    "open-SSH witness that could contradict it either"))
+def test_the_promise_contradicts_the_widening_over_the_estate(tmp_path):
+    """THE PIN `agent/tx-agentic-tf-benign` WROTE FOR ARM TWO, landed here under
+    house rule 4 instead of being reversed in place.
+
+    The test above re-pins arm two's promise to ``unverified``, which is what the
+    integrated tree really answers — but that reverses this module's own
+    branch-authored expectation, ``decided["status"] == "contradicted"``, and the
+    two cannot both hold. Picking the winner silently is what the escalation
+    register exists to prevent, so the losing expectation is landed VERBATIM here
+    under ``xfail(strict=True)`` naming ESC-GX-TFPROMISE-001:
+
+    * it is not deleted, so the pair's positive half stays legible as a
+      requirement rather than becoming a thing nobody remembers wanting;
+    * ``strict=True`` means the DAY a provenance decision or an estate fixture
+      makes the promise decide, this XPASSes and the suite goes RED — which
+      forces the escalation to be retired deliberately instead of rotting;
+    * the escalation entry carries the measured reason and what would close it.
+
+    IN-PROCESS ON PURPOSE. It reproduces arm two through :func:`ground`, the same
+    ``cli.main`` entry point on the same code path, and spawns NO child: an
+    xfailing case must not spend the suite-wide subprocess budget that keeps the
+    full run a usable oracle. The exit-code half of the branch's arm is asserted
+    live above, by ``drive``'s expectation and ``assert_blocked``.
+    """
+    estate = tfrepo.build_tf_repo(tmp_path / "estate")
+    _compile_promise(estate)
+    edited(estate, tfrepo.TF_JSON_NAME, widen_the_source_range)
+    extra = tfrepo.hook_argv(estate, extra=("--completeness", "complete"))
+    estate_report = ground(estate.tf_json_path, snapshot=estate.snapshot_path,
+                           extra_argv=extra)
+    decided = assert_recorded(estate_report, kind="sec:vpc_firewall",
+                              target=PROMISE_ID)
+    assert decided["status"] == "contradicted", decided
+
+
 # -- the harness's own pins ----------------------------------------------------
 
 
