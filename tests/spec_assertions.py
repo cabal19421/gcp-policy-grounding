@@ -302,6 +302,16 @@ PENDING_MODULES: frozenset[str] = frozenset({
 # asserts this is a SUBSET of the ids the design really declares whenever the
 # corpus can be resolved — a subset, not an equality, so a later amendment that
 # ADDS a task cannot redden this frozen file.
+#
+# OPERATOR INTEGRATION CORRECTION. A subset assertion survives an amendment that
+# ADDS a task; it does NOT survive one that SPLITS a task, because the id this
+# file names then stops being declared at all. AMENDMENT 4 split
+# `gx-mutation-contract` into the four parts below, so the single id was a task
+# the design does not declare and
+# `test_task_ids_are_a_subset_of_the_documents_own_task_ids` was red on the
+# owning branch too. The four successors replace it: nothing else in the tree
+# referenced the retired id, no escalation or AWAITING entry owns it, the design
+# declares all four verbatim, and the subset assertion itself is untouched.
 TASK_IDS: frozenset[str] = frozenset({
     "gx-preflight-empty-key",
     "gx-evidence-module",
@@ -310,7 +320,10 @@ TASK_IDS: frozenset[str] = frozenset({
     "gx-assert-channels",
     "gx-capability-probes",
     "gx-hookrunner-budget",
-    "gx-mutation-contract",
+    "gx-mutation-contract-machinery",
+    "gx-mutation-contract-seed-a",
+    "gx-mutation-contract-seed-b",
+    "gx-mutation-contract-gate",
     "gx-spec-register",
     "gx-sexpr-one-form",
     "gx-secdomains-record-shape",
