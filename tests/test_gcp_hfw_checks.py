@@ -415,9 +415,12 @@ def test_as_vpc_shape_maps_the_match_block_onto_packet_field_names():
     assert shaped["source_ranges"] == ["10.0.0.0/8"]
     assert shaped["destination_ranges"] == ["192.168.0.0/16"]
     assert shaped["layer4"] == [{"protocol": "tcp", "ports": ["22"]}]
-    # target_resources restricts the match exactly the way a target tag does.
-    assert shaped["target_tags"] == ["web",
-                                     "projects/acme-prod/global/networks/vpc-main"]
+    # A secure tag restricts the match exactly the way a target tag does; a
+    # target NETWORK does not — it is a separate dimension and gets its own
+    # channel, because two disjoint networks in one Or are satisfiable together.
+    assert shaped["target_tags"] == ["web"]
+    assert shaped["target_networks"] == [
+        "projects/acme-prod/global/networks/vpc-main"]
     assert shaped["target_service_accounts"] == [
         "etl-runner@acme-prod.iam.gserviceaccount.com"]
 
@@ -875,6 +878,361 @@ def test_a_non_bool_disabled_raises_while_a_real_bool_encodes():
     turned_off = _as_vpc_shape(hierarchical_rule(disabled=True))
     assert (enabled["disabled"], turned_off["disabled"]) == (False, True)
     assert hfw_checks._applicable([enabled, turned_off], "INGRESS") == [enabled]
+
+
+# -- placement: the stale twin, siblings, and network scope --------------------
+#
+# Three placement defects, each MEASURED against the committed estate fixture
+# before the fix and asserted here in the polarity it must now read.
+
+#: The two networks the estate captures. Only ``vpc-main`` carries VPC rules.
+VPC_MAIN = "projects/acme-prod/global/networks/vpc-main"
+VPC_DMZ = "projects/acme-prod/global/networks/vpc-dmz"
+
+#: A target resource that is NOT a network self-link, so whether it can hold a
+#: packet on ``vpc-main`` cannot be decided from the tables this module reads.
+SUBNET_SCOPE = "projects/acme-prod/regions/us-central1/subnetworks/sn-main"
+
+
+def tf_update(*resources: dict) -> dict:
+    """A plan whose resources are UPDATED in place, carrying the pre-edit
+    payload — the shape the stale-twin defect was measured on."""
+    return {"format_version": "1.2", "terraform_version": "1.9.5",
+            "resource_changes": [
+                {"address": r["address"], "mode": "managed", "type": r["type"],
+                 "name": r["address"].rsplit(".", 1)[-1],
+                 "provider_name": "registry.terraform.io/hashicorp/google",
+                 "change": {"actions": ["update"], "before": r.get("before"),
+                            "after": r["after"]}}
+                for r in resources]}
+
+
+def estate_snapshot(mutate=None) -> GcpSnapshot:
+    """The committed estate as a WHOLE document, optionally drifted by *mutate*
+    — ``estate()`` above can only reach the hierarchical policies."""
+    data = json.loads((FIXTURES / "estate_snapshot.json").read_text(encoding="utf-8"))
+    if mutate is not None:
+        mutate(data)
+    return GcpSnapshot.from_dict(data)
+
+
+# -- (4) THE STALE TWIN -------------------------------------------------------
+
+
+def rdp_edit(**overrides) -> dict:
+    """The design's first measured proposal: an in-place UPDATE of
+    ``fp-baseline``'s own priority-100 rule, flipping it from deny to allow and
+    opening the RDP port from everywhere org-wide. No association resource —
+    the level comes from the estate record, which is what makes the estate's
+    copy of this very rule the thing the fold must drop."""
+    before = {
+        "firewall_policy": BASELINE,
+        "priority": 100, "action": "deny", "direction": "INGRESS",
+        "disabled": False,
+        "match": [{"src_ip_ranges": ["0.0.0.0/0"], "dest_ip_ranges": [],
+                   "layer4_config": [{"ip_protocol": "tcp", "ports": ["3389"]}]}],
+        "target_resources": [], "target_service_accounts": [],
+        "target_secure_tags": [],
+    }
+    after = dict(before, action="allow")
+    after.update(overrides)
+    return {"address": "google_compute_firewall_policy_rule.rdp",
+            "type": "google_compute_firewall_policy_rule",
+            "before": before, "after": after}
+
+
+@needs_z3
+def test_an_in_place_edit_drops_the_estate_copy_of_the_rule_it_replaces(snap):
+    """Item (4). MEASURED before the fix: the world-without-the-proposed-rule
+    kept ``fp-baseline``'s priority-100 DENY, so flipping that very rule to an
+    allow of tcp/3389 from 0.0.0.0/0 reported ``contradicted hfw_shadow``
+    (unreachable because of an ancestor policy that is its own pre-edit
+    version) plus a ``grounded hfw_effect`` no-effect note. At equal priority
+    deny sorts before allow, so the stale copy won the tie both times — it
+    suppressed the widening as well as manufacturing the contradiction."""
+    verdicts = run(tf_update(rdp_edit()), snap)
+
+    assert of_kind(verdicts, "hfw_shadow") == []      # it is not its own ancestor
+    assert of_kind(verdicts, "hfw_effect") == []      # and it is not inert
+    assert of_kind(verdicts, "hfw_order") == []
+    widen = of_kind(verdicts, "hfw_widen")
+    assert [v.status for v in widen] == ["contradicted"]
+    assert "port=3389" in widen[0].message
+    assert "projects/acme-prod" in widen[0].message
+
+
+@needs_z3
+def test_a_rule_at_a_different_priority_is_not_read_as_the_twin(snap):
+    """The other side of the identity: the SAME edit moved to priority 300 does
+    not replace the estate's priority-100 deny, which therefore stays in the
+    preemption set and shadows it. Dropping every estate rule of the named
+    policy — rather than the one slot the proposal occupies — passes the leg
+    above and fails this one."""
+    verdicts = run(tf_update(rdp_edit(priority=300)), snap)
+
+    shadow = of_kind(verdicts, "hfw_shadow")
+    assert [v.status for v in shadow] == ["contradicted"]
+    assert "organizations/1" in shadow[0].message
+    assert [v.status for v in of_kind(verdicts, "hfw_effect")] == ["grounded"]
+    assert of_kind(verdicts, "hfw_widen") == []
+
+
+@needs_z3
+def test_an_unidentifiable_twin_abstains_rather_than_double_counting():
+    """When the estate holds MORE THAN ONE rule in the slot the proposal edits,
+    which of them is being replaced cannot be established — so the check
+    abstains naming the ambiguity instead of guessing, or of keeping both and
+    double-counting the rule."""
+    def duplicate_slot(policies):
+        rules = policies[BASELINE]["rules"]
+        rules.append(dict(rules[0], action="allow"))
+
+    verdicts = run(tf_update(rdp_edit()), estate(duplicate_slot))
+    assert [(v.status, v.kind) for v in verdicts] == [("unverified", "hfw_order")]
+    assert BASELINE in verdicts[0].message
+    assert "priority 100" in verdicts[0].message
+    assert "cannot be identified" in verdicts[0].message
+
+
+# -- (5) SIBLING PROPOSALS ----------------------------------------------------
+
+
+ORG_POLICY = "organizations/1/locations/global/firewallPolicies/pol-org"
+FOLDER_POLICY_B = "folders/2/locations/global/firewallPolicies/pol-folder"
+
+#: Traffic the VPC layer already allows (allow-internal covers every tcp port
+#: from 10.0.0.0/8) and no hierarchical policy touches, so each half of the
+#: apply is a `grounded` note when graded on its own.
+INTERNAL_8080 = [{"src_ip_ranges": ["10.0.0.0/8"], "dest_ip_ranges": [],
+                  "layer4_config": [{"ip_protocol": "tcp", "ports": ["8080"]}]}]
+
+
+def sibling_apply() -> dict:
+    """One apply that adds an org-level DENY and a folder-level ALLOW of the
+    same traffic — the second is dead the moment the first lands."""
+    def rule(address, policy, priority, action):
+        return {"address": address, "type": "google_compute_firewall_policy_rule",
+                "after": {"firewall_policy": policy, "priority": priority,
+                          "action": action, "direction": "INGRESS",
+                          "disabled": False, "match": INTERNAL_8080,
+                          "target_resources": [], "target_service_accounts": [],
+                          "target_secure_tags": []}}
+
+    def attach(address, policy, node):
+        return {"address": address,
+                "type": "google_compute_firewall_policy_association",
+                "after": {"firewall_policy": policy, "attachment_target": node,
+                          "name": address.rsplit(".", 1)[-1]}}
+
+    return tf_plan(
+        rule("google_compute_firewall_policy_rule.org_deny", ORG_POLICY, 50, "deny"),
+        attach("google_compute_firewall_policy_association.org", ORG_POLICY,
+               "organizations/1"),
+        rule("google_compute_firewall_policy_rule.folder_allow", FOLDER_POLICY_B,
+             100, "allow"),
+        attach("google_compute_firewall_policy_association.folder",
+               FOLDER_POLICY_B, "folders/2"))
+
+
+@needs_z3
+def test_a_sibling_proposal_at_another_node_is_placed_on_the_same_chain(snap):
+    """Item (5). MEASURED before the fix: a proposed rule attaching at a
+    DIFFERENT node was excluded from the placement, so an org-level deny plus a
+    folder-level allow of the same traffic were each graded as if they were the
+    only change — two ``grounded`` verdicts and NO shadow finding for the
+    allow, which is dead the moment the deny lands."""
+    verdicts = run(sibling_apply(), snap)
+
+    shadow = of_kind(verdicts, "hfw_shadow")
+    assert [v.status for v in shadow] == ["contradicted"]
+    assert shadow[0].target == FOLDER_POLICY_B
+    assert "organizations/1" in shadow[0].message      # the sibling's own node
+    assert of_kind(verdicts, "hfw_order") == []
+
+
+@needs_z3
+def test_a_proposal_off_this_chain_is_not_placed_on_it(snap):
+    """The boundary of the same clause: a sibling whose node is NOT on this
+    project's evaluation path says nothing about this project's order, so it
+    must not be folded in — it abstains on its own turn, which is the only
+    proposal it can speak for. Placing every sibling regardless of node would
+    make this allow shadowed by a deny in a folder it does not sit under."""
+    def elsewhere(data):
+        data["resource_hierarchy"]["folders/3"] = {
+            "display_name": "Lab", "number": "3", "parent": "organizations/1",
+            "type": "folder"}
+
+    doc = json.loads(json.dumps(sibling_apply()))
+    for change in doc["resource_changes"]:
+        if change["address"].endswith(".org"):
+            change["change"]["after"]["attachment_target"] = "folders/3"
+
+    verdicts = run(doc, estate_snapshot(elsewhere))
+    assert of_kind(verdicts, "hfw_shadow") == []
+    # The off-chain deny still gets its own answer, on its own chain.
+    assert [v.status for v in of_kind(verdicts, "hfw_order")] == ["unverified"]
+    assert "folders/3" in of_kind(verdicts, "hfw_order")[0].message
+
+
+# -- (6) NETWORK SCOPE --------------------------------------------------------
+
+
+def org_deny_scoped_to(*resources):
+    def mutate(policies):
+        policies[BASELINE]["rules"][0]["target_resources"] = list(resources)
+    return mutate
+
+
+def scoped_proposal() -> dict:
+    return tf_plan(rule_resource(priority=50, target_resources=[VPC_MAIN]),
+                   association("organizations/1"))
+
+
+@needs_z3
+def test_rules_on_provably_disjoint_networks_are_never_compared(snap):
+    """Item (6). MEASURED before the fix: a network self-link was OR-ed into
+    the same ``target_tags`` channel as a secure tag, and nothing forbids the
+    solver satisfying two disjoint networks at once — so an org deny scoped to
+    ``vpc-dmz`` and a proposed allow scoped to ``vpc-main`` were treated as able
+    to match one packet, reported as ``contradicted hfw_reopen`` with a witness
+    packet that cannot exist."""
+    disjoint = run(scoped_proposal(), estate(org_deny_scoped_to(VPC_DMZ)))
+    assert of_kind(disjoint, "hfw_reopen") == []
+    assert of_kind(disjoint, "hfw_order") == []
+
+    # NEVER WIDENED TO THE DECIDABLE CASE: the same two rules on the SAME
+    # network still re-open, so the mitigation cannot be read as "skip network
+    # comparisons".
+    same = run(scoped_proposal(), estate(org_deny_scoped_to(VPC_MAIN)))
+    assert [v.status for v in of_kind(same, "hfw_reopen")] == ["contradicted"]
+    assert of_kind(same, "hfw_order") == []
+
+
+@needs_z3
+def test_an_undecidable_network_overlap_abstains_loudly_and_names_both(snap):
+    """The recorded PRICE of that mitigation. ``unverified`` PASSES the gate, so
+    declining an undecidable overlap converts a would-be block into a pass: the
+    re-open finding this run would otherwise carry is gone. That is acceptable
+    only because the abstention is LOUD — one ``unverified`` on the
+    hierarchical channel naming both sides' networks and the rule it declined
+    to compare — and never spelled as silence."""
+    verdicts = run(scoped_proposal(), estate(org_deny_scoped_to(SUBNET_SCOPE)))
+
+    order = of_kind(verdicts, "hfw_order")
+    assert [v.status for v in order] == ["unverified"]
+    assert VPC_MAIN in order[0].message             # the proposal's own scope
+    assert SUBNET_SCOPE in order[0].message         # the scope it could not read
+    assert BASELINE in order[0].message             # the rule it declined
+    assert of_kind(verdicts, "hfw_reopen") == []    # the price, asserted
+
+
+def test_a_network_self_link_is_not_a_target_tag():
+    """The channel itself: ``target_resources`` no longer shares the OR-ed tag
+    channel with secure tags, because two disjoint networks in one Or are
+    satisfiable together and a secure tag and a network are not the same
+    dimension."""
+    shaped = _as_vpc_shape({
+        "priority": 200, "action": "allow", "direction": "INGRESS",
+        "disabled": False,
+        "match": {"src_ip_ranges": ["10.0.0.0/8"], "dest_ip_ranges": [],
+                  "layer4": [{"protocol": "tcp", "ports": ["22"]}]},
+        "target_resources": [VPC_MAIN], "target_secure_tags": ["web"],
+        "target_service_accounts": []})
+    assert shaped["target_tags"] == ["web"]
+    assert shaped["target_networks"] == [VPC_MAIN]
+
+
+# -- (7) the three unpinned polarities ----------------------------------------
+
+
+@needs_z3
+def test_an_internal_only_overlap_reopens_nothing_while_the_public_one_does(snap):
+    """POLARITY 1 — ``_finding_reopen``'s public-peer restriction, in BOTH
+    directions. An allow that wins over a deny is only a re-opening when the
+    peer it lets in is PUBLIC; deleting ``packet.is_public`` from the comparison
+    currently costs nothing against the whole suite, because every case that
+    asserts a re-opening drives a public peer. The internal leg is what pins
+    it: both peers private must yield ZERO re-open verdicts."""
+    def private_deny(policies):
+        policies[BASELINE]["rules"][0]["match"]["src_ip_ranges"] = ["10.0.0.0/8"]
+
+    internal = run(
+        tf_plan(rule_resource(priority=50, match=[{
+            "src_ip_ranges": ["10.0.0.0/8"], "dest_ip_ranges": [],
+            "layer4_config": [{"ip_protocol": "tcp", "ports": ["3389"]}]}]),
+            association("organizations/1")),
+        estate(private_deny))
+    assert of_kind(internal, "hfw_reopen") == []
+    assert of_kind(internal, "hfw_order") == []      # zero, not "could not tell"
+
+    public = run(tf_plan(rule_resource(priority=50), association("organizations/1")),
+                 snap)
+    reopen = of_kind(public, "hfw_reopen")
+    assert [v.status for v in reopen] == ["contradicted"]
+    assert len(reopen) == 1
+
+
+@needs_z3
+def test_traffic_no_lower_layer_touches_widens_unless_it_was_already_allowed(snap):
+    """POLARITY 2 — the implied-deny default the INGRESS fold starts from.
+    ``effective_decision`` seeds ``packet.effective_allow`` with
+    ``default_allow=(direction == "EGRESS")``; flipping that to allow-by-default
+    currently costs nothing against the whole suite, because every widening
+    case in it opens traffic an estate rule already denies, so the delta
+    survives the flip. A proposal whose traffic NO lower-layer rule touches is
+    what pins it — udp/53 is matched by no VPC rule and no hierarchical rule, so
+    only the implied deny stands between it and the allow."""
+    proposal = tf_plan(rule_resource(priority=50, match=[{
+        "src_ip_ranges": ["0.0.0.0/0"], "dest_ip_ranges": [],
+        "layer4_config": [{"ip_protocol": "udp", "ports": ["53"]}]}]),
+        association("organizations/1"))
+
+    widen = of_kind(run(proposal, snap), "hfw_widen")
+    assert [v.status for v in widen] == ["contradicted"]
+    assert "proto=17" in widen[0].message and "port=53" in widen[0].message
+
+    # The same proposal against a snapshot that ALREADY allows it: the honest
+    # no-effect note, which is what makes the leg above a polarity and not just
+    # an assertion that something is always reported.
+    def already_allowed(data):
+        data["firewall_rules"]["projects/acme-prod/global/firewalls/allow-dns"] = {
+            "network": VPC_MAIN, "direction": "INGRESS", "action": "allow",
+            "priority": 100, "disabled": False,
+            "source_ranges": ["0.0.0.0/0"], "destination_ranges": [],
+            "layer4": [{"protocol": "udp", "ports": ["53"]}],
+            "source_tags": [], "target_tags": [],
+            "source_service_accounts": [], "target_service_accounts": []}
+
+    settled = run(proposal, estate_snapshot(already_allowed))
+    assert [v.status for v in of_kind(settled, "hfw_effect")] == ["grounded"]
+    assert "no effect on the effective decision" in of_kind(settled, "hfw_effect")[0].message
+    assert of_kind(settled, "hfw_widen") == []
+
+
+@needs_z3
+def test_an_omitted_lower_layer_category_abstains_naming_it(snap):
+    """POLARITY 3 — the docstring's third abstention clause, which no test
+    reached: ``firewall_rules`` is the BASE of the effective decision, so a
+    snapshot that captured the hierarchy and the hierarchical policies but not
+    that category has nothing to fold onto. Deleting the guard currently costs
+    nothing against the whole suite, because the only snapshot that exercises
+    it captures no hierarchy either and abstains one clause earlier."""
+    def omit_lower_layer(data):
+        del data["firewall_rules"]
+
+    partial_vpc = estate_snapshot(omit_lower_layer)
+    assert partial_vpc.resource_hierarchy is not None
+    assert partial_vpc.hierarchical_firewall_policies is not None
+    assert partial_vpc.firewall_rules is None
+
+    verdicts = run(tf_plan(rule_resource(), association("folders/2")), partial_vpc)
+    assert [(v.status, v.kind) for v in verdicts] == [("unverified", "hfw_order")]
+    assert "firewall_rules" in verdicts[0].message
+
+    # The identical proposal against the intact fixture still decides.
+    assert [v.status for v in of_kind(run(
+        tf_plan(rule_resource(), association("folders/2")), snap), "hfw_shadow")
+    ] == ["contradicted"]
 
 
 # -- the module states its polarity families ----------------------------------
