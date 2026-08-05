@@ -210,6 +210,34 @@ VIOLATING = {
         "name": "projects/acme-prod/policies/iam.disableServiceAccountKeyCreation",
         "spec": {"rules": [{"enforce": False}]},
     },
+    # The two domain promises became executable once the firewall and VPC-SC
+    # modules landed and registered their collections. Written in the REST
+    # spelling, against the agentic estate overlay: the network and the perimeter
+    # are the captured ones, so nothing here can block on an existence miss.
+    "no-open-ssh-rdp-ingress": {
+        "kind": "compute#firewall",
+        "name": "allow-ssh-world",
+        "network": "projects/acme-prod/global/networks/prod-vpc",
+        "direction": "INGRESS",
+        "priority": 1000,
+        "disabled": False,
+        "sourceRanges": ["0.0.0.0/0"],
+        "allowed": [{"IPProtocol": "tcp", "ports": ["22"]}],
+    },
+    # storage.googleapis.com dropped from a perimeter that still restricts
+    # something: the refutation the promise's nested exists spells out.
+    "perimeter-restricts-storage": {
+        "name": "accessPolicies/987654321/servicePerimeters/acme_prod",
+        "title": "acme-prod",
+        "perimeterType": "PERIMETER_TYPE_REGULAR",
+        "status": {
+            "resources": ["projects/111111111111"],
+            "restrictedServices": ["bigquery.googleapis.com"],
+            "accessLevels": ["accessPolicies/987654321/accessLevels/trusted_corp"],
+            "ingressPolicies": [],
+            "egressPolicies": [],
+        },
+    },
 }
 
 BENIGN = {
@@ -227,6 +255,33 @@ BENIGN = {
     "sa-key-creation-disabled": {
         "name": "projects/acme-prod/policies/iam.disableServiceAccountKeyCreation",
         "spec": {"rules": [{"enforce": True}]},
+    },
+    # The benign twins of the two domain promises: the captured internal-ssh rule
+    # exactly as the estate holds it, and the captured perimeter with
+    # storage.googleapis.com still restricted.
+    "no-open-ssh-rdp-ingress": {
+        "kind": "compute#firewall",
+        "name": "allow-internal-ssh",
+        "network": "projects/acme-prod/global/networks/prod-vpc",
+        "direction": "INGRESS",
+        "priority": 1000,
+        "disabled": False,
+        "sourceRanges": ["10.0.0.0/8"],
+        "targetTags": ["bastion"],
+        "allowed": [{"IPProtocol": "tcp", "ports": ["22"]}],
+    },
+    "perimeter-restricts-storage": {
+        "name": "accessPolicies/987654321/servicePerimeters/acme_prod",
+        "title": "acme-prod",
+        "perimeterType": "PERIMETER_TYPE_REGULAR",
+        "status": {
+            "resources": ["projects/111111111111"],
+            "restrictedServices": ["storage.googleapis.com",
+                                   "bigquery.googleapis.com"],
+            "accessLevels": ["accessPolicies/987654321/accessLevels/trusted_corp"],
+            "ingressPolicies": [],
+            "egressPolicies": [],
+        },
     },
 }
 
