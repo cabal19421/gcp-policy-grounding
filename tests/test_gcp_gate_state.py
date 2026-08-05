@@ -586,7 +586,13 @@ def test_a_merged_disagreement_is_noted_once_across_a_three_file_set(tmp_path):
     """Source notes are ESTATE-WIDE. A copy attached to every file's report
     would multiply them by the changed-file count and inflate the counts."""
     empty = tmp_path / "empty.policy.json"
-    empty.write_text(json.dumps({"etag": "BwX=", "version": 3}), encoding="utf-8")
+    # `bindings: []` EXPLICITLY. agent/gx-preflight-empty-key made the honest
+    # empty policy the one that carries the key: an ABSENT `bindings` is a
+    # document whose grants were never read (a mis-cased key, a wrapped body) and
+    # abstains with `unverified`, which would make this file's status the subject
+    # of the test instead of the estate-wide note it is really about.
+    empty.write_text(json.dumps({"etag": "BwX=", "version": 3, "bindings": []}),
+                     encoding="utf-8")
     changed = [empty, POLICIES / "iam_policy_good.json",
                POLICIES / "org_policy_good.json"]
 

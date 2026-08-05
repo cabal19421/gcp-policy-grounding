@@ -52,7 +52,7 @@ smt:
 
 ## Unregistered collection
 
-No firewall rule may open a range to the whole internet.
+No DNS policy may leave outbound query logging switched off.
 
 ```promise
 id: unregistered-collection
@@ -60,8 +60,8 @@ mode: refute
 domain: vpc_firewall
 state: estate
 smt:
-  exists f in firewall_rules
-    cidr_contains field f.source_range cidr "0.0.0.0/0"
+  exists f in dns_policies
+    cidr_contains field f.source_range ip4 "0.0.0.0"
 ```
 
 ## Cel bearing promise

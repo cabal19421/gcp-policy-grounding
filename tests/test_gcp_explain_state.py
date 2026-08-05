@@ -556,24 +556,40 @@ def test_a_clean_render_leaves_the_vault_untouched_and_costs_nothing():
 def test_both_renderers_reattach_the_log_filter_after_setup_logging():
     """``setup_logging`` REMOVES and re-adds its own handlers, so the install in
     ``sources.py`` is gone the moment anything reconfigures logging — and this
-    surface is exactly where a withheld value would then be logged."""
+    surface is exactly where a withheld value would then be logged.
+
+    THE HARNESS LOGGER IS RESTORED AFTERWARDS. This test deliberately
+    reconfigures a PROCESS-WIDE logger; leaving it reconfigured leaked into every
+    later module in the session — ``test_gcp_preflight``'s traceback assertion
+    saw its one record twice, and only in a full run — so the handler list and
+    the propagate flag are put back in a ``finally``. The assertions are
+    unchanged; only the blast radius is.
+    """
     root = logging.getLogger(redact._HARNESS_ROOT)
-    root.handlers[:] = []
-    sources.vault()                       # the single install
-    core_log.setup_logging()              # ... whose own handlers carry no filter
-    reconfigured = [handler for handler in root.handlers
-                    if getattr(handler, "_harness_owned", False)]
-    assert reconfigured, "setup_logging added no handler of its own"
-    assert not any(isinstance(f, redact.SecretScrubFilter)
-                   for handler in reconfigured for f in handler.filters)
+    saved_handlers = list(root.handlers)
+    saved_propagate = root.propagate
+    saved_level = root.level
+    try:
+        root.handlers[:] = []
+        sources.vault()                       # the single install
+        core_log.setup_logging()              # ... whose own handlers carry no filter
+        reconfigured = [handler for handler in root.handlers
+                        if getattr(handler, "_harness_owned", False)]
+        assert reconfigured, "setup_logging added no handler of its own"
+        assert not any(isinstance(f, redact.SecretScrubFilter)
+                       for handler in reconfigured for f in handler.filters)
 
-    lines(settings=settings())
+        lines(settings=settings())
 
-    assert all(redact._INSTALLED in handler.filters for handler in root.handlers)
-    filt = redact._INSTALLED
-    document(settings=settings())
-    assert redact._INSTALLED is filt
-    assert all(filt in handler.filters for handler in root.handlers)
+        assert all(redact._INSTALLED in handler.filters for handler in root.handlers)
+        filt = redact._INSTALLED
+        document(settings=settings())
+        assert redact._INSTALLED is filt
+        assert all(filt in handler.filters for handler in root.handlers)
+    finally:
+        root.handlers[:] = saved_handlers
+        root.propagate = saved_propagate
+        root.setLevel(saved_level)
 
 
 # -- THE ONE DIFF RULE --------------------------------------------------------

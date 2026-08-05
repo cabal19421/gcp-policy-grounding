@@ -98,10 +98,17 @@ def test_degenerate_six_candidates_with_each_abstain_path():
     assert untranslated.error == "no promise block — the sentence was not translated"
     assert untranslated.line == 83
 
-    # An unregistered collection (sec_domains absent) abstains, naming it.
+    # An unregistered collection abstains, NAMING it. The case used
+    # `firewall_rules`, which was unregistered while `sec_domains` was absent;
+    # agent/sx-sec-domains registers it (along with armor_rules,
+    # hier_firewall_rules, the perimeter tables and proposed_firewall_rules), so
+    # the fixture would have COMPILED and this abstain path would have stopped
+    # being exercised at all. `dns_policies` is a collection no domain module
+    # registers, which is what keeps the path covered.
     unregistered = by_id["unregistered-collection"]
     assert unregistered.ast is None
-    assert "firewall_rules" in unregistered.error
+    assert "dns_policies" in unregistered.error
+    assert "not registered" in unregistered.error
 
     # cel parses CLEANLY here: the parser and sec_ast both accept cel; only
     # sec_encode refuses it, so rejecting at parse time would be the wrong layer.
