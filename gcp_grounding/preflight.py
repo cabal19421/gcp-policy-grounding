@@ -204,7 +204,6 @@ def detect_kind(doc: Any) -> str | None:
         return None
     if any(key in doc for key in _TF_PLAN_KEYS):
         return "tf_plan"
-    name = doc.get("name")
     if _is_iam_deny_policy(doc):
         return "iam_deny_policy"
     # _is_vpc_sc_perimeter / _is_access_level test the Access Context Manager

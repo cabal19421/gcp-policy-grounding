@@ -17,6 +17,7 @@ from gcp_grounding.reasoner import (
     ground_existence,
     suggest,
 )
+from tests.lineno_invariant import assert_no_line_numbers
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gcp"
 POLICIES = FIXTURES / "policies"
@@ -289,3 +290,27 @@ def test_render_carries_location_and_suggestion(snap):
     assert "FAILED" in text
     assert "bindings[0].role" in text
     assert "roles/bigquery.dataViewer" in text
+
+
+# -- the shared lineno invariant ----------------------------------------------
+
+
+def test_no_existence_verdict_carries_a_line_number(snap):
+    """The invariant ``ground_existence``'s own docstring states — see
+    lineno_invariant. All three arms are driven: grounded, ungrounded and the
+    uncaptured-category abstention, the last through a snapshot that captured
+    no roles at all.
+    """
+    blind = GcpSnapshot.from_dict(
+        {k: v for k, v in snap.to_dict().items() if k != "roles"})
+    reports = [ground_existence(iam_policy_claims(load(n)), s)
+               for n in ("iam_policy_good.json", "iam_policy_bad.json")
+               for s in (snap, blind)]
+    reports += [ground_existence(org_policy_claims(load(n)), snap)
+                for n in ("org_policy_good.json", "org_policy_bad.json")]
+
+    # Non-vacuity: all three existence arms really fired.
+    assert {v.status for r in reports for v in r.verdicts} == {
+        "grounded", "ungrounded", "unverified"}
+    for report in reports:
+        assert_no_line_numbers(report)

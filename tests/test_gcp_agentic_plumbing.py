@@ -117,15 +117,24 @@ def test_domain_probes_are_behavioural_not_kind_lookups():
     really does decide — without them "every probe is False" would satisfy every
     assertion below.
 
-    SUPERSEDES ``test_domain_probes_track_the_kinds_that_have_landed``, the
-    variant ``agent/gx-sexpr-one-form`` landed against the same problem: it
-    asserted ``env.HAVE_X is ("kind" in KINDS)``, which held only while the
-    probes WERE that membership test. Once ``agent/gx-capability-probes`` made
-    them behavioural the two sides genuinely disagree — a kind is registered
-    several tasks before anything can decide it — so that equality is not merely
-    tautological here, it is FALSE. Its two surviving facts are kept: the kinds
-    are asserted present above, and ``HAVE_ORG_ENFORCEMENT`` is still pinned,
-    now to what was measured rather than to a hardcoded ``False``.
+    EACH FLAG IS ALSO PINNED TO A CONCRETE VALUE, which the equality-to-measured
+    is not. ``env.HAVE_X`` IS ``capabilities.probe(X).live``, so
+    ``env.HAVE_X is measured.live`` reads ``probe(X).live is probe(X).live`` — X
+    is X, unfailable, the same shape this docstring's first paragraph condemns.
+    The three ``is True`` pins below are the concrete half, and they are honest
+    in this tree because all three checkers have landed: fw_checks, vpcsc_checks
+    and org_checks each decide their family through a real ``ground_policy`` run.
+
+    ABSORBS ``test_domain_probes_track_the_kinds_that_have_landed``, the variant
+    ``agent/gx-sexpr-one-form`` and ``agent/gx-debt-lineno-invariant`` landed
+    against the same problem: ``env.HAVE_X is ("kind" in KINDS)``, plus the
+    vocabulary-AND-checker conjunction ``agent/tx-cli-state-flags`` pinned for
+    org-enforcement. Those equalities were tautological only while the probes
+    WERE that membership test; with behavioural probes their right-hand sides are
+    computed without calling ``probe`` at all, and in THIS tree — where every one
+    of the three kinds is registered AND its checker decides — they are true and
+    they bite. So they are kept as well, not chosen between: a checker that
+    regresses to dead while its kind stays in the vocabulary reddens here.
     """
     from gcp_grounding.claims import KINDS
 
@@ -134,6 +143,34 @@ def test_domain_probes_are_behavioural_not_kind_lookups():
     for kind in ("firewall_rule", "perimeter_config", "constraint_enforcement"):
         assert kind in KINDS, kind
         assert env.have_claim_kinds(kind) is True, kind
+
+    # THE CONCRETE VALUE PIN, RESTORED — the assertion an integrator relaxed and
+    # no branch did. `assert getattr(env, name) is measured.live` below is, on
+    # its own, `probe(X).live is probe(X).live`: tests/agentic/env.py DEFINES
+    # each of these three flags as `capabilities.probe(...).live`, so that
+    # equality is X is X and can only fail if probe() is nondeterministic — the
+    # exact shape the docstring above condemns, reintroduced in the shape it was
+    # written to forbid. All three families HAVE landed in the integrated tree,
+    # so the honest concrete value is True for each, and a probe that regresses
+    # to dead (a deleted checker module, an emptied check tuple, a renamed
+    # verdict kind, a claim kind dropped from the vocabulary) reddens HERE
+    # instead of quietly taking the dead-family branch below and passing.
+    assert env.HAVE_FIREWALL_DOMAIN is True
+    assert env.HAVE_VPCSC_DOMAIN is True
+    assert env.HAVE_ORG_ENFORCEMENT is True
+
+    # ... and each flag against the CONJUNCTION `agent/gx-debt-lineno-invariant`
+    # and `agent/tx-cli-state-flags` both pinned it to. Not a tautology either:
+    # the kind membership and the `find_spec` are computed without calling
+    # probe() at all, so this says the vocabulary and the checker travel
+    # together, which is the claim the live arm of the loop below makes per
+    # family. Both sides of the merge assert it; both are kept.
+    assert env.HAVE_FIREWALL_DOMAIN is ("firewall_rule" in KINDS)
+    assert env.HAVE_VPCSC_DOMAIN is ("perimeter_config" in KINDS)
+    assert "constraint_enforcement" in KINDS
+    assert env.HAVE_ORG_ENFORCEMENT is (
+        "constraint_enforcement" in KINDS
+        and importlib.util.find_spec("gcp_grounding.org_checks") is not None)
 
     # Measured: each family's flag is what a real ``ground_policy`` run
     # measured, never a vocabulary lookup — the kinds above are all present
@@ -173,6 +210,16 @@ def test_domain_probes_are_behavioural_not_kind_lookups():
     assert env.HAVE_ESTATE_CATEGORY is True
     estate = GcpSnapshot.from_dict(env.merged_estate_document())
     assert "firewall_rules" in estate.captured_categories()
+    # And the branch's own shape for the same probe, kept alongside the concrete
+    # pin rather than instead of it: the flag is True exactly when ``from_dict``
+    # accepts the overlay's categories. The concrete `is True` above says WHICH
+    # world this is; the re-derivation says the flag is not lying about it.
+    accepts = True
+    try:
+        GcpSnapshot.from_dict(env.merged_estate_document())
+    except Exception:
+        accepts = False
+    assert env.HAVE_ESTATE_CATEGORY is accepts
 
 
 def test_have_claim_kinds_matches_current_kinds():
@@ -219,7 +266,8 @@ def test_snapshot_variant_drops_a_category(snapshot_variant):
 
 
 def test_snapshot_variant_captured_at_round_trips(snapshot_variant,
-                                                 estate_snapshot_path):
+                                                 estate_snapshot_path,
+                                                 estate_snapshot):
     stale = "2019-01-01T00:00:00Z"
     path = snapshot_variant(captured_at=stale)
     snap = GcpSnapshot.load(path)
@@ -231,6 +279,12 @@ def test_snapshot_variant_captured_at_round_trips(snapshot_variant,
     # ones — a hardcoded five would silently stop noticing a dropped table.
     source = GcpSnapshot.load(estate_snapshot_path)
     assert set(snap.captured_categories()) == set(source.captured_categories())
+    # The same statement through the loaded fixture `agent/gx-debt-lineno-invariant`
+    # asks for. Both sides name the base snapshot rather than a literal list;
+    # both fixtures exist in tests/conftest.py (`estate_snapshot` is built FROM
+    # `estate_snapshot_path`), so keeping both costs one comparison and neither
+    # side's text is dropped.
+    assert set(snap.captured_categories()) == set(estate_snapshot.captured_categories())
     assert {"roles", "permissions", "principals", "constraints",
             "resource_types"} <= set(snap.captured_categories())
 

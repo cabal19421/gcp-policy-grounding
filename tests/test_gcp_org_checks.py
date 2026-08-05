@@ -33,6 +33,7 @@ from gcp_grounding.org_checks import (CLAIM_CHECKS, DOCUMENT_CHECKS,
                                       check_org_estate, hierarchy_value_claims)
 from gcp_grounding.preflight import detect_kind, ground_policy
 from gcp_grounding.registry import CheckContext
+from tests.lineno_invariant import assert_no_line_numbers
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gcp"
 POLICIES = FIXTURES / "policies"
@@ -802,3 +803,39 @@ def test_a_non_enforcement_claim_is_rejected(snap):
     with pytest.raises(ValueError):
         check_constraint_enforcement(
             Claim("role", "roles/viewer", "bindings[0].role"), context(snap, {}))
+
+
+# -- the shared lineno invariant ----------------------------------------------
+
+
+def test_no_org_verdict_carries_a_line_number(snap, partial):
+    """Every arm of this module reports ``lineno`` 0 — see lineno_invariant.
+
+    Drives the committed org documents over both estate snapshots, each as
+    another's ``--baseline``, and over the priors CHECK 2 needs, built with
+    ``with_org_policy``. Two arms carry no committed document of their own —
+    a proposal naming no node, one setting ``allowAll`` — so each is driven
+    from a committed fixture with that one field changed.
+    """
+    docs = [load(n) for n in ("org_policy_good.json", "org_policy_bad.json",
+                              "org_policy_disabled.json",
+                              "org_policy_widened.json")]
+    unnamed = {k: v for k, v in docs[3].items() if k != "name"}
+    unnamed["constraint"] = DOMAINS
+    allow_all = copy.deepcopy(docs[3])
+    allow_all["spec"]["rules"] = [{"allowAll": True}]
+    narrow = with_org_policy(snap, NODE, DOMAINS, [rule(allowed_values=["C01abcdef"])])
+    wide = with_org_policy(snap, NODE, DOMAINS, [rule(allow_all=True)])
+    enforcing = with_org_policy(snap, NODE, DOMAINS, [rule(enforce=True)])
+
+    reports = [ground_policy(d, s) for d in docs for s in (snap, partial)]
+    reports += [ground_policy(d, snap, baseline=b) for d in docs for b in docs]
+    reports += [ground_policy(docs[3], s) for s in (narrow, wide, enforcing)]
+    reports += [ground_policy(d, s) for d in (unnamed, allow_all)
+                for s in (narrow, snap)]
+
+    # Non-vacuity: the drive really decides, in all three directions.
+    assert {v.status for r in reports for v in enforcement(r)} == {
+        "unverified", "grounded", "contradicted"}
+    for report in reports:
+        assert_no_line_numbers(report)

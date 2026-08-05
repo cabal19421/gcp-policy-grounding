@@ -22,6 +22,7 @@ from gcp_grounding import preflight, reasoner, registry
 from gcp_grounding.core.solver import get_solver
 from gcp_grounding.knowledge import GcpSnapshot
 from gcp_grounding.preflight import DOCUMENT_KINDS, detect_kind, ground_policy
+from gcp_grounding.reasoner import EXISTENCE_KINDS
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gcp"
 POLICIES = FIXTURES / "policies"
@@ -405,6 +406,17 @@ def test_claim_kind_no_layer_decides_is_unverified_naming_the_kind(snap, monkeyp
     assert undecided not in reasoner.EXISTENCE_KINDS
     assert undecided not in ("cel", "constraint_value")
     assert registry.claim_checks(undecided) == ()
+    #
+    # `agent/gx-debt-lineno-invariant` reached the same arm through
+    # `public_principal` — "a registered kind whose checker has not landed in
+    # this checkout". That premise is FALSE here and the two sides cannot both
+    # be run: `registry.claim_checks("public_principal")` returns
+    # `(check_public_principal,)` in the integrated tree, so its stub would be
+    # DECIDED and the no-layer arm would go unexercised — the identical trap the
+    # comment above records for `network_tag_ref`. The behaviour both sides
+    # assert is one behaviour, and it is asserted below over the kind that is
+    # still undecided here, with the premise itself pinned so the next layer to
+    # land reddens this test instead of hollowing it.
     stub = SimpleNamespace(kind=undecided, value="web-tier",
                            location="bindings[0].condition.expression")
     monkeypatch.setattr(preflight, "iam_policy_claims", lambda doc: [stub])
@@ -412,6 +424,11 @@ def test_claim_kind_no_layer_decides_is_unverified_naming_the_kind(snap, monkeyp
                                           "members": ["user:alice@acme.example"]}]},
                            snap)
     assert report.ok  # an undecided kind is ignorance, not a gate failure
+    # `only` is the branch's `[v] = report.verdicts` narrowed to the kind under
+    # test and nothing else: it asserts there is EXACTLY ONE verdict of this
+    # kind, and that every other verdict in the report is an abstention too, so
+    # the whole-report claim survives the honest second abstention a landed
+    # registered document check adds (see `only`'s own docstring).
     v = only(report, undecided)
     assert (v.status, v.kind, v.target) == ("unverified", undecided, "web-tier")
     assert "no offline check is wired" in v.message

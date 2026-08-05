@@ -39,6 +39,7 @@ from gcp_grounding.knowledge import GcpSnapshot
 from gcp_grounding.preflight import ground_policy
 from gcp_grounding.registry import CheckContext
 from gcp_grounding.tf_claims import terraform_plan_claims
+from tests.lineno_invariant import assert_no_line_numbers
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gcp"
 POLICIES = FIXTURES / "policies"
@@ -1242,3 +1243,33 @@ def test_each_finding_names_its_polarity_family_in_its_docstring():
     assert "family (c)" in hfw_checks._finding_unreachable.__doc__.lower()
     assert "family (a)" in hfw_checks._finding_reopen.__doc__.lower()
     assert "family (b)" in hfw_checks._finding_delta.__doc__.lower()
+
+
+# -- the shared lineno invariant ----------------------------------------------
+
+
+def test_no_hfw_verdict_carries_a_line_number(snap, partial):
+    """Every arm of this module reports ``lineno`` 0 — see lineno_invariant.
+
+    Drives the committed hierarchical-firewall documents and, for the two
+    effective-decision arms no committed document reaches, the proposals this
+    suite already builds with ``tf_plan``/``rule_resource``: the org-level
+    allow that widens and an org-level deny that narrows. Both snapshots run,
+    so the z3-absent abstention is on the record too.
+    """
+    docs = [POLICIES / "hfw_policy.json", POLICIES / "hfw_tf_plan.json",
+            tf_plan(rule_resource(priority=50), association("organizations/1")),
+            tf_plan(rule_resource(
+                priority=50, action="deny",
+                match=[{"src_ip_ranges": ["10.0.0.0/8"], "dest_ip_ranges": [],
+                        "layer4_config": [{"ip_protocol": "tcp",
+                                           "ports": ["8080"]}]}]),
+                association("organizations/1"))]
+    reports = [ground_policy(d, s) for d in docs for s in (snap, partial)]
+    reports += [ground_policy(d, snap, baseline=POLICIES / "hfw_policy.json")
+                for d in docs]
+
+    mine = [v for r in reports for v in r.verdicts if v.kind.startswith("hfw_")]
+    assert mine, "the drive reached no hierarchical-firewall verdict at all"
+    for report in reports:
+        assert_no_line_numbers(report)

@@ -213,11 +213,27 @@ def test_no_providers_is_byte_identical(snap, name, expected):
     for module, names in DOCUMENT_CHECK_OWNERS.items():
         if importlib.util.find_spec(module) is not None:
             assert by_module.get(module, set()) == names, module
+    # `agent/gx-debt-lineno-invariant` asserted the same silence as a SUBSET of
+    # the three checks landed in its own checkout — org_checks, hfw_checks,
+    # vpcsc_checks. That set is not a bound in the integrated tree, where
+    # `registry.document_checks()` also carries check_escalation,
+    # check_security_policy and check_firewall_shadowing, so its literal text
+    # would fail on branches that landed after it. The per-module EQUALITY above
+    # is the same claim without the ceiling: every one of those three names is
+    # pinned exactly, by its owning module, together with every check that landed
+    # since — no more and no fewer per module, which is strictly more than the
+    # subset asserted and is what the verdict-set equality below then pins.
     assert registry.claim_checks("role") == ()
     fixture_types = {"google_project_iam_binding", "google_project_iam_member",
                      "google_project_iam_policy", "google_project_iam_custom_role",
                      "google_org_policy_policy"}
     assert fixture_types.isdisjoint(registry.tf_extractors())
+    # `agent/gx-debt-lineno-invariant`'s
+    # `assert set(registry.tf_extractors()).isdisjoint(tf_claims._EXTRACTORS)`
+    # is asserted at the top of this test in its HAVE_TF-guarded spelling —
+    # `_BUILTIN_TF_TYPES` IS `tf_claims._EXTRACTORS` (see the import at line 50),
+    # so it is the same assertion and is kept once rather than twice, in the form
+    # that still runs in a checkout without the terraform extractor.
     report = ground_policy(POLICIES / f"{name}.json", snap)
     got = sorted((v.status, v.kind, v.target) for v in report.verdicts)
     assert got == sorted(expected)
