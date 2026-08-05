@@ -157,11 +157,23 @@ def _probe_estate_gate() -> bool:
     Probed by running the real choke point rather than by importing a name: the
     gate is a behaviour, and a module that merely exists is not the same thing
     as one that gates.
+
+    The probe check DECLARES ITS SOUNDNESS the way a real one does —
+    ``requires_complete`` over a named category — because that is the shape the
+    gate actually refuses. Without the declaration the identity resolves to
+    ``("requires_complete", None)``, the no-category-resolvable case the gate
+    deliberately lets THROUGH, so the probe measured "no gate" in a checkout that
+    has one and every caller took the wrong branch.
     """
     module = types.ModuleType(PROBE_STUB)
     module.DOCUMENT_CHECKS = (_probe_document_check,)
     saved_module = sys.modules.get(PROBE_STUB)
     saved_providers = registry.PROVIDER_MODULES
+    identity = f"{_probe_document_check.__module__}.{_probe_document_check.__qualname__}"
+    saved_mode = provenance.ESTATE_SOUNDNESS.get(identity)
+    saved_category = provenance.estate_soundness_category(identity)
+    provenance.register_estate_soundness(identity, "requires_complete",
+                                         "firewall_rules")
     sys.modules[PROBE_STUB] = module
     registry.PROVIDER_MODULES = (PROBE_STUB,)
     registry.reset_cache()
@@ -179,6 +191,12 @@ def _probe_estate_gate() -> bool:
             sys.modules[PROBE_STUB] = saved_module
         registry.PROVIDER_MODULES = saved_providers
         registry.reset_cache()
+        if saved_mode is None:
+            provenance.ESTATE_SOUNDNESS.pop(identity, None)
+            provenance._ESTATE_SOUNDNESS_CATEGORY.pop(identity, None)
+        else:
+            provenance.register_estate_soundness(identity, saved_mode,
+                                                 saved_category)
     return any(v.kind == "estate:incomplete" for v in verdicts)
 
 

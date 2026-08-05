@@ -70,8 +70,15 @@ DEFAULT_RULE_PRIORITY = 2147483647
 #: The action verbs a security-policy rule may carry. Anything else is recorded
 #: ``unsupported`` rather than guessed at — an unknown action could allow or
 #: deny, and the encoding must not pick one.
+#: ``deny-403`` is the Terraform spelling and ``deny(403)`` the REST one; both
+#: name the same denial, and :func:`gcp_grounding.armor_checks._is_deny` already
+#: treats every ``deny…`` prefix as one. Omitting the REST spellings here made a
+#: policy captured from the API — or projected out of the estate table, which
+#: stores the REST form — read as ``unsupported`` content on the claims side
+#: while the checks side denied on it.
 _ACTIONS = frozenset({
     "allow", "deny", "deny-403", "deny-404", "deny-502",
+    "deny(403)", "deny(404)", "deny(502)",
     "rate_based_ban", "throttle", "redirect",
 })
 

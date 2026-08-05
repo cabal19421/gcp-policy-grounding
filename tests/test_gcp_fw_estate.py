@@ -263,8 +263,20 @@ def test_partial_snapshot_yields_only_unverified(doc, partial_snap):
     assert [v.status for v in verdicts] == ["unverified"]
     assert "not captured" in verdicts[0].message
     assert "not decided" in verdicts[0].message
-    # An uncaptured estate is never a pass-by-silence and never a block.
-    assert report.ok is True
+    # An uncaptured estate is never a pass-by-silence and never a block: THIS
+    # channel abstains and nothing on it is a finding.
+    #
+    # `report.ok is True` held on the branch that wrote this, when the exposure
+    # check did not exist. Two of these five docs open tcp/22 to 0.0.0.0/0, which
+    # fw_checks.check_open_exposure legitimately contradicts — a finding about the
+    # PROPOSAL, not about the uncaptured estate. So the report-wide claim is
+    # pinned as: every finding in the report belongs to the exposure channel, and
+    # the estate channel produced none.
+    assert fw(report, status="ungrounded") == []
+    assert fw(report, status="contradicted") == []
+    findings = {v.kind for v in report.verdicts
+                if v.status in ("ungrounded", "contradicted")}
+    assert findings <= {"firewall_exposure", "firewall_reopen"}, findings
 
 
 def test_builtin_backend_abstains_for_every_rule(snap, monkeypatch):
