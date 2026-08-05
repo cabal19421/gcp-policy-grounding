@@ -23,6 +23,39 @@ because the check abstains on the builtin backend *before* it looks at anything
 else — which is itself asserted, together with ``report.ok`` staying True.
 """
 
+# ---------------------------------------------------------------------------
+# MUTATION PAYDOWN RECORD — gcp_grounding/hfw_checks.py (gx-debt-hfw-checks,
+# test-only). INSTRUMENT: harness is absent from this venv, so its own mutator
+# was reached via sys.path.insert(0, "/home/jones/Downloads/harness") —
+# collect_sites(<source TEXT>, never a path), then mutation_score(worktree,
+# ["gcp_grounding/hfw_checks.py"], validation, max_mutants=, timeout=900) —
+# one mutant ALONE per run, in DETACHED `git worktree`s, never a `git archive`
+# copy (red at this base). VALIDATION, BOTH LEGS, is the FOCUSED owning module
+# `<venv>/bin/python -m pytest -q tests/test_gcp_hfw_checks.py`: an instrument
+# change, not a threshold one — the full suite's node set contains this one's,
+# so a focused run can only UNDERCOUNT kills. GREEN BASELINE ASSERTED BEFORE
+# ANY MUTANT WAS WRITTEN: before "50 passed", after "63 passed".
+#
+#   ref                  sites  exhaustive        40-draw
+#   before  8c875c2        150  113/150 = 0.753   28/40 = 0.700
+#   after   HEAD (this)    150  134/150 = 0.893   35/40 = 0.875
+#
+# Separately, labelled with its own instrument: the design's 107/150 = 0.713
+# and 26/40 = 0.650 are FULL-SUITE, off `agent/gx-hierfw-placement`.
+#
+# THE TWELVE NAMED SURVIVORS, every hint resolved. NINE ARE DEAD, each with
+# the node below measured FAILED under that mutant ALONE and PASSED clean:
+#   286 1000→1001, 309 0→1  …a_captured_rule_that_omits_priority_ranks_…
+#   309 0→1                 test_at_a_priority_tie_the_deny_decides_…
+#   555 and→or              …read_at_the_projects_segment_pair[api-url]
+#   586 -→+, 587 1→2        …the_node_a_policy_name_is_scoped_under_…
+#   801 >→>=                …a_project_under_no_organization_has_a_one_…
+#   924 False→True          …a_disabled_deny_reopens_nothing_and_one_…
+#   938 0→1, 973 0→1        test_no_hfw_verdict_carries_a_line_number
+# THREE SURVIVE, MEASURED EQUIVALENT — 402, 786, 885, still green under their
+# own mutants alone here — escalated as ESC-GX-HFW-EQUIVALENT-SITES.
+# ---------------------------------------------------------------------------
+
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -1273,3 +1306,265 @@ def test_no_hfw_verdict_carries_a_line_number(snap, partial):
     assert mine, "the drive reached no hierarchical-firewall verdict at all"
     for report in reports:
         assert_no_line_numbers(report)
+
+
+# -- (8) SHARED-DEBT PAYDOWN, tier 1 (gx-debt-hfw-checks, test-only) ----------
+#
+# Precedence, placement arithmetic and the disabled flag: guards that decide a
+# packet and that nothing above distinguishes. Every leg drives the fold over a
+# snapshot and a proposal and asserts the VERDICT.
+
+#: A second project under the org, an empty folder, and a parentless project
+#: whose evaluation path is exactly ONE level.
+LAB = "projects/acme-lab"
+ROOT_PROJECT = "projects/acme-root"
+
+#: The compute API spelling of VPC_MAIN — same project, same network.
+URL_MAIN = ("https://www.googleapis.com/compute/v1/projects/acme-prod/global/"
+            "networks/vpc-main")
+
+
+def wider_estate(mutate=None) -> GcpSnapshot:
+    data = estate_data(mutate)
+    data["resource_hierarchy"].update({
+        LAB: {"display_name": "Lab", "number": "8",
+              "parent": "organizations/1", "type": "project"},
+        "folders/3": {"display_name": "Empty", "number": "3",
+                      "parent": "organizations/1", "type": "folder"},
+        ROOT_PROJECT: {"display_name": "Root", "number": "9",
+                       "parent": None, "type": "project"}})
+    return GcpSnapshot.from_dict(data)
+
+
+def org_proposal(**overrides):
+    """The proposal attached at the organization — the SAME level as the
+    estate's fp-baseline, which is the only place a tie can arise."""
+    return tf_plan(rule_resource(**overrides), association("organizations/1"))
+
+
+# -- group 1: precedence rank and the deny tiebreak ---------------------------
+
+
+@needs_z3
+def test_at_a_priority_tie_the_deny_decides_and_the_allow_never_runs(snap):
+    """Two rules at EQUAL priority differing only in ``action``, at one level.
+
+    fp-baseline denies tcp/3389 from 0.0.0.0/0 at priority 100 at
+    organizations/1 and the proposal allows it at the same node. At a tie GCP
+    runs the deny, so the allow is unreachable; one number lower it runs and
+    re-opens; equal priority AND equal action out-ranks neither. Read the wrong
+    way, an apply that opens RDP org-wide reads clean.
+    """
+    tied = run(org_proposal(priority=100), snap)
+    shadow = of_kind(tied, "hfw_shadow")
+    assert [v.status for v in shadow] == ["contradicted"]
+    assert "organizations/1" in shadow[0].message
+    assert of_kind(tied, "hfw_reopen") == []
+
+    ahead = run(org_proposal(priority=99), snap)
+    assert of_kind(ahead, "hfw_shadow") == []
+    assert [v.status for v in of_kind(ahead, "hfw_reopen")] == ["contradicted"]
+
+    twin = run(org_proposal(priority=100, action="deny"), snap)
+    assert of_kind(twin, "hfw_shadow") == []
+    assert [v.status for v in of_kind(twin, "hfw_effect")] == ["grounded"]
+
+
+def _org_deny_omits_priority(policies):
+    del policies[BASELINE]["rules"][0]["priority"]
+
+
+@needs_z3
+def test_a_captured_rule_that_omits_priority_ranks_at_the_default_1000(snap):
+    """A captured rule spelling no ``priority`` lands at 1000 — GCP's default,
+    and the number every VPC rule in the fixture carries. One higher and it
+    loses the tie to a proposal at 1000: the estate DENY leaves the preemption
+    set and the proposal reads as re-opening it rather than as unreachable."""
+    drifted = estate(_org_deny_omits_priority)
+
+    tied = run(org_proposal(priority=1000), drifted)
+    assert [v.status for v in of_kind(tied, "hfw_shadow")] == ["contradicted"]
+    assert of_kind(tied, "hfw_reopen") == []
+
+    ahead = run(org_proposal(priority=999), drifted)
+    assert of_kind(ahead, "hfw_shadow") == []
+    assert [v.status for v in of_kind(ahead, "hfw_reopen")] == ["contradicted"]
+
+
+# -- group 2: the path-segment index arithmetic -------------------------------
+
+
+@needs_z3
+@pytest.mark.parametrize("target", [
+    "projects/acme-prod",                            # two segments
+    "projects/acme-prod/global",                     # three
+    VPC_MAIN,                                        # five
+    URL_MAIN,                                        # the compute API URL
+], ids=["two-segments", "three-segments", "five-segments", "api-url"])
+def test_the_project_under_evaluation_is_read_at_the_projects_segment_pair(target):
+    """``target_resources`` names the project whose evaluation order applies,
+    read as the segment FOLLOWING ``projects``. Off by one it reads the segment
+    before — the API host, for a self-link — and grades the proposal against a
+    project nobody named. The hierarchy here holds TWO projects under the
+    organization, so the attachment-node fallback cannot mask it."""
+    verdicts = run(tf_plan(rule_resource(priority=50, target_resources=[target]),
+                           association("organizations/1")), wider_estate())
+    widen = of_kind(verdicts, "hfw_widen")
+    assert [v.status for v in widen] == ["contradicted"]
+    assert "at projects/acme-prod" in widen[0].message
+
+
+@needs_z3
+def test_target_resources_spanning_two_projects_decide_no_single_order():
+    """The multi-target arm of the same read: two networks in two projects have
+    two evaluation orders, so there is no single one to grade against."""
+    verdicts = run(tf_plan(rule_resource(
+        priority=50, target_resources=[VPC_MAIN, f"{LAB}/global/networks/vpc-lab"]),
+        association("organizations/1")), wider_estate())
+    assert [(v.status, v.kind) for v in verdicts] == [("unverified", "hfw_order")]
+    assert f"span 2 projects ({LAB}, projects/acme-prod)" in verdicts[0].message
+
+
+def _folder_policy_without_attachments(policies):
+    policies[FOLDER_POLICY] = {"attachments": [], "rules": []}
+
+
+def _policy_named_without_a_node(policies):
+    policies["fp-legacy-shortname"] = {"attachments": [], "rules": []}
+
+
+#: A captured name whose LEADING ``organizations`` pair carries no id: the pair
+#: naming a node is the one whose id segment is NON-EMPTY, so the scope is the
+#: folder pair that follows it.
+HALF_NAMED_POLICY = "organizations//folders/2/locations/global/firewallPolicies/fp-half"
+
+
+def _policy_named_with_an_empty_node_id(policies):
+    policies[HALF_NAMED_POLICY] = {"attachments": [], "rules": []}
+
+
+@needs_z3
+def test_the_node_a_policy_name_is_scoped_under_places_it_on_the_chain(snap):
+    """A policy NAME carries its node as the pair ``<node type>/<id>``; read one
+    segment further it becomes ``folders/locations``, on no evaluation path, and
+    every unattached policy goes quietly missing from the fold. Scoped under
+    folders/2 with no ``attachments`` it abstains; a leading node pair with no
+    id is read at the pair that has one; a name carrying no node at all must
+    not stop the check deciding."""
+    proposal = tf_plan(rule_resource(match=RDP_FROM_PRIVATE),
+                       association("folders/2"))
+
+    on_chain = run(proposal, estate(_folder_policy_without_attachments))
+    assert [(v.status, v.kind) for v in on_chain] == [("unverified", "hfw_order")]
+    assert FOLDER_POLICY in on_chain[0].message
+    assert "'attachments'" in on_chain[0].message
+
+    half = run(proposal, estate(_policy_named_with_an_empty_node_id))
+    assert [(v.status, v.kind) for v in half] == [("unverified", "hfw_order")]
+    assert HALF_NAMED_POLICY in half[0].message
+
+    unscoped = run(proposal, estate(_policy_named_without_a_node))
+    assert of_kind(unscoped, "hfw_order") == []
+    assert [v.status for v in of_kind(unscoped, "hfw_shadow")] == ["contradicted"]
+
+
+# -- group 3: the cardinality branch guards -----------------------------------
+
+
+@needs_z3
+def test_an_attachment_node_with_no_project_below_it_abstains_naming_that():
+    """An empty folder has no project whose order this rule could be graded
+    against — said in those words, not as the "0 projects sit below" the walk
+    reports for a node it found several under and could not choose between."""
+    verdicts = run(tf_plan(rule_resource(), association("folders/3")),
+                   wider_estate())
+    assert [(v.status, v.kind) for v in verdicts] == [("unverified", "hfw_order")]
+    assert ("the captured hierarchy holds no project below the attachment node "
+            "folders/3") in verdicts[0].message
+
+
+@needs_z3
+def test_a_policy_attaching_at_two_nodes_abstains_rather_than_taking_the_first(snap):
+    """One apply attaching the owning policy at BOTH a folder and the
+    organization gives the rule two levels at once; taking the first grades it
+    at a level it may never run at."""
+    second = dict(association("organizations/1"),
+                  address="google_compute_firewall_policy_association.second")
+    verdicts = run(tf_plan(rule_resource(), association("folders/2"), second), snap)
+    assert [(v.status, v.kind) for v in verdicts] == [("unverified", "hfw_order")]
+    assert "attaches at 2 nodes (folders/2, organizations/1)" in verdicts[0].message
+
+
+@needs_z3
+def test_a_project_under_no_organization_has_a_one_level_order_that_decides():
+    """A project under NO organization has an evaluation path of one level —
+    itself — and no captured policy attaches to it. The zero-rules-folded
+    abstention must NOT fire: at one level there is no "N-level order decides
+    every packet identically" claim resting on rules nobody read."""
+    verdicts = run(tf_plan(rule_resource(priority=50), association(ROOT_PROJECT)),
+                   wider_estate())
+    widen = of_kind(verdicts, "hfw_widen")
+    assert [v.status for v in widen] == ["contradicted"]
+    assert f"at {ROOT_PROJECT}" in widen[0].message
+    assert of_kind(verdicts, "hfw_order") == []
+
+
+# -- group 4: the disabled flag -----------------------------------------------
+
+
+def _org_deny_turned_off(policies):
+    policies[BASELINE]["rules"][0]["disabled"] = True
+
+
+def _vpc_deny_omits_disabled() -> GcpSnapshot:
+    """The estate whose VPC deny of tcp/22 carries NO ``disabled`` key — built
+    past the loader, which injects the default. A TERRAFORM snapshot really has
+    this shape: ``facts.strip_unresolved`` REMOVES what it could not resolve."""
+    intact = estate()
+    rules = dict(intact.firewall_rules)
+    name = "projects/acme-prod/global/firewalls/deny-ssh-external"
+    rules[name] = {key: value for key, value in rules[name].items()
+                   if key != "disabled"}
+    return replace(intact, firewall_rules=rules)
+
+
+@needs_z3
+def test_a_disabled_deny_reopens_nothing_and_one_omitting_the_key_still_does(snap):
+    """A DISABLED estate deny decides no packet, so an allow winning over it
+    re-opens nothing — asserted against the identical ENABLED rule, which does.
+    And a rule OMITTING the key is enabled: defaulting it to disabled deletes a
+    live VPC deny of tcp/22 and the org-level allow above it reports clean."""
+    off = run(org_proposal(priority=50), estate(_org_deny_turned_off))
+    assert of_kind(off, "hfw_reopen") == []
+    assert of_kind(off, "hfw_shadow") == []
+    assert [v.status for v in of_kind(run(org_proposal(priority=50), snap),
+                                      "hfw_reopen")] == ["contradicted"]
+
+    ssh = run(org_proposal(priority=50, match=[{
+        "src_ip_ranges": ["0.0.0.0/0"], "dest_ip_ranges": [],
+        "layer4_config": [{"ip_protocol": "tcp", "ports": ["22"]}]}]),
+        _vpc_deny_omits_disabled())
+    reopen = of_kind(ssh, "hfw_reopen")
+    assert [v.status for v in reopen] == ["contradicted"]
+    assert "deny-ssh-external" in reopen[0].message
+
+
+# -- group 6: the empty-collection defaults -----------------------------------
+
+
+@needs_z3
+def test_a_snapshot_that_captured_no_tag_or_account_universe_still_decides(snap):
+    """``network_tags`` and ``service_accounts`` bound the universe a witness is
+    drawn from, and an UNCAPTURED table is an EMPTY universe, not an absent one
+    — a rule naming a tag still reaches its own stable constant. Read the other
+    way both yield ``None`` and the check stops deciding at all."""
+    def drop(data):
+        del data["network_tags"]
+        del data["service_accounts"]
+
+    thin = estate_snapshot(drop)
+    assert thin.network_tags is None and thin.service_accounts is None
+    verdicts = run(tf_plan(rule_resource(), association("folders/2")), thin)
+    assert [v.status for v in of_kind(verdicts, "hfw_shadow")] == ["contradicted"]
+    assert [v.status for v in of_kind(verdicts, "hfw_effect")] == ["grounded"]
+    assert of_kind(verdicts, "hfw_order") == []

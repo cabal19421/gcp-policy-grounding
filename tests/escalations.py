@@ -243,6 +243,43 @@ PRODUCT_ESCALATIONS: tuple[ProductEscalation, ...] = (
             "and why it is filtered."
         ),
     ),
+    ProductEscalation(
+        id="ESC-GX-HFW-EQUIVALENT-SITES",
+        clause="the twelve named survivors are dead",
+        why=(
+            "Nine are. THREE ARE MEASURED EQUIVALENT — each still green under "
+            "its own mutant applied ALONE in a detached `git worktree`, "
+            "validated by tests/test_gcp_hfw_checks.py, the run TABLED at the "
+            "top of that file — and each is unobservable by construction, the "
+            "proof house rule 7 demands beside the measurement. `402 <->=` is "
+            "reached only under `if a.level != b.level`, where the operators "
+            "agree on every input. `786 +->-` feeds a counter read ONLY "
+            "through `not sum(contributed.values())` and its KEYS; all terms "
+            "are non-negative, so negating them leaves the sum zero exactly "
+            "when it was zero. `885 False->True` defaults a `disabled` key "
+            "never absent where it is read: `_as_vpc_shape` always writes it, "
+            "so only a raw VPC record can omit one, and a VPC rule sits at "
+            "level `len(chain)`, inside every proposal, so `_wins_over(p, "
+            "mine)` is False for it whatever the default says."
+        ),
+        product_fix=(
+            "REMOVE the three sites — stronger than a kill, the route "
+            "AMENDMENT 3 took for EQ-O01/EQ-O02: compare `_wins_over`'s "
+            "operands as one `(level, rank)` tuple; make `contributed` a SET "
+            "of contributing policies, not a count; normalise VPC records "
+            "through `_as_vpc_shape` too, so `disabled` is always present. "
+            "All three sit in gcp_grounding/hfw_checks.py, which this "
+            "TEST-ONLY task may not edit."
+        ),
+        residual_risk=(
+            "Nothing is exposed by 402 or 786. 885 is the one to watch: it is "
+            "unreachable only because no VPC rule can preempt a hierarchical "
+            "proposal, so the day the VPC layer folds at a level a proposal "
+            "can reach, the default goes live and a rule whose `disabled` key "
+            "the capture dropped leaves the preemption set — the FALSE-CLEAN "
+            "direction. Whoever changes `_place`'s level arithmetic owns it."
+        ),
+    ),
 )
 
 
