@@ -87,7 +87,13 @@ NAMED_MODULES = (
 #: silently outside it: a new ``armor_checks.py`` makes THIS fail until someone
 #: adds it here, having first read what the lint is for.
 EXPECTED_MODULES = frozenset({
+    # armor_checks.py and armor_claims.py are the very files the comment above
+    # names: they landed with agent/sx-armor-checks and agent/sx-armor-claims and
+    # are now WALKED. fw_checks.py likewise (agent/sx-fw-checks).
+    "gcp_grounding/armor_checks.py",
+    "gcp_grounding/armor_claims.py",
     "gcp_grounding/claims.py",
+    "gcp_grounding/fw_checks.py",
     "gcp_grounding/fw_claims.py",
     "gcp_grounding/hfw_checks.py",
     "gcp_grounding/hfw_claims.py",
