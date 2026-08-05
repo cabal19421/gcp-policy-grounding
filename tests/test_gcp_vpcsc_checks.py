@@ -49,6 +49,54 @@ Environment-honest like ``test_gcp_preflight``: every expectation that needs the
 solver branches on whether z3 is importable.
 """
 
+# SHARED DEBT TIER 1 — PAYDOWN MEASUREMENT, COMMITTED (task gx-debt-vpcsc-checks).
+#
+# INSTRUMENT: this owning test module alone, never the full suite —
+# `.venv/bin/python -m pytest -q tests/test_gcp_vpcsc_checks.py` — run in a
+# detached `git worktree`, whose `.git` stops the config/tfstate walk. BOTH legs
+# use that one instrument, so the delta is a delta. The harness import was
+# `import sys; sys.path.insert(0, "/home/jones/Downloads/harness")` as the first
+# statement inside a `python -c` program (never a PYTHONPATH= prefix), and each
+# score is `mutation_score(wt, [rel], [focused], max_mutants=len(sites)+5)` over
+# `collect_sites(source_text)`. Both worktrees were ASSERTED GREEN before any
+# mutant outcome was read: BEFORE 29 passed in 0.39s, AFTER 40 passed in 0.42s.
+#
+# gcp_grounding/vpcsc_checks.py, 81 sites   exhaustive       40-draw
+#   BEFORE  8c875c2286ff (this task's seed) 68/81 = 0.840    34/40 = 0.850
+#   AFTER   dbec9a43596f (this commit's     80/81 = 0.988    40/40 = 1.000
+#           parent; this diff adds only this block, no test body, no source)
+#
+# QUOTED SEPARATELY AND NOT COMPARABLE, taken with a different instrument on a
+# different tree: the design's 24/40 = 0.600 on `agent/gx-vpcsc-record-guards`
+# under FULL-SUITE validation. The exhaustive BEFORE for this module had never
+# been taken by anyone; 68/81 above is it.
+#
+# COMPANION, measured in the same pass and unscored so the next task on that
+# file inherits evidence rather than a guess: gcp_grounding/vpcsc_claims.py,
+# 38 sites, exhaustive BEFORE 14/38 = 0.368, AFTER 17/38 = 0.447 — no arm here
+# targets it, and the 3 kills are incidental to driving the checks over it.
+#
+# THE TWELVE NAMED MUST-KILL SITES ARE ALL DEAD, and every advisory line hint
+# resolved. Per site the mutant was applied ALONE in the isolated copy and the
+# node below reported FAILED under it and PASSED on clean source (40 passed):
+#   163 `False`->`True`  _key_present, the absent-vs-empty shape default
+#      -> test_a_previous_perimeter_with_no_side_block_has_no_policy_key_either
+#   605 `False`->`True`  the old side's unreadable-is-any shape flag
+#      -> test_the_old_predicate_refuses_an_unreadable_axis_if_the_abort_regresses
+#   385 `==`->`!=`  -> …decides_or_abstains_for_its_own_reason[union-drops-nothing]
+#   424 `or`->`and` -> …decides_or_abstains_for_its_own_reason[selector-names-neither]
+#   447 `or`->`and` -> test_an_unreadable_new_operation_leaves_both_of_its_axes…
+#   612 `0`->`1`    -> test_a_solver_that_neither_sats_nor_unsats_abstains…
+#   253, 269, 575, 597, 608, 672 `0`->`1`, the Verdict lineno positionals
+#      -> test_no_vpcsc_verdict_carries_a_line_number
+#
+# RESIDUAL: one survivor at 0.988, not on the named list — vpcsc_checks.py:302
+# `True`->`False`, the `@dataclass(frozen=True)` on `_Axis`. Measured equivalent:
+# no site mutates an `_Axis` after building one, and none hashes one or puts one
+# in a set, so unfreezing it changes no behaviour a verdict can carry. No floor
+# failed and no named pin survived, so nothing was relaxed and no Escalation is
+# owed. Diff size against the seed: 17,626 characters, inside the 18,000 budget.
+
 import copy
 import json
 from pathlib import Path
