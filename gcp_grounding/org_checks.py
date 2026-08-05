@@ -16,21 +16,32 @@ themselves, and the three checks here decide them against the estate's
   an estate snapshot that may be stale). All THREE disablement spellings fire:
   ``enforce: false``, ``spec.reset: true``, and ``spec.inheritFromParent: true``
   on a policy with no rules of its own. A check that caught only the first would
-  be evaded by the other two.
-- CHECK 2 (same entry point) — **list widening**. A value in the proposal's
-  ``allowed_values`` and not in the captured record's is a widening; so is
-  ``allowAll`` over an enumerated allowlist. Removing allowed values, or adding
-  denied ones, narrows and grounds.
+  be evaded by the other two — and one that asked whether the PRIOR carried a
+  true ``enforce`` flag would be evaded by all three on any list constraint,
+  because a list rule never carries one: the prior enforces when it constrains
+  anything (:func:`_constrains`).
+- CHECK 2 (same entry point) — **list widening**, compared on BOTH sides. A
+  value in the proposal's ``allowed_values`` and not in the captured record's is
+  a widening; so is ``allowAll`` over an enumerated allowlist; and so,
+  symmetrically, is a value in the record's ``denied_values`` that the proposal
+  drops — the deny side is the actual enforcement mechanism of constraints like
+  ``compute.vmExternalIpAccess``, and a grounded verdict may not vouch for a
+  side it never read. Removing allowed values, or adding denied ones, narrows
+  and grounds.
 - CHECK 3 (:func:`check_org_estate`) — **domain value grounding**. List values
   naming a resource-hierarchy node are pushed through the existing Datalog
   existence pass (:func:`~gcp_grounding.reasoner.ground_existence`) as
   ``hierarchy_node_ref`` claims, did-you-mean suggestions included. This domain
   adds no snapshot category of its own.
 
-**Abstention.** An uncaptured ``org_policies`` table, or a node that table does
-not record, yields exactly one ``unverified`` per claim and never a
-``contradicted``: an unrecorded node is not an unenforced one, and letting one
-read as the other would turn "we never looked" into "it was already off".
+**Abstention.** An uncaptured ``org_policies`` table, a node that table does not
+record, and a record that contributes no readable rule each yield exactly one
+``unverified`` per claim and never a ``contradicted``: an unrecorded node is not
+an unenforced one, a record that records nothing is not a record of
+non-enforcement, and letting either read as the other would turn "we never
+looked" into "it was already off". The record's rules are read through
+:mod:`gcp_grounding.evidence` and counted there, so a verdict standing on zero
+examined rules is caught by the invoker's evidence floor as well as here.
 
 **No z3.** This is set algebra and a boolean comparison; there is no encoding,
 no solver call and no ``import z3`` anywhere in this module, so it decides
@@ -48,6 +59,7 @@ from typing import Any, Mapping
 from .claims import NO_RULE_INDEX, Claim, org_policy_claims
 from .core.log import get_logger
 from .core.report import Verdict
+from .evidence import NotEvaluated, examined, scalar
 from .knowledge import UNKNOWN
 from .reasoner import ground_existence
 from .registry import CheckContext
@@ -82,6 +94,22 @@ _VALUE_FIELDS = (("allowed_values", "allowedValues"),
 # -- the prior state ----------------------------------------------------------
 
 
+def _constrains(rule: Mapping[str, Any]) -> bool:
+    """Whether one prior rule constrains anything at all.
+
+    A rule constrains something when it sets ``enforce: true``, when it states
+    an all-allow or all-deny flag, or when it carries a value list. Requiring
+    the ``enforce`` flag alone was the defect: a LIST rule never carries one —
+    the committed estate fixture's ``compute.vmExternalIpAccess`` record is an
+    enumerated deny list with ``enforce: null`` — so no disablement spelling
+    could fire on any list constraint, and a bare reset (which sets no values)
+    was not covered by the value comparison either.
+    """
+    return bool(rule["enforce"] is True or rule["allow_all"] is not None
+                or rule["deny_all"] is not None
+                or rule["allowed_values"] or rule["denied_values"])
+
+
 @dataclass(frozen=True)
 class _Prior:
     """The state a proposal is compared against: the rules in force before it,
@@ -96,12 +124,18 @@ class _Prior:
     @property
     def enforced(self) -> bool:
         """Whether the prior state actually enforces the constraint: some rule
-        sets ``enforce: true`` and the policy is not itself a reset."""
-        return not self.reset and any(r["enforce"] is True for r in self.rules)
+        CONSTRAINS something (:func:`_constrains`) and the policy is not itself
+        a reset."""
+        return not self.reset and any(_constrains(r) for r in self.rules)
 
     @property
     def list_rules(self) -> tuple[Mapping[str, Any], ...]:
-        """The prior rules that carry list values (a boolean rule sets none)."""
+        """The prior rules that carry list values (a boolean rule sets none).
+
+        A rule that states an EMPTY allowlist is one of them: "nothing is
+        allowed" is the most restrictive list there is, and folding it in with
+        the boolean rules would lose that.
+        """
         return tuple(r for r in self.rules if r["enforce"] is None)
 
 
@@ -191,24 +225,53 @@ def _resolve_prior(claim: Claim, fields: Mapping[str, Any],
             f"{constraint} at {node} (captured {ctx.snapshot.captured_at}), so a "
             f"change to enforcement was not decided — an unrecorded node is not an "
             f"unenforced one")
-    captured = record.get("rules")
-    if not isinstance(captured, (list, tuple)):
-        # No empty default: a record whose rules could not be READ is not a
-        # record of non-enforcement, and folding it to zero rules is how
-        # "never looked" becomes "it was already off". (The read cannot go
-        # through :func:`gcp_grounding.evidence.rows`, which accepts a ``list``
-        # only, because a loaded snapshot's record tables hold tuples.)
+    what = (f"the estate's record of {constraint} at {node} "
+            f"(captured {ctx.snapshot.captured_at})")
+    try:
+        # Through the evidence channel, so an unreadable record cannot fold to
+        # zero rules: that is how "never looked" becomes "it was already off".
+        # NOT :func:`gcp_grounding.evidence.rows` — a loaded snapshot freezes
+        # every record table to tuples (``knowledge._tuplify``) and ``rows``
+        # accepts a ``list`` only, so it would abstain on every well-formed
+        # record in the estate. The channel's other two members cover this read
+        # exactly: :func:`~gcp_grounding.evidence.scalar` types it and names
+        # the shape it got instead, and :func:`~gcp_grounding.evidence.examined`
+        # counts what a snapshot ACCESSOR yielded, so a verdict standing on zero
+        # rules is visible to the invoker's evidence floor as well.
+        captured = scalar(record, "rules", what=what, type=tuple)
+    except NotEvaluated as exc:
         return None, Verdict(
             "unverified", VERDICT_KIND, constraint, 0,
-            f"{claim.location}: the estate's record of {constraint} at {node} "
-            f"(captured {ctx.snapshot.captured_at}) has no readable 'rules' list, "
-            f"got {type(captured).__name__} — so a change to enforcement was not "
+            f"{claim.location}: {exc} — so a change to enforcement was not "
             f"decided; an unreadable record is not a record of non-enforcement")
     rules = tuple(_normalize_rule(r) for r in captured if isinstance(r, Mapping))
+    examined(len(rules), what=what)
+    if not rules:
+        # A record that records NOTHING is not a record of non-enforcement.
+        # An absent 'rules' key and an empty one arrive here as the same
+        # captured state (the snapshot parser normalises both to an empty
+        # tuple), and an `any` over it answered "not enforced" — a positive
+        # verdict having examined zero rules. Same single abstention an absent
+        # record gets, naming the record and the reason.
+        return None, Verdict(
+            "unverified", VERDICT_KIND, constraint, 0,
+            f"{claim.location}: {what} carries no rule to read "
+            f"({_no_rule_detail(captured)}), so it records nothing about "
+            f"whether {constraint} was enforced at {node} — a change to "
+            f"enforcement was not decided; a record that records nothing is "
+            f"not a record of non-enforcement")
     return _Prior(rules=rules,
                   reset=record.get("reset") is True,
                   inherit=record.get("inherit_from_parent") is True,
                   source=f"the estate snapshot captured {ctx.snapshot.captured_at}"), None
+
+
+def _no_rule_detail(captured: tuple) -> str:
+    """Why a captured 'rules' collection contributed no rule — observed empty,
+    or holding entries none of which is a rule object."""
+    if not captured:
+        return "its 'rules' list is present and holds no records"
+    return f"none of its {len(captured)} 'rules' entries is an object"
 
 
 # -- CHECK 1: enforcement removal ---------------------------------------------
@@ -254,11 +317,48 @@ def _check_enforcement(claim: Claim, fields: Mapping[str, Any],
 
 
 def _is_list_shaped(fields: Mapping[str, Any]) -> bool:
-    """Whether the proposal's rule sets list values at all. A rule that sets
-    none can widen nothing, so CHECK 2 stays silent on it rather than minting
-    a vacuous verdict."""
+    """Whether the proposal's rule sets list values at all."""
     return bool(fields["allow_all"] is not None or fields["deny_all"] is not None
                 or fields["allowed_values"] or fields["denied_values"])
+
+
+def _compares_values(fields: Mapping[str, Any], prior: _Prior) -> bool:
+    """Whether CHECK 2 has two value sets to compare.
+
+    The proposal's own list values are one half. The other is a prior that
+    holds list values while the proposal's rule states none — an empty
+    ``values`` block REPLACES whatever the prior enumerated, so it drops all of
+    it, and staying silent there is how the one thing that changed goes
+    unreported. A BOOLEAN rule sets no list values by construction, and a
+    document-level claim (a bare ``spec.reset`` / ``spec.inheritFromParent``)
+    carries no rule at all: CHECK 1 decides both, and re-reporting the same
+    change as a widening would be one finding twice.
+    """
+    if _is_list_shaped(fields):
+        return True
+    return bool(fields["enforce"] is None
+                and fields["rule_index"] != NO_RULE_INDEX
+                and prior.list_rules)
+
+
+def _widenings(fields: Mapping[str, Any], prior_allowed: set[str],
+               prior_denied: set[str], prior_denies_all: bool) -> list[str]:
+    """Every way this rule loosens the prior's value sets, spelled for the
+    message — BOTH sides, because the deny side is the actual enforcement
+    mechanism of several real constraints and a verdict may not vouch for
+    ground it never examined."""
+    out: list[str] = []
+    added = sorted(set(fields["allowed_values"]) - prior_allowed)
+    if added:
+        out.append(f"adds {', '.join(added)} to the allowed values")
+    if fields["deny_all"] is True:
+        return out  # denying everything can loosen no deny side
+    dropped = sorted(prior_denied - set(fields["denied_values"]))
+    if dropped:
+        out.append(f"removes {', '.join(dropped)} from the denied values")
+    if prior_denies_all:
+        out.append("stops denying every value")
+    return out
 
 
 def _check_widening(claim: Claim, fields: Mapping[str, Any],
@@ -273,7 +373,12 @@ def _check_widening(claim: Claim, fields: Mapping[str, Any],
             f"list values ({prior.source}), so this rule's values could not be "
             f"compared against it — a widening was not decided")
     prior_allowed = {v for r in list_rules for v in r["allowed_values"]}
-    if any(r["allow_all"] is True for r in list_rules):
+    prior_denied = {v for r in list_rules for v in r["denied_values"]}
+    prior_denies_all = any(r["deny_all"] is True for r in list_rules)
+    if (any(r["allow_all"] is True for r in list_rules)
+            and not prior_denied and not prior_denies_all):
+        # Guarded on the deny side too: this message vouches for the whole
+        # comparison, so it may only be reached when there is no deny side.
         return Verdict(
             "grounded", VERDICT_KIND, constraint, 0,
             f"{claim.location}: {constraint} already allows every value at {node} "
@@ -285,18 +390,18 @@ def _check_widening(claim: Claim, fields: Mapping[str, Any],
             f"{claim.location}: this change allows ALL values for {constraint} at "
             f"{node}, replacing the enumerated allowlist ({enumerated}) — the "
             f"maximal widening (prior state from {prior.source})")
-    added = sorted(set(fields["allowed_values"]) - prior_allowed)
-    if added:
+    widened = _widenings(fields, prior_allowed, prior_denied, prior_denies_all)
+    if widened:
         return Verdict(
             "contradicted", VERDICT_KIND, constraint, 0,
-            f"{claim.location}: this change adds {', '.join(added)} to the allowed "
-            f"values of {constraint} at {node} — the policy is widened (prior state "
+            f"{claim.location}: this change {' and '.join(widened)} of "
+            f"{constraint} at {node} — the policy is widened (prior state "
             f"from {prior.source})")
     return Verdict(
         "grounded", VERDICT_KIND, constraint, 0,
         f"{claim.location}: this change adds no value to the allowed values of "
-        f"{constraint} at {node} — it narrows or leaves them as they were (prior "
-        f"state from {prior.source})")
+        f"{constraint} at {node} and removes none from its denied values — it "
+        f"narrows or leaves them as they were (prior state from {prior.source})")
 
 
 def _unreadable_proposal(claim: Claim, fields: Mapping[str, Any]) -> Verdict | None:
@@ -323,9 +428,11 @@ def check_constraint_enforcement(claim: Claim, ctx: CheckContext) -> list[Verdic
     """CHECK 1 and CHECK 2 for one ``constraint_enforcement`` claim.
 
     Returns exactly one ``unverified`` when the proposal itself could not be
-    read, or when the prior state cannot be resolved; otherwise the enforcement
-    verdict, plus the widening verdict when the rule sets list values.
-    Solver-free: ``ctx.solver`` is not read.
+    read, or when the prior state cannot be resolved — an uncaptured table, an
+    unrecorded node, an unreadable record, or one carrying no rule at all;
+    otherwise the enforcement verdict, plus the widening verdict when there are
+    two value sets to compare (:func:`_compares_values`). Solver-free:
+    ``ctx.solver`` is not read.
     """
     if claim.kind != "constraint_enforcement":
         raise ValueError(f"check_constraint_enforcement got a {claim.kind!r} claim")
@@ -337,7 +444,7 @@ def check_constraint_enforcement(claim: Claim, ctx: CheckContext) -> list[Verdic
     if abstention is not None:
         return [abstention]
     verdicts = [_check_enforcement(claim, fields, prior)]
-    if _is_list_shaped(fields):
+    if _compares_values(fields, prior):
         verdicts.append(_check_widening(claim, fields, prior))
     return verdicts
 

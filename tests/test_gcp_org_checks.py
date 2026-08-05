@@ -23,11 +23,12 @@ from pathlib import Path
 
 import pytest
 
-from gcp_grounding import org_checks, preflight, registry
+from gcp_grounding import evidence, org_checks, preflight, registry
 from gcp_grounding.claims import Claim, org_policy_claims
 from gcp_grounding.core.solver import get_solver
 from gcp_grounding.knowledge import GcpSnapshot
 from gcp_grounding.org_checks import (CLAIM_CHECKS, DOCUMENT_CHECKS,
+                                      OPAQUE_VALUE_CONSTRAINTS,
                                       check_constraint_enforcement,
                                       check_org_estate, hierarchy_value_claims)
 from gcp_grounding.preflight import detect_kind, ground_policy
@@ -41,6 +42,9 @@ DOMAINS = "constraints/iam.allowedPolicyMemberDomains"
 EXTERNAL_IP = "constraints/compute.vmExternalIpAccess"
 KEYS = "constraints/iam.disableServiceAccountKeyCreation"
 NODE = "projects/acme-prod"
+#: The one value the committed estate fixture denies for ``EXTERNAL_IP`` — the
+#: deny side is that constraint's whole enforcement mechanism.
+LEGACY_BOX = f"{NODE}/zones/us-central1-a/instances/legacy-box"
 
 
 @pytest.fixture(params=["installed", "builtin"], autouse=True)
@@ -497,6 +501,144 @@ def test_the_same_values_block_well_formed_still_decides(snap):
     assert not report.ok
 
 
+# -- the prior state must rest on rules it actually read ---------------------
+
+
+@pytest.mark.parametrize("record, spelling", [
+    ({"rules": []}, "present and empty"),
+    ({}, "the key removed entirely"),
+])
+def test_a_record_carrying_no_rule_abstains_instead_of_grounding(snap, record,
+                                                                 spelling):
+    """A record that records nothing is not a record of non-enforcement.
+
+    MEASURED before the fix, identically for BOTH spellings::
+
+        report.ok is True
+        report.counts() == {'grounded': 3, 'ungrounded': 0,
+                            'contradicted': 0, 'unverified': 0}
+        org_enforcement: "… this change does not stop enforcing … (it was not
+        enforced here before this change either) …"
+
+    — a positive verdict having examined zero rules, over a document that turns
+    the constraint OFF.
+    """
+    policies = dict(snap.to_dict()["org_policies"])
+    policies[f"{NODE}|{SERIAL}"] = dict(record, node=NODE, constraint=SERIAL)
+    thin = GcpSnapshot.from_dict(dict(snap.to_dict(), org_policies=policies))
+    # Absent and empty are ONE captured state once the snapshot is parsed, so
+    # both spellings are the same fact about the estate: nothing was recorded.
+    assert thin.org_policy(NODE, SERIAL)["rules"] == (), spelling
+
+    report = ground_policy(POLICIES / "org_policy_disabled.json", thin)
+    [verdict] = enforcement(report)
+    assert (verdict.status, verdict.kind, verdict.target) == \
+        ("unverified", "org_enforcement", SERIAL)
+    assert SERIAL in verdict.message and NODE in verdict.message
+    assert "not enforced here before" not in verdict.message
+    # The abstention passes the gate — but no verdict may DECIDE this document.
+    assert report.ok
+    assert not [v for v in enforcement(report)
+                if v.status in ("grounded", "contradicted")]
+
+
+@pytest.mark.parametrize("spec, spelling", [
+    ({"reset": True}, "spec.reset"),
+    ({"inheritFromParent": True}, "spec.inheritFromParent"),
+])
+def test_a_reset_over_an_enumerated_list_policy_is_a_removal(snap, spec, spelling):
+    """A prior rule enforces when it CONSTRAINS anything.
+
+    A list rule's ``enforce`` flag is always absent — the committed estate
+    fixture is asserted below — so a prior test requiring a true enforce flag
+    could not fire ANY of the three disablement spellings on ANY list
+    constraint, and the value comparison did not cover the gap because a bare
+    reset sets no values to compare.
+
+    MEASURED before the fix::
+
+        report.ok is True
+        report.counts() == {'grounded': 2, 'ungrounded': 0,
+                            'contradicted': 0, 'unverified': 0}
+        org_enforcement: "… (it was not enforced here before this change
+        either) …"
+    """
+    [captured] = snap.org_policy(NODE, EXTERNAL_IP)["rules"]
+    assert captured["enforce"] is None and captured["denied_values"]
+
+    document = {"name": f"{NODE}/policies/compute.vmExternalIpAccess",
+                "spec": dict(spec, etag="CO3B0aQGEKDkxwU=")}
+    report = ground_policy(document, snap)
+    assert not report.ok
+    [removal] = [v for v in enforcement(report) if v.status == "contradicted"]
+    assert (removal.kind, removal.target) == ("org_enforcement", EXTERNAL_IP)
+    assert spelling in removal.message and "stops enforcing" in removal.message
+    assert not [v for v in enforcement(report)
+                if "not enforced here before" in v.message]
+
+
+@pytest.mark.parametrize("rule_body, shape", [
+    ({"denyAll": False}, "an all-deny flag turned off"),
+    ({"values": {"deniedValues": []}}, "an empty denied-values list"),
+])
+def test_dropping_the_prior_denied_values_is_a_widening(snap, rule_body, shape):
+    """The deny side is compared, symmetrically with the allowed side.
+
+    The deny side is the actual enforcement mechanism of this constraint, and
+    the grounded message vouched for it. MEASURED before the fix::
+
+        {"denyAll": False}            ok=True, 4 grounded, 0 unverified
+          "… this change adds no value to the allowed values of … — it
+           narrows or leaves them as they were …"
+        {"values": {"deniedValues": []}}   ok=True, 3 grounded, 0 unverified
+          the enforcement grounded verdict and NO value verdict at all
+
+    — a positive verdict covering a side the check never read, and then silence
+    over the one thing that changed.
+    """
+    document = {"name": f"{NODE}/policies/compute.vmExternalIpAccess",
+                "spec": {"rules": [rule_body]}}
+    report = ground_policy(document, snap)
+    assert not report.ok, shape
+    [widening] = [v for v in enforcement(report) if v.status == "contradicted"]
+    assert (widening.kind, widening.target) == ("org_enforcement", EXTERNAL_IP)
+    assert LEGACY_BOX in widening.message and "denied values" in widening.message
+    assert "widened" in widening.message and NODE in widening.message
+    assert not [v for v in enforcement(report)
+                if "narrows or leaves them" in v.message]
+
+
+def test_inheriting_while_setting_a_live_rule_of_its_own_is_not_a_removal(snap):
+    """POLARITY PIN for the inherit arm's false-positive guard.
+
+    ``spec.inheritFromParent`` stops enforcement only when the policy sets NO
+    rule of its own; inheriting the parent's rules WHILE enforcing one's own is
+    the benign, common shape.
+
+    MEASURED in an isolated copy, with the ``fields["rule_index"] ==
+    NO_RULE_INDEX`` conjunct deleted from ``_disablement``: this node FAILED
+    (both documents below become a ``contradicted`` with ``ok=False``) while
+    the rest of the suite stayed green — ``893 passed, 2 skipped, 2
+    deselected``. On clean source it PASSES. The guard had no other test.
+    """
+    live = {"name": f"{NODE}/policies/compute.disableSerialPortAccess",
+            "spec": {"inheritFromParent": True, "rules": [{"enforce": True}]}}
+    report = ground_policy(live, snap)
+    assert report.ok
+    [verdict] = enforcement(report)
+    assert (verdict.status, verdict.target) == ("grounded", SERIAL)
+    assert "enforce is true" in verdict.message
+    assert not report.contradicted
+
+    listed = {"name": f"{NODE}/policies/iam.allowedPolicyMemberDomains",
+              "spec": {"inheritFromParent": True,
+                       "rules": [{"values": {"allowedValues": ["C01abcdef"]}}]}}
+    listed_report = ground_policy(listed, snap)
+    assert listed_report.ok
+    assert not [v for v in enforcement(listed_report)
+                if "stops enforcing" in v.message]
+
+
 # -- CHECK 3: hierarchy-node values ------------------------------------------
 
 
@@ -528,6 +670,37 @@ def test_a_customer_id_and_an_instance_path_emit_no_existence_claim(snap):
             f"{NODE}/zones/us-central1-a/instances/legacy-box"]}}]}})
     assert hierarchy_value_claims(instance) == []
     assert check_org_estate(context(snap, {}, claims=[opaque, instance])) == []
+
+
+def test_an_opaque_constraint_withholds_a_value_that_would_otherwise_ground(snap):
+    """POLARITY PIN for the :data:`OPAQUE_VALUE_CONSTRAINTS` carve-out.
+
+    The test above names the carve-out but cannot fail if the branch is
+    deleted: every value it carries (``C01abcdef``, ``evil.example``) already
+    fails the node pattern, so it passes through an unrelated path. This one
+    hands the opaque constraint a value that WOULD otherwise match, and the
+    control below proves the pattern really matches it — so the silence is the
+    carve-out and nothing else.
+
+    MEASURED in an isolated copy, with the ``claim.value in
+    OPAQUE_VALUE_CONSTRAINTS`` branch deleted: this node FAILED (the first half
+    emits a ``hierarchy_node_ref`` claim) while the rest of the suite stayed
+    green — ``893 passed, 2 skipped, 2 deselected``. On clean source it PASSES.
+    """
+    opaque = enforcement_claim({
+        "name": f"{NODE}/policies/iam.allowedPolicyMemberDomains",
+        "spec": {"rules": [{"values": {"allowedValues": ["folders/2"]}}]}})
+    assert opaque.value in OPAQUE_VALUE_CONSTRAINTS
+    assert opaque.fields()["allowed_values"] == ["folders/2"]
+    assert hierarchy_value_claims(opaque) == []
+    assert check_org_estate(context(snap, {}, claims=[opaque])) == []
+
+    plain = enforcement_claim({
+        "name": f"{NODE}/policies/compute.vmExternalIpAccess",
+        "spec": {"rules": [{"values": {"allowedValues": ["folders/2"]}}]}})
+    assert plain.value not in OPAQUE_VALUE_CONSTRAINTS
+    assert [(c.kind, c.value) for c in hierarchy_value_claims(plain)] == \
+        [("hierarchy_node_ref", "folders/2")]
 
 
 def test_a_hallucinated_node_value_is_ungrounded_with_a_suggestion(snap):
@@ -600,10 +773,14 @@ def test_the_builtin_backend_decides_identically(snap, name):
 
     def decide(solver):
         ctx = context(snap, document, claims, solver=solver)
-        verdicts = [v for c in claims if c.kind == "constraint_enforcement"
-                    for v in check_constraint_enforcement(c, ctx)]
-        return [(v.status, v.kind, v.target, v.message)
-                for v in verdicts + check_org_estate(ctx)]
+        # The check reads the estate record through the evidence channel, which
+        # counts what it examined; the ledger is opened by the invoker in
+        # production (registry._invoke) and so must be opened here too.
+        with evidence.ledger():
+            verdicts = [v for c in claims if c.kind == "constraint_enforcement"
+                        for v in check_constraint_enforcement(c, ctx)]
+            return [(v.status, v.kind, v.target, v.message)
+                    for v in verdicts + check_org_estate(ctx)]
 
     assert decide(get_solver(prefer="builtin")) == decide(get_solver())
     assert decide(get_solver(prefer="builtin")) == decide(None)
@@ -613,8 +790,12 @@ def test_the_check_never_reads_the_solver(snap):
     # ctx.solver is None here: a solver-free check must decide anyway.
     document = load("org_policy_disabled.json")
     claim = enforcement_claim(document)
-    [verdict] = check_constraint_enforcement(claim, context(snap, document, [claim]))
+    with evidence.ledger() as led:
+        [verdict] = check_constraint_enforcement(
+            claim, context(snap, document, [claim]))
     assert verdict.status == "contradicted"
+    # And it decided on rules it actually read: the estate record's one rule.
+    assert (led.collections_read, led.rows_examined) == (1, 1)
 
 
 def test_a_non_enforcement_claim_is_rejected(snap):
