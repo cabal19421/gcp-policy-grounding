@@ -155,6 +155,44 @@ def test_every_recorded_frozen_path_still_hashes_to_its_recorded_blob(edit):
         "the entry should be retired, not left standing as a permanent alarm.")
 
 
+# -- the residual risk the frozen register advertises a closer for -------------
+#
+# tests/spec_assertions.py names the in-repo MUTATION CONTRACT as what closes its
+# second residual risk: "a module still listed in PENDING_MODULES can later be
+# DELETED without this check firing, because a missing module is exactly the
+# pending shape." That contract exists on no branch in this repository —
+# tests/mutation_contract.py, tests/mutation_entries.py,
+# test_gcp_mutation_machinery.py and test_gcp_mutation_contract.py are nowhere —
+# so the frozen register currently advertises a safety net the tree does not have.
+#
+# The half of it that can be closed from OUTSIDE a frozen path is closed here.
+# Every module PENDING_MODULES lists is PRESENT in the integrated tree, so the
+# pending shape no longer excuses any of them: delete one and this reddens, which
+# is precisely the deletion the register cannot catch by itself. This is not the
+# contract (which pins BEHAVIOUR per family); it is the deletion guard, and it
+# needs no edit to a frozen file to hold.
+
+
+def test_no_module_the_frozen_register_pins_can_be_deleted_quietly():
+    from tests.spec_assertions import ASSERTIONS, PENDING_MODULES
+
+    missing = sorted(module for module in PENDING_MODULES
+                     if not (Path(REPO_ROOT) / module).is_file())
+    assert not missing, (
+        f"modules the spec register pins are gone from the checkout: {missing}.\n"
+        "  Every one of them is present in the integrated tree, so a missing one "
+        "is a DELETION, not the pending shape — and the frozen register cannot "
+        "tell those apart, which is the residual risk its docstring names.\n"
+        "  If a module was deliberately retired, retire its register entries with "
+        "it (that is its owner's edit, on its owner's branch), rather than "
+        "letting a frozen check go quiet.")
+    # Non-vacuity: PENDING_MODULES is not empty, and every module any entry names
+    # is here too — so this test cannot pass by having nothing to check.
+    assert PENDING_MODULES, "PENDING_MODULES is empty; this test checks nothing"
+    for entry in ASSERTIONS:
+        assert (Path(REPO_ROOT) / entry.module).is_file(), entry
+
+
 @pytest.mark.parametrize("edit", FROZEN_PATH_EDITS, ids=[e.path for e in FROZEN_PATH_EDITS])
 def test_every_frozen_path_edit_says_why_it_is_open_and_what_closes_it(edit):
     assert len(edit.why_open.split()) >= 30, (
