@@ -361,6 +361,9 @@ FIREWALL = Capability(
     # rule is scoped to 10/8. The near-twin is that same estate rule.
     bad=lambda: (_firewall(["0.0.0.0/0"]), estate_snapshot()),
     good=lambda: (_firewall(["10.0.0.0/8"]), estate_snapshot()),
+    guts=(("gcp_grounding.fw_checks", "CLAIM_CHECKS"),
+          ("gcp_grounding.fw_checks", "PAIR_CHECKS"),
+          ("gcp_grounding.fw_estate", "DOCUMENT_CHECKS")),
 )
 
 HIER_FIREWALL = Capability(
@@ -371,6 +374,7 @@ HIER_FIREWALL = Capability(
     # priority 100 re-opens tcp/3389, which org-baseline denies at 1000.
     bad=lambda: (_firewall_policy_rule(["0.0.0.0/0"]), estate_snapshot()),
     good=lambda: (_firewall_policy_rule(["10.0.0.0/8"]), estate_snapshot()),
+    guts=(("gcp_grounding.hfw_checks", "DOCUMENT_CHECKS"),),
 )
 
 ARMOR = Capability(
@@ -381,6 +385,7 @@ ARMOR = Capability(
     # An allow at priority 100 in front of the captured deny(403) at 1000.
     bad=lambda: (_security_policy(["0.0.0.0/0"]), estate_snapshot()),
     good=lambda: (_security_policy(["10.0.0.0/8"]), estate_snapshot()),
+    guts=(("gcp_grounding.armor_checks", "DOCUMENT_CHECKS"),),
 )
 
 VPCSC = Capability(
@@ -394,6 +399,8 @@ VPCSC = Capability(
     bad=lambda: (_perimeter(["bigquery.googleapis.com"]), estate_snapshot()),
     good=lambda: (_perimeter(["storage.googleapis.com",
                               "bigquery.googleapis.com"]), estate_snapshot()),
+    guts=(("gcp_grounding.vpcsc_checks", "DOCUMENT_CHECKS"),
+          ("gcp_grounding.vpcsc_checks", "PAIR_CHECKS")),
 )
 
 PUBLIC_PRINCIPAL = Capability(
@@ -403,6 +410,8 @@ PUBLIC_PRINCIPAL = Capability(
     bad=lambda: (_iam_policy("roles/editor", "allUsers"), estate_snapshot()),
     good=lambda: (_iam_policy("roles/editor", "group:platform-sre@acme.example"),
                   estate_snapshot()),
+    guts=(("gcp_grounding.iam_checks", "CLAIM_CHECKS"),
+          ("gcp_grounding.iam_checks", "DOCUMENT_CHECKS")),
 )
 
 ORG_ENFORCEMENT = Capability(
@@ -413,6 +422,8 @@ ORG_ENFORCEMENT = Capability(
     # unenforced is the regression. The near-twin leaves it enforced.
     bad=lambda: (_org_enforcement(False), estate_snapshot()),
     good=lambda: (_org_enforcement(True), estate_snapshot()),
+    guts=(("gcp_grounding.org_checks", "CLAIM_CHECKS"),
+          ("gcp_grounding.org_checks", "DOCUMENT_CHECKS")),
 )
 
 #: Every declared capability, by name.

@@ -305,17 +305,27 @@ def test_every_probe_is_a_plain_bool_and_a_reason(cap):
         assert "held" in result.reason or "could not be grounded" in result.reason
 
 
-def test_a_dead_domain_probe_reports_what_it_measured():
+def test_a_dead_domain_probe_reports_what_it_measured(monkeypatch):
     """The design's worked example: the perimeter fixture produced no vpcsc
     verdict, and the firewall plan's report held only a grounded
     ``resource_type`` — an incidental vocabulary hit, which is precisely what
-    must not read as a live domain."""
-    firewall = capabilities.probe(capabilities.FIREWALL)
+    must not read as a live domain.
+
+    Both families are LIVE in the integrated tree, so the example is measured in
+    its EXECUTED form: each family's dispatch tables are emptied first, which
+    leaves exactly the report the worked example describes — the module still on
+    disk, the vocabulary untouched, and nothing but an incidental hit in the
+    verdicts. Every assertion below is the one the branch that wrote this made,
+    against the same reason strings.
+    """
+    gut(monkeypatch, capabilities.FIREWALL)
+    firewall = measure(capabilities.FIREWALL)
     assert firewall.live is False
     assert "resource_type" in firewall.reason
     assert "firewall_rule" in firewall.reason
 
-    perimeter = capabilities.probe(capabilities.VPCSC)
+    gut(monkeypatch, capabilities.VPCSC)
+    perimeter = measure(capabilities.VPCSC)
     assert perimeter.live is False
     assert "perimeter_config" in perimeter.reason
 
