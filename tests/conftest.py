@@ -199,6 +199,19 @@ def _scrub_sec_llm_env():
         os.environ.pop(name, None)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _apply_contract_removal():
+    """Apply the mutation contract's ``GCP_TEST_REMOVAL=<id>`` removal, when a
+    run names one, FROM HERE — so it lands AFTER collection: one reaching the
+    tree first skips its own witnesses, and a test that never ran is never a
+    kill. ``monkeypatch`` undoes it: offline, reversible, no debris."""
+    from tests.mutation_contract import apply_removal
+
+    wanted = os.environ.get("GCP_TEST_REMOVAL", "")
+    with pytest.MonkeyPatch.context() as mp:
+        yield apply_removal(wanted, mp) if wanted else None
+
+
 @pytest.fixture(scope="session")
 def subprocess_budget():
     """The suite-wide subprocess spawn counter. Every spawn helper in
@@ -206,8 +219,12 @@ def subprocess_budget():
     asserts the total stayed under
     :data:`SubprocessBudget.MAX_SUBPROCESS_SPAWNS`, so an unbounded run cannot
     silently turn the sub-second oracle into a minutes-long one that stops being
-    run."""
-    budget = SubprocessBudget()
+    run. The mutation contract gets a ceiling OF ITS OWN, scaled to its register
+    by ``contract_spawn_ceiling``: its machinery marks every child it spawns, so
+    those land there and all else on the untouched suite-wide one."""
+    from tests.mutation_contract import contract_spawn_ceiling
+
+    budget = SubprocessBudget(max_marked=contract_spawn_ceiling())
     yield budget
     budget.check()
 
