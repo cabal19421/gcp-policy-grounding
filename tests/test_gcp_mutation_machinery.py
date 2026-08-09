@@ -274,16 +274,17 @@ def test_a_witness_may_name_any_test_module_the_repo_owns_and_no_other_file():
 def test_the_contract_spawns_land_on_a_ceiling_of_its_own(tmp_path, subprocess_budget):
     """BLOCKER TWO, cleared: the suite's 450 measures 447 in a full run -- THREE
     spawns of headroom against an ACTIVE entry's FOUR -- so the machinery's
-    children are MARKED and counted apart, EXACTLY. Zero entries cost ZERO, and
-    EVERY child is marked: counting some and losing others is the leak."""
+    children are MARKED and counted apart, EXACTLY, on a ceiling that SCALES
+    with the register (controls alone at zero). The accounting is proved on the
+    synthetic entry so the register executes in ONE place, the flip test; a
+    register pinned EMPTY here was seed-a's third measured blocker. EVERY child
+    is marked: counting some and losing others is the leak."""
     budget, live = subprocess_budget, dict(
         present=lambda o: owner_is_present(o, REPO_ROOT),
         collects=collects_in(REPO_ROOT), parent=tmp_path)
     before = budget.marked_total
-    assert contract_failures(register(), REPO_ROOT, **live) == ([], []), "zero entries"
-    assert budget.marked_total == before, "zero entries, and so ZERO marked spawns"
     assert contract_failures([GOOD], REPO_ROOT, **live)[0] == []
     assert budget.marked_total - before == SPAWNS_PER_ENTRY, budget.marked
-    assert contract_spawn_ceiling() == CONTRACT_CONTROL_SPAWNS == budget.max_marked, (
-        "an empty register costs the controls alone, and the fixture pins it")
+    assert contract_spawn_ceiling() == budget.max_marked >= CONTRACT_CONTROL_SPAWNS, (
+        "the fixture pins the register-scaled ceiling, controls alone at zero")
     assert not [k for k in budget.counts if k.startswith("tests.mutation_contract")]
