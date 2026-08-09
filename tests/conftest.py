@@ -219,8 +219,12 @@ def subprocess_budget():
     asserts the total stayed under
     :data:`SubprocessBudget.MAX_SUBPROCESS_SPAWNS`, so an unbounded run cannot
     silently turn the sub-second oracle into a minutes-long one that stops being
-    run."""
-    budget = SubprocessBudget()
+    run. The mutation contract gets a ceiling OF ITS OWN, scaled to its register
+    by ``contract_spawn_ceiling``: its machinery marks every child it spawns, so
+    those land there and all else on the untouched suite-wide one."""
+    from tests.mutation_contract import contract_spawn_ceiling
+
+    budget = SubprocessBudget(max_marked=contract_spawn_ceiling())
     yield budget
     budget.check()
 

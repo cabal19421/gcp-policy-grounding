@@ -219,12 +219,8 @@ def collected_node_ids(root, label: str = "tests.mutation_contract") -> frozense
     time: collecting a tree while it is itself collected is a fork bomb."""
     key = str(Path(root).resolve())
     if key not in _COLLECTED:
-        from tests.agentic.hookrunner import current_budget
-
-        current_budget().increment(label)
-        done = subprocess.run(
-            [sys.executable, "-B", "-m", "pytest", "--collect-only", "-q", "tests"],
-            cwd=key, capture_output=True, text=True)
+        done = _spawn([sys.executable, "-B", "-m", "pytest", "--collect-only",
+                       "-q", "tests"], label, cwd=key, text=True)
         if done.returncode != 0:
             raise ContractError(f"collect-only under {key} exited {done.returncode}:\n"
                                 + done.stdout[-1500:])
@@ -315,11 +311,11 @@ def materialise(root, parent, name: str) -> Path:
     discoverable state -- the copy's own pyproject.toml stops the walk."""
     dest = Path(parent) / name
     dest.mkdir(parents=True)
-    archive = subprocess.run(["git", "-C", str(root), "archive", "HEAD"],
-                             capture_output=True)
+    copier = "tests.mutation_contract.materialise"
+    archive = _spawn(["git", "-C", str(root), "archive", "HEAD"], copier)
     if archive.returncode != 0:
         raise ContractError(f"git archive HEAD: {archive.stderr.decode()[-300:]}")
-    subprocess.run(["tar", "-x", "-C", str(dest)], input=archive.stdout, check=True)
+    _spawn(["tar", "-x", "-C", str(dest)], copier, input=archive.stdout, check=True)
     return dest
 
 
@@ -365,12 +361,8 @@ def parse_outcomes(report: str, nodes) -> dict:
 def run_nodes(copy, nodes) -> dict:
     """``python -B -m pytest -q -rA <the must_fail node ids>``, *copy* as cwd,
     counted on gx-hookrunner-budget's subprocess budget."""
-    from tests.agentic.hookrunner import current_budget
-
-    current_budget().increment("tests.mutation_contract.run_nodes")
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-    done = subprocess.run([sys.executable, "-B", "-m", "pytest", "-q", "-rA", *nodes],
-                          cwd=str(copy), capture_output=True, text=True, env=env)
+    done = _spawn([sys.executable, "-B", "-m", "pytest", "-q", "-rA", *nodes],
+                  "tests.mutation_contract.run_nodes", cwd=str(copy), text=True)
     return parse_outcomes(done.stdout, nodes)
 
 
@@ -428,11 +420,7 @@ INERT = Removal(
 def apply_removal(removal_id: str, monkeypatch) -> Removal:
     """Apply the named removal, read BY STRING as :func:`register` reads the
     mutations. From the session fixture, so it lands AFTER collection."""
-    try:
-        extra = getattr(import_module("tests.mutation_entries"), "REMOVALS", ())
-    except ModuleNotFoundError:
-        extra = ()
-    found = {r.id: r for r in (INERT, *extra)}
+    found = {r.id: r for r in (INERT, *removal_register())}
     if removal_id not in found:
         raise ContractError(f"GCP_TEST_REMOVAL={removal_id}: no such Removal "
                             f"in {sorted(found)}")
@@ -451,7 +439,8 @@ def removal_failure(removal: Removal, outcomes) -> str:
 
 
 def owner_test_modules() -> dict:
-    """Owner -> the ONE test module its witnesses may name, DERIVED and never
+    """Owner -> its PRIMARY test module; a witness may name any other module
+    :func:`repo_test_modules` lists too. The mapping is DERIVED and never
     declared: off its FROZEN spec_assertions node id, else by convention."""
     from tests.spec_assertions import ASSERTIONS
 
@@ -463,10 +452,11 @@ def owner_test_modules() -> dict:
 def contract_failures(entries, root, *, present, collects, parent=None):
     """THE GATE, LIVE. Per entry THE SHAPE CHECK -- in BOTH states, an AWAITING
     entry being shape-checked, never excused: owner a declared task, a witness
-    at least, each a node id in the OWNER'S OWN test module, the rewrite not
+    at least, each a node id in a test module THIS REPO OWNS, the rewrite not
     inert -- then its state COMPUTED from the tree, EXECUTION of every ACTIVE
     one, then floor and pin, the states carrying the debt to PRINT."""
     table, bad, states = owner_test_modules(), [], []
+    witnessable = repo_test_modules(root)
     for e in entries:
         mine = table.get(e.owner)
         bad += [why for why, ok in (
@@ -474,12 +464,66 @@ def contract_failures(entries, root, *, present, collects, parent=None):
             (f"{e.id}: must_fail is EMPTY, so nothing witnesses the kill", e.must_fail),
             (f"{e.id}: before == after, so nothing is mutated", e.before != e.after),
         ) if not ok]
-        bad += [f"{e.id}: {n!r} is not a pytest node id in {e.owner}'s own {mine}"
-                for n in e.must_fail
-                if n.partition("::")[0] != mine or not n.partition("::")[2]]
+        bad += [f"{e.id}: {n!r} is not a pytest node id in {mine} or another "
+                "test module this repo owns" for n in e.must_fail
+                if not n.partition("::")[2]
+                or n.partition("::")[0] not in witnessable | {mine}]
         states.append(state_of(e, root, present=present, collects=collects))
         if states[-1].state == ACTIVE and parent is not None:
             bad += [f for f in (execute(e, root, parent),) if f]
     presence = {e.owner: present(e.owner) for e in entries}
     bad += [f for f in (floor_failure(states, presence), awaiting_overflow(states)) if f]
     return bad, states
+
+
+# -- SLICE 5. Cross-module witnesses, and a spawn budget of the contract's own.
+# MEASURED ``git diff``, as slices 1-4 recorded theirs: 15,956 characters.
+
+
+def repo_test_modules(root) -> frozenset:
+    """Every ``tests/test_gcp_*.py`` module THIS REPO OWNS -- what a witness may
+    name past its owner's primary one. Nothing else loosens: the node must still
+    COLLECT and report FAILED, the guard the filename never was."""
+    return frozenset(f"tests/{p.name}"
+                     for p in (Path(root) / "tests").glob("test_gcp_*.py"))
+
+
+def removal_register() -> tuple:
+    """The ``Removal`` entries, read BY STRING as :func:`register` reads the
+    mutations; the INERT control is this module's and not one of them."""
+    try:
+        entries = import_module("tests.mutation_entries")
+    except ModuleNotFoundError:
+        return ()
+    return tuple(getattr(entries, "REMOVALS", ()))
+
+
+#: The mark every child this machinery spawns carries, so the budget books it
+#: on the CONTRACT'S ceiling and not the suite's. One door, :func:`_spawn`.
+CHILD_MARK = "GCP_MUTATION_CONTRACT_CHILD"
+
+#: What ONE ACTIVE entry costs, MEASURED: the copy's ``git archive`` and its
+#: ``tar``, the UNMUTATED control run, the mutant run. The design's
+#: ``2 * active_entries`` counts the pytest pair; the copy's two are children
+#: too, and losing them is the leak this accounting makes loud.
+SPAWNS_PER_ENTRY = 4
+#: The self-test's own fixed cost: its synthetic executions, its bare
+#: ``materialise``, its inert removal, the cached collect. A PIN as the 450 is.
+CONTRACT_CONTROL_SPAWNS = 16
+
+
+def contract_spawn_ceiling() -> int:
+    """SCALED TO THE REGISTER, never flat headroom, so a per-entry cost
+    regression fails LOUDLY at teardown -- one ``-rA`` run per named
+    ``Removal``, and over zero entries the controls alone."""
+    return (SPAWNS_PER_ENTRY * len(register()) + len(removal_register())
+            + CONTRACT_CONTROL_SPAWNS)
+
+
+def _spawn(argv, label: str, **kwargs):
+    """Run ONE marked child and book it on :func:`contract_spawn_ceiling`."""
+    from tests.agentic.hookrunner import current_budget
+
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", **{CHILD_MARK: "1"})
+    current_budget().increment(label, env=env)
+    return subprocess.run(argv, capture_output=True, env=env, **kwargs)
