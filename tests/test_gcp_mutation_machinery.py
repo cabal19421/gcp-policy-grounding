@@ -1,9 +1,12 @@
-"""The self-tests of the anchor machinery slice 1 lands.
+"""The self-tests of the anchor machinery, through slice 3's execution engine.
 
 Each makes the checker FAIL on something that must never pass: an ``after`` that
-equals its ``before``, an ambiguous anchor, a rewrite escaping its own scope or
-changing more than one line. The register gate, the outcome reader and the
-presence arms are slices 2 and 3, enumerated in the manifest.
+equals its ``before``, an ambiguous anchor, a rewrite escaping its scope or
+changing more than one line, an outcome that is not FAILED, a rewrite leaving
+the file byte-identical. SLICE 3 DOES NOT FLIP ENFORCEMENT LIVE and says so
+rather than half-arm it: the shape gate, the ``Removal`` seam and the flip stay
+in tests/mutation_contract_manifest.json, REWRITTEN and NOT deleted because they
+remain. Slice 3 measured 15,999 ``git diff`` characters.
 """
 
 from __future__ import annotations
@@ -14,9 +17,10 @@ import pytest
 
 from tests.agentic.env import REPO_ROOT
 from tests.mutation_contract import (
-    ACTIVE, AWAITING, ContractError, Mutation, awaiting_overflow, collects_in,
-    floor_failure, mutate, owner_is_present, owner_signals, present_owners,
-    register, resolve_span, state_of, strip_parametrization)
+    ACTIVE, AWAITING, ContractError, Mutation, apply_to_copy, awaiting_overflow,
+    collects_in, execute, floor_failure, kill_failure, materialise, mutate,
+    owner_is_present, owner_signals, parse_outcomes, present_owners, register,
+    resolve_span, state_of, strip_parametrization)
 
 SAMPLE = '''\
 from dataclasses import dataclass
@@ -143,3 +147,41 @@ def test_a_state_is_computed_from_the_tree_and_is_only_ever_one_of_two(
     assert bool(awaiting_overflow([state])) is bool(unresolved), "the pin bounds it"
     assert not floor_failure([], {}) and not awaiting_overflow([]), "zero entries"
     assert register() == (), "EMPTY until seed-a lands"
+
+
+# -- SLICE 3: the execution engine. NO gate is armed and none is written. ----
+
+#: The node the mutant below must drive RED: slice 1's own line-count guard.
+REFUSAL = ("tests/test_gcp_mutation_machinery.py::"
+           "test_the_checker_refuses_an_anchor_it_cannot_resolve[line count]")
+
+
+def test_the_outcome_reader_reads_all_four_shapes_and_names_the_skip_inversion():
+    """READ THE OUTCOME OF EVERY NAMED NODE EXPLICITLY. ``-rA`` prints a skip by
+    file and line, and a skip IS the removal-before-collection inversion."""
+    report = ("PASSED tests/a.py::test_p\nFAILED tests/a.py::test_f\n"
+              "ERROR tests/a.py::test_e\nSKIPPED [1] tests/a.py:12: a removal\n")
+    nodes = ("tests/a.py::test_p", "tests/a.py::test_f", "tests/a.py::test_e",
+             "tests/a.py::test_s")
+    got = parse_outcomes(report, nodes)
+    assert list(got.values()) == ["PASSED", "FAILED", "ERROR", "SKIPPED"]
+    with pytest.raises(ContractError, match="NO outcome"):
+        parse_outcomes(report, ("tests/b.py::test_never_ran",))
+    lived = kill_failure(replace(SYNTH, must_fail=nodes), got)
+    assert "=PASSED" in lived and "=ERROR" in lived and "ordering inversion" in lived
+    assert kill_failure(SYNTH, dict.fromkeys(SYNTH.must_fail, "FAILED")) == ""
+    assert "must_fail is EMPTY" in kill_failure(replace(SYNTH, must_fail=()), {})
+
+
+def test_a_mutant_is_executed_in_a_scratch_copy_and_its_named_node_must_FAIL(tmp_path):
+    """The whole chain for real over a SYNTHETIC entry -- no gate calls this yet:
+    a FRESH ``git archive HEAD`` copy, the UNMUTATED copy asserted green BEFORE
+    any outcome is read, the sha256 proving the rewrite landed, FAILED off -rA."""
+    live = replace(SYNTH, id="selftest-executed", enclosing="mutate",
+                   before="if len(clean_lines) != len(mutant_lines):",
+                   after="if False:", must_fail=(REFUSAL,))
+    assert execute(live, REPO_ROOT, tmp_path) == "", "the mutant must be KILLED"
+    copy = materialise(REPO_ROOT, tmp_path, "sha256-arm")
+    apply_to_copy(copy, live)
+    with pytest.raises(ContractError, match="occurs 0 times"):
+        apply_to_copy(copy, live)

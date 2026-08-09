@@ -1,27 +1,28 @@
 """The in-repo mutation contract: the entry type and its content anchor.
 
-SLICE 1 OF 3 -- the portion every later item calls. What remains is enumerated,
-per obligation, in tests/mutation_contract_manifest.json: slice 2's only work
-order, where an item left out is an obligation silently deleted.
+SLICE 3 -- the EXECUTION ENGINE, and NOT the flip. Its 13 manifest items
+measured 24,609 diff characters of content ALONE against a binding 16,000, so
+this slice lands the portion that fits and REWRITES the manifest instead of
+deleting it, because items remain -- an emptied or deleted manifest here is the
+green reading hollow this wave exists to correct. Under house rule 4 that is an
+amendment request: the oracle's third conjunct is unmet, and so its second.
+ENFORCEMENT THEREFORE STAYS INERT, A STAGING DEVICE AND NEVER AN OUTCOME: no
+gate is armed or written, no register-wide assertion executes a ``Mutation``,
+the register is empty and the AWAITING pin has not risen. :func:`execute` is
+the engine such a gate calls, run only by this module's OWN self-tests.
 
-ENFORCEMENT IS INERT HERE, AS A STAGING DEVICE AND NEVER AS AN OUTCOME: nothing
-executes a ``Mutation``, no gate is armed and no register is read. Slice 3 flips
-it live; arming one arm and leaving another unwritten would be the HALF-ARMED
-GATE no slice may produce. There are EXACTLY TWO STATES when it does -- AWAITING
-and ACTIVE, never a third -- and :func:`mutate` RAISES rather than reporting, so
-the slice-2 caller computing the state, over signals INJECTED with NO default
-that answers True, can never read an unresolved anchor as a resolved one.
-
-MEASURED DIFF: slice 1 15,937 characters under ``gitutil.diff_text`` (``git
-diff`` reproduces it), slice 2 15,958. The manifest is now SLICE 3's work order.
+MEASURED ``git diff``, which reproduces ``gitutil.diff_text`` exactly:
+slice 1 15,937 characters, slice 2 15,958, slice 3 15,999.
 """
 
 from __future__ import annotations
 
 import ast
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from hashlib import sha256
 from importlib import import_module
 from pathlib import Path
 
@@ -292,3 +293,102 @@ def register() -> tuple:
     except ModuleNotFoundError:
         return ()
     return tuple(getattr(entries, "ENTRIES", ()))
+
+
+# -- SLICE 3. The execution engine. NO gate is armed and none is written. ---
+
+#: Every outcome ``-rA`` prints, and the only answers :func:`parse_outcomes`
+#: returns. ONLY FAILED is ever a kill.
+OUTCOMES = ("PASSED", "FAILED", "ERROR", "SKIPPED", "XFAIL", "XPASS")
+
+
+def materialise(root, parent, name: str) -> Path:
+    """A FRESH scratch copy PER ENTRY: ``git archive HEAD`` piped into ``tar
+    -x``, so uncommitted work never leaks in, under a *parent* holding no
+    discoverable state -- the copy's own pyproject.toml stops the walk."""
+    dest = Path(parent) / name
+    dest.mkdir(parents=True)
+    archive = subprocess.run(["git", "-C", str(root), "archive", "HEAD"],
+                             capture_output=True)
+    if archive.returncode != 0:
+        raise ContractError(f"git archive HEAD: {archive.stderr.decode()[-300:]}")
+    subprocess.run(["tar", "-x", "-C", str(dest)], input=archive.stdout, check=True)
+    return dest
+
+
+def apply_to_copy(copy, entry: Mutation) -> int:
+    """Rewrite the one named site in *copy* and PROVE it changed: the mutant's
+    sha256 must differ from the clean one's, else the rewrite did nothing."""
+    path = Path(copy) / entry.module
+    clean = path.read_bytes()
+    mutated, line = mutate(clean.decode("utf-8"), entry)
+    path.write_text(mutated, encoding="utf-8")
+    if sha256(path.read_bytes()).hexdigest() == sha256(clean).hexdigest():
+        raise ContractError(f"{entry.id}: {entry.module} is unchanged by the rewrite")
+    return line
+
+
+def parse_outcomes(report: str, nodes) -> dict:
+    """THE OUTCOME OF EVERY NAMED NODE, READ EXPLICITLY off ``-rA`` and typed to
+    :data:`OUTCOMES`. A skip prints as ``file:line``, never as a node id, so a
+    named node with a skip in its file reads SKIPPED; no outcome at all RAISES."""
+    seen, skipped = {}, set()
+    for raw in report.splitlines():
+        head, _, rest = raw.strip().partition(" ")
+        if head not in OUTCOMES or not rest:
+            continue
+        if head == "SKIPPED":
+            bits = rest.split()
+            skipped.add(bits[1 if bits[0].startswith("[") else 0].partition(":")[0])
+        else:
+            seen[rest.partition(" - ")[0].strip()] = head
+    out = {}
+    for node in nodes:
+        hits = [v for k, v in seen.items()
+                if k == node or strip_parametrization(k) == node]
+        if hits:
+            out[node] = next((h for h in hits if h != "FAILED"), "FAILED")
+        elif node.partition("::")[0] in skipped:
+            out[node] = "SKIPPED"
+        else:
+            raise ContractError(f"{node}: -rA printed NO outcome; it never ran")
+    return out
+
+
+def run_nodes(copy, nodes) -> dict:
+    """``python -B -m pytest -q -rA <the must_fail node ids>``, *copy* as cwd,
+    counted on gx-hookrunner-budget's subprocess budget."""
+    from tests.agentic.hookrunner import current_budget
+
+    current_budget().increment("tests.mutation_contract.run_nodes")
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    done = subprocess.run([sys.executable, "-B", "-m", "pytest", "-q", "-rA", *nodes],
+                          cwd=str(copy), capture_output=True, text=True, env=env)
+    return parse_outcomes(done.stdout, nodes)
+
+
+def kill_failure(entry, outcomes) -> str:
+    """ONLY FAILED SATISFIES A ``must_fail``, and an EMPTY ``must_fail`` is
+    refused BEFORE ANY OUTCOME IS READ: a witness-less entry never reads green."""
+    if not entry.must_fail:
+        return f"{entry.id}: must_fail is EMPTY, so no node can witness the kill"
+    lived = sorted(f"{n}={outcomes.get(n, 'MISSING')}" for n in entry.must_fail
+                   if outcomes.get(n) != "FAILED")
+    if lived and "SKIPPED" in outcomes.values():
+        lived.append("a SKIPPED node means the removal reached the tree BEFORE "
+                     "collection -- the ordering inversion, and never a kill")
+    return "" if not lived else f"{entry.id}: SURVIVED -- " + ", ".join(lived)
+
+
+def execute(entry: Mutation, root, parent) -> str:
+    """Materialise, ASSERT THE UNMUTATED COPY GREEN, then mutate and re-run: an
+    outcome read off a copy that was already red proves nothing about a mutant."""
+    if not entry.must_fail:
+        return kill_failure(entry, {})
+    copy = materialise(root, parent, entry.id)
+    red = sorted(n for n, got in run_nodes(copy, entry.must_fail).items()
+                 if got != "PASSED")
+    if red:
+        raise ContractError(f"{entry.id}: the UNMUTATED copy is not green: {red}")
+    apply_to_copy(copy, entry)
+    return kill_failure(entry, run_nodes(copy, entry.must_fail))
