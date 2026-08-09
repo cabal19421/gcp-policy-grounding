@@ -6,13 +6,15 @@ this slice lands the portion that fits and REWRITES the manifest instead of
 deleting it, because items remain -- an emptied or deleted manifest here is the
 green reading hollow this wave exists to correct. Under house rule 4 that is an
 amendment request: the oracle's third conjunct is unmet, and so its second.
-ENFORCEMENT THEREFORE STAYS INERT, A STAGING DEVICE AND NEVER AN OUTCOME: no
-gate is armed or written, no register-wide assertion executes a ``Mutation``,
-the register is empty and the AWAITING pin has not risen. :func:`execute` is
-the engine such a gate calls, run only by this module's OWN self-tests.
+SLICE 4 THEN LANDED WHAT THAT MANIFEST LISTED AND FLIPPED ENFORCEMENT LIVE, and
+deleted it, nothing it named being outstanding: the shape gate, the ``Removal``
+seam, and :func:`contract_failures` computing every state from the tree and
+EXECUTING every ACTIVE entry -- green over the register's zero entries.
 
-MEASURED ``git diff``, which reproduces ``gitutil.diff_text`` exactly:
-slice 1 15,937 characters, slice 2 15,958, slice 3 15,999.
+MEASURED ``git diff``, reproducing ``gitutil.diff_text`` exactly: slice 1
+15,937 characters, slice 2 15,958, slice 3 15,999, slice 4 17,897 -- OVER the
+16,000 and RECORDED, not hidden: deleting the manifest costs 3,533, so no
+further split both fits and closes the oracle's third conjunct.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import ast
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 from importlib import import_module
@@ -57,6 +60,9 @@ class Mutation:
     behaviour: str
     must_fail: tuple[str, ...]
     owner: str
+    #: THE LAST RESORT after the widening: which occurrence, 1-based, of a
+    #: ``before`` no slice makes unique; 0 demands exactly one.
+    occurrence: int = 0
 
 
 def _span(node: ast.AST) -> tuple[int, int]:
@@ -118,10 +124,11 @@ def mutate(source: str, entry: Mutation) -> tuple[str, int]:
     scope = "".join(lines[start - 1 : end])
     hits = scope.count(entry.before)
     where = f"{entry.enclosing} (lines {start}-{end}, hint {entry.line_hint})"
-    if hits != 1:
-        raise ContractError(f"{entry.id}: `before` occurs {hits} times in {where}; "
-                            "widen the slice over more lines")
-    pos = scope.find(entry.before)
+    if not (1 <= entry.occurrence <= hits if entry.occurrence else hits == 1):
+        raise ContractError(f"{entry.id}: `before` occurs {hits} times in {where}, "
+                            f"occurrence {entry.occurrence}; widen the slice")
+    starts = [i for i in range(len(scope)) if scope.startswith(entry.before, i)]
+    pos = starts[(entry.occurrence or 1) - 1]
     mutated = ("".join(lines[: start - 1])
                + scope[:pos] + entry.after + scope[pos + len(entry.before) :]
                + "".join(lines[end:]))
@@ -392,3 +399,87 @@ def execute(entry: Mutation, root, parent) -> str:
         raise ContractError(f"{entry.id}: the UNMUTATED copy is not green: {red}")
     apply_to_copy(copy, entry)
     return kill_failure(entry, run_nodes(copy, entry.must_fail))
+
+
+# -- SLICE 4. The shape gate, the ``Removal`` seam, and THE FLIP. -----------
+
+
+@dataclass(frozen=True)
+class Removal:
+    """TAKE ``subject`` AWAY, prove a test notices. ``family`` keys FAMILY_KINDS;
+    ``apply`` removes IN PROCESS by monkeypatch, never by renaming a file."""
+
+    id: str
+    subject: str
+    family: str
+    apply: Callable[..., None]
+    must_fail: tuple[str, ...]
+
+
+#: DELIBERATELY INERT: it takes NOTHING away, so its witness PASSES -- the
+#: negative control the checker must FAIL, and never a must-kill.
+INERT = Removal(
+    id="selftest-inert-removal", subject="nothing at all", family="iam",
+    apply=lambda monkeypatch: None,
+    must_fail=("tests/test_gcp_mutation_machinery.py::test_a_decorated_"
+               "definitions_span_starts_at_its_first_decorator",))
+
+
+def apply_removal(removal_id: str, monkeypatch) -> Removal:
+    """Apply the named removal, read BY STRING as :func:`register` reads the
+    mutations. From the session fixture, so it lands AFTER collection."""
+    try:
+        extra = getattr(import_module("tests.mutation_entries"), "REMOVALS", ())
+    except ModuleNotFoundError:
+        extra = ()
+    found = {r.id: r for r in (INERT, *extra)}
+    if removal_id not in found:
+        raise ContractError(f"GCP_TEST_REMOVAL={removal_id}: no such Removal "
+                            f"in {sorted(found)}")
+    found[removal_id].apply(monkeypatch)
+    return found[removal_id]
+
+
+def removal_failure(removal: Removal, outcomes) -> str:
+    """A family outside FAMILY_KINDS names a domain owning no verdict kind;
+    past that the SAME kill rule, so an inert removal reads SURVIVED."""
+    from tests.agentic.asserts import FAMILY_KINDS
+
+    if removal.family not in FAMILY_KINDS:
+        return f"{removal.id}: family {removal.family!r} is not one of FAMILY_KINDS"
+    return kill_failure(removal, outcomes)
+
+
+def owner_test_modules() -> dict:
+    """Owner -> the ONE test module its witnesses may name, DERIVED and never
+    declared: off its FROZEN spec_assertions node id, else by convention."""
+    from tests.spec_assertions import ASSERTIONS
+
+    frozen = {a.id: a for a in ASSERTIONS}
+    return {o: frozen[i].node_id.partition("::")[0] for o, i in _REGISTERED.items()} | {
+        o: "tests/test_gcp_" + Path(m).name for o, (m, _) in _SLICES.items()}
+
+
+def contract_failures(entries, root, *, present, collects, parent=None):
+    """THE GATE, LIVE. Per entry THE SHAPE CHECK -- in BOTH states, an AWAITING
+    entry being shape-checked, never excused: owner a declared task, a witness
+    at least, each a node id in the OWNER'S OWN test module, the rewrite not
+    inert -- then its state COMPUTED from the tree, EXECUTION of every ACTIVE
+    one, then floor and pin, the states carrying the debt to PRINT."""
+    table, bad, states = owner_test_modules(), [], []
+    for e in entries:
+        mine = table.get(e.owner)
+        bad += [why for why, ok in (
+            (f"{e.id}: owner {e.owner!r} is no task this document declares", mine),
+            (f"{e.id}: must_fail is EMPTY, so nothing witnesses the kill", e.must_fail),
+            (f"{e.id}: before == after, so nothing is mutated", e.before != e.after),
+        ) if not ok]
+        bad += [f"{e.id}: {n!r} is not a pytest node id in {e.owner}'s own {mine}"
+                for n in e.must_fail
+                if n.partition("::")[0] != mine or not n.partition("::")[2]]
+        states.append(state_of(e, root, present=present, collects=collects))
+        if states[-1].state == ACTIVE and parent is not None:
+            bad += [f for f in (execute(e, root, parent),) if f]
+    presence = {e.owner: present(e.owner) for e in entries}
+    bad += [f for f in (floor_failure(states, presence), awaiting_overflow(states)) if f]
+    return bad, states

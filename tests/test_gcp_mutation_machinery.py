@@ -3,10 +3,10 @@
 Each makes the checker FAIL on something that must never pass: an ``after`` that
 equals its ``before``, an ambiguous anchor, a rewrite escaping its scope or
 changing more than one line, an outcome that is not FAILED, a rewrite leaving
-the file byte-identical. SLICE 3 DOES NOT FLIP ENFORCEMENT LIVE and says so
-rather than half-arm it: the shape gate, the ``Removal`` seam and the flip stay
-in tests/mutation_contract_manifest.json, REWRITTEN and NOT deleted because they
-remain. Slice 3 measured 15,999 ``git diff`` characters.
+the file byte-identical, a mis-shaped entry, an inert ``Removal``. SLICE 4 THEN
+FLIPPED ENFORCEMENT LIVE over whatever the register holds -- green over its zero
+entries today, and the oracle every seeding task validates against -- and
+DELETED the manifest, nothing it listed being outstanding.
 """
 
 from __future__ import annotations
@@ -20,7 +20,9 @@ from tests.mutation_contract import (
     ACTIVE, AWAITING, ContractError, Mutation, apply_to_copy, awaiting_overflow,
     collects_in, execute, floor_failure, kill_failure, materialise, mutate,
     owner_is_present, owner_signals, parse_outcomes, present_owners, register,
-    resolve_span, state_of, strip_parametrization)
+    resolve_span, state_of, strip_parametrization,
+    AWAITING_MAX, INERT, apply_removal, contract_failures, removal_failure, run_nodes)
+from tests.spec_assertions import ASSERTIONS
 
 SAMPLE = '''\
 from dataclasses import dataclass
@@ -146,7 +148,6 @@ def test_a_state_is_computed_from_the_tree_and_is_only_ever_one_of_two(
         assert SYNTH.id in report and SYNTH.owner in report and STRIP_NODE in report
     assert bool(awaiting_overflow([state])) is bool(unresolved), "the pin bounds it"
     assert not floor_failure([], {}) and not awaiting_overflow([]), "zero entries"
-    assert register() == (), "EMPTY until seed-a lands"
 
 
 # -- SLICE 3: the execution engine. NO gate is armed and none is written. ----
@@ -185,3 +186,67 @@ def test_a_mutant_is_executed_in_a_scratch_copy_and_its_named_node_must_FAIL(tmp
     apply_to_copy(copy, live)
     with pytest.raises(ContractError, match="occurs 0 times"):
         apply_to_copy(copy, live)
+
+
+# -- SLICE 4: the shape gate, the ``Removal`` seam, and THE FLIP -------------
+
+#: Well shaped AND a real mutant of gx-preflight-empty-key's frozen predicate.
+PIN = next(a for a in ASSERTIONS if a.id == "SA-PREFLIGHT-BINDINGS-PRESENT")
+GOOD = Mutation(
+    id="selftest-shape", module=PIN.module, enclosing="_legitimately_empty",
+    before=PIN.predicate, after='doc.get("bindings", []) == []', line_hint=371,
+    behaviour="an absent bindings key reads as legitimately empty",
+    must_fail=(PIN.node_id,), owner="gx-preflight-empty-key")
+MISSHAPEN = [(dict(owner="gx-nope"), "no task this document declares"),
+             (dict(must_fail=()), "must_fail is EMPTY"),
+             (dict(must_fail=(STRIP_NODE,)), "not a pytest node id"),
+             (dict(after=PIN.predicate), "before == after")]
+
+
+def test_the_shape_gate_fails_a_bad_entry_and_an_index_is_the_last_resort():
+    """IN BOTH STATES: each deviation computes AWAITING, never excused."""
+    parked = dict(present=lambda o: False, collects=lambda n: True)
+    for deviation, complaint in MISSHAPEN:
+        bad, at = contract_failures([replace(GOOD, **deviation)], REPO_ROOT, **parked)
+        assert at[0].state == AWAITING and any(complaint in b for b in bad), bad
+    mutated, line = mutate(SAMPLE, replace(ALPHA, before="packet", after="pkt",
+                                           occurrence=2))
+    assert line == 10 and mutated.splitlines()[9] == '    if pkt.get("icmp"):'
+    with pytest.raises(ContractError, match="occurrence 9"):
+        mutate(SAMPLE, replace(ALPHA, before="packet", after="pkt", occurrence=9))
+
+
+def test_the_inert_removal_and_the_inert_twin_both_make_the_checker_FAIL(monkeypatch):
+    """Negative controls: the removal lands AFTER collection, so its witness
+    RUNS and PASSES -- SURVIVED, never the SKIPPED of the inversion."""
+    assert apply_removal(INERT.id, monkeypatch) is INERT
+    with pytest.raises(ContractError, match="no such Removal"):
+        apply_removal("selftest-absent", monkeypatch)
+    assert "not one of FAMILY_KINDS" in removal_failure(replace(INERT, family="x"), {})
+    monkeypatch.setenv("GCP_TEST_REMOVAL", INERT.id)
+    got = run_nodes(REPO_ROOT, INERT.must_fail)
+    assert set(got.values()) == {"PASSED"} and "SURVIVED" in removal_failure(INERT, got)
+    twin = replace(GOOD, after=GOOD.before)
+    with pytest.raises(ContractError, match="before == after"):
+        mutate("", twin)
+    assert "SURVIVED" in kill_failure(twin, dict.fromkeys(twin.must_fail, "PASSED"))
+
+
+def test_the_contract_is_now_ENFORCED_live_over_whatever_the_register_holds(tmp_path):
+    """THE FLIP. Zero entries green; the floor FIRES on an entry parked with its
+    owner PRESENT and the pin bounds it; then the REAL seams, over an EXECUTED
+    ACTIVE entry and over the register itself."""
+    seams = dict(present=lambda o: True, collects=lambda n: True)
+    assert contract_failures((), REPO_ROOT, **seams) == ([], []), "zero entries"
+    bad, at = contract_failures([replace(GOOD, module="gcp/no.py")], REPO_ROOT, **seams)
+    assert GOOD.owner in at[0].line() and "Error" in at[0].unresolved
+    assert any("owner PRESENT" in b for b in bad) and any("pinned max" in b for b in bad)
+    live = dict(present=lambda o: owner_is_present(o, REPO_ROOT),
+                collects=collects_in(REPO_ROOT), parent=tmp_path)
+    bad, at = contract_failures([GOOD], REPO_ROOT, **live)
+    assert [s.state for s in at] == [ACTIVE] and bad == [], bad
+    bad, at = contract_failures(register(), REPO_ROOT, **live)
+    debt = "\n".join(s.line() for s in at if s.state == AWAITING)
+    print(debt)
+    assert not bad, "\n".join(bad) + "\n" + debt
+    assert {s.id for s in at if s.state == AWAITING} <= AWAITING_MAX, debt
