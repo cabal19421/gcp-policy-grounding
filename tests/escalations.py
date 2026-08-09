@@ -164,6 +164,34 @@ ESCALATIONS: tuple[Escalation, ...] = (
                  "test_check_outside_the_repo_does_not_report_spurious_drift"),
     ),
     Escalation(
+        id="ESC-GX-HFW-FOLD-ENTRY",
+        clause=("append an `Escalation` naming it so a human lands it in the "
+                "register"),
+        unsatisfiable=(
+            "REM-GX-HFW-FOLD — the entry that empties the hierarchical fold — is "
+            "SPECIFIED IN FULL beside the node below (subject, family, the "
+            "`apply`, and the four node ids that must go RED, every one of them "
+            "MEASURED red under the mutant and green clean), but it cannot be "
+            "REGISTERED from here: as of AMENDMENT 2 both tests/mutation_entries.py "
+            "and tests/mutation_contract.py are FROZEN ACCEPTANCE PATHS for "
+            "`gx-hierfw-placement`, so any diff touching either fails review "
+            "outright — which is how `gx-vpcsc-record-guards` died — and neither "
+            "file is in this checkout at all, so there is nothing to append to "
+            "even if the freeze allowed it. `gx-mutation-contract-seed-a` owns "
+            "seeding it and has not landed. Landing that task, with this entry "
+            "among the ones it seeds, is what closes this: the node below then "
+            "XPASSes and forces the escalation to be retired. RESIDUAL RISK, the "
+            "id mismatch, recorded in the same shape the spec register records "
+            "its node-id one: seed-a landing the same subject under a DIFFERENT "
+            "id leaves the xfail in place and the escalation goes quiet instead "
+            "of biting, so the id is specified verbatim beside the node and the "
+            "review gate, not this suite, is what catches a rename."
+        ),
+        owner_task="gx-hierfw-placement",
+        node_id=("tests/test_gcp_hfw_checks.py::"
+                 "test_the_folds_mutation_entry_is_seeded_in_the_in_repo_contract"),
+    ),
+    Escalation(
         id="ESC-GX-TFPROMISE-001",
         clause="the abstention is only correct if the positive case still works",
         unsatisfiable=(
@@ -278,6 +306,53 @@ PRODUCT_ESCALATIONS: tuple[ProductEscalation, ...] = (
             "can reach, the default goes live and a rule whose `disabled` key "
             "the capture dropped leaves the preemption set — the FALSE-CLEAN "
             "direction. Whoever changes `_place`'s level arithmetic owns it."
+        ),
+    ),
+    ProductEscalation(
+        id="ESC-GX-HFW-NETWORK-DIMENSION",
+        clause=("Append an `Escalation` naming the axiom that would close it "
+                "properly."),
+        why=(
+            "MEASURED: an org-level deny scoped to vpc-dmz and a proposed allow "
+            "scoped to vpc-main were reported `contradicted hfw_reopen` with the "
+            "witness packet `src=35.0.0.0 dst=0.0.0.0 proto=6 port=3389` — a "
+            "packet that CANNOT EXIST, because network self-links were OR-ed "
+            "into the target-tag channel and nothing forbids the solver "
+            "satisfying two disjoint networks at once. There is no assertion to "
+            "xfail: `gcp_grounding/hfw_checks.py` now carries the conservative "
+            "local mitigation the design asks for — self-links out of the tag "
+            "channel, provably disjoint peers dropped before comparison, a LOUD "
+            "`unverified` when disjointness cannot be decided — and the honest "
+            "tests of it pass. It is the PACKET ALGEBRA that is wrong: "
+            "`packet.PacketVars` has no network dimension at all, so no term can "
+            "say two scopes exclude each other, and the design declares the full "
+            "fix OUT OF SCOPE for this task."
+        ),
+        product_fix=(
+            "THE AXIOM: give `packet.PacketVars` a network variable and "
+            "constrain it in `packet.universe_axioms` to EXACTLY ONE of the "
+            "captured networks — the same at-most-one shape that function "
+            "already applies to tags and service accounts — then have "
+            "`packet.rule_match` conjoin `network == <self-link>` for a scoped "
+            "rule. Two disjoint scopes become unsat by construction, both "
+            "pairwise findings and the whole-order fold get it for free, and the "
+            "mitigation in `hfw_checks._network_scoped` / `_rule_networks` is "
+            "DELETED rather than kept beside it."
+        ),
+        residual_risk=(
+            "THE PRICE, recorded here as well as in the code comment on "
+            "`_rule_networks` because `report.ok` treats `unverified` as a PASS: "
+            "an undecidable-overlap abstention converts a would-be BLOCK into a "
+            "pass, so this mitigation trades a false contradiction for a "
+            "possible missed one. It is acceptable only because the abstention "
+            "is LOUD — one `unverified` on the hierarchical channel naming both "
+            "networks and every rule it declined to compare — and because it is "
+            "bounded by the axiom above. It is never spelled as silence and "
+            "never widened to the decidable case: two scopes that provably "
+            "intersect, and a rule scoped to no network at all, are compared "
+            "exactly as before. Separately, the FOLD is a whole-order statement "
+            "rather than a pairwise one, so it keeps the undecidable rules and "
+            "over-approximates rather than losing a level."
         ),
     ),
 )

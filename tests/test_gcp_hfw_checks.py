@@ -1568,3 +1568,59 @@ def test_a_snapshot_that_captured_no_tag_or_account_universe_still_decides(snap)
     assert [v.status for v in of_kind(verdicts, "hfw_shadow")] == ["contradicted"]
     assert [v.status for v in of_kind(verdicts, "hfw_effect")] == ["grounded"]
     assert of_kind(verdicts, "hfw_order") == []
+
+
+# -- (9) the fold's mutation-contract entry: SPECIFIED here, escalated --------
+#
+# REM-GX-HFW-FOLD, in the EXACT shape `gx-mutation-contract-seed-a` will seed
+# it. It is specified and MEASURED here and deliberately NOT registered: as of
+# AMENDMENT 2 tests/mutation_entries.py and tests/mutation_contract.py are
+# FROZEN ACCEPTANCE PATHS for `gx-hierfw-placement` — a diff touching either
+# fails review outright — and neither is in this checkout. The ask that a human
+# land it is ESC-GX-HFW-FOLD-ENTRY in tests/escalations.py, carried by the
+# strict xfail below so it retires itself the day seed-a lands.
+#
+#   id        REM-GX-HFW-FOLD
+#   subject   gcp_grounding.hfw_checks.effective_decision's hierarchical fold —
+#             the `for _node, rules in reversed(list(levels))` loop — so the
+#             effective decision is the VPC layer ALONE and every organization-
+#             and folder-level rule stops deciding anything.
+#   family    network
+#   spelling  AFTER_COLLECTION (a session-autouse monkeypatch, never a rename)
+#   apply     monkeypatch.setattr(
+#                 hfw_checks, "effective_decision",
+#                 lambda z3, v, levels, vpc_rules, direction:
+#                     packet.effective_allow(
+#                         z3, v, vpc_rules, str(direction).upper(),
+#                         default_allow=str(direction).upper() == "EGRESS"))
+#   must_fail tests/test_gcp_hfw_checks.py::
+#               test_an_in_place_edit_drops_the_estate_copy_of_the_rule_it_replaces
+#             tests/test_gcp_hfw_checks.py::
+#               test_traffic_no_lower_layer_touches_widens_unless_it_was_already_allowed
+#             tests/test_gcp_hfw_checks.py::
+#               test_org_level_allow_widens_the_effective_decision
+#             tests/test_gcp_hfw_checks.py::
+#               test_false_clean_an_unreadable_folder_layer4_no_longer_grounds_no_effect
+#   measured  applied in process from a `-p` plugin over a copy of this tree:
+#             exactly those four nodes FAILED, none SKIPPED, none passing.
+
+_MUTATION_ENTRIES = Path(__file__).resolve().parent / "mutation_entries.py"
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "ESC-GX-HFW-FOLD-ENTRY: tests/mutation_entries.py is a FROZEN acceptance "
+    "path for gx-hierfw-placement and is absent from this checkout, and "
+    "gx-mutation-contract-seed-a owns seeding REM-GX-HFW-FOLD there"))
+def test_the_folds_mutation_entry_is_seeded_in_the_in_repo_contract():
+    """The spec-literal assertion ESC-GX-HFW-FOLD-ENTRY carries: the entry
+    specified above must reach the in-repo mutation contract.
+
+    Read BY STRING and never imported — a static import of a module no branch
+    carries is an ungrounded reference, and this must stay legible in a checkout
+    that does not have the register. ``strict=True`` is the whole point: the day
+    seed-a lands the entry this XPASSes, the suite goes RED, and the escalation
+    is retired deliberately rather than by rot.
+    """
+    source = (_MUTATION_ENTRIES.read_text(encoding="utf-8")
+              if _MUTATION_ENTRIES.is_file() else "")
+    assert "REM-GX-HFW-FOLD" in source
