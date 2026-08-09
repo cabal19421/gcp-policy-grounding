@@ -14,16 +14,18 @@ HEAD`` copy, ``-rA`` reporting the node FAILED, and the unmutated copy green.
 every anchor is the content slice found in the owner's landed source, widened to
 the smallest slice unique inside its ``enclosing`` scope.
 
-MK-I16..MK-I29 and the removal set are NOT here: ESC-GX-SEEDA-001 records the
-measured diff-budget overrun that splits them out. MK-I01..MK-I15 -- piece (b)
-of that measured three-way split -- are appended below under those same rules,
-their anchors read from ``agent/gx-evidence-invokers``' landed source and their
-nodes measured the same way, one mutant at a time in its own archive copy.
+MK-I01..MK-I15 and then MK-I16..MK-I29 PLUS THE REMOVAL SET -- pieces (b) and
+(c) of ESC-GX-SEEDA-001's measured three-way split, which landing CLOSES -- are
+appended under those same rules, read from ``agent/gx-evidence-invokers``.
 """
 
 from __future__ import annotations
 
-from tests.mutation_contract import Mutation
+import sys
+from dataclasses import dataclass
+from importlib import import_module
+
+from tests.mutation_contract import Mutation, Removal
 
 _MOD = "gcp_grounding/preflight.py"
 _OWNER = "gx-preflight-empty-key"
@@ -35,6 +37,7 @@ _IS, _IOWNER = "gcp_grounding/sec_rules.py", "gx-evidence-invokers"
 _TR = "tests/test_gcp_registry.py::"
 _TD = "tests/test_gcp_sec_domains.py::"
 _TS = "tests/test_gcp_sec_rules.py::"
+_TF = "tests/test_gcp_evidence_floor.py::"
 #: The protocol table is module-level, so its anchor is the one-line snippet of
 #: its own statement -- which occurs exactly once -- and not a def name.
 _TABLE = "PROTOCOL_NUMBERS: dict[str, int] = {"
@@ -324,8 +327,248 @@ ENTRIES: tuple[Mutation, ...] = (
         must_fail=(_TS + "test_the_z3_absent_abstention_is_identified_and_carries_"
                          "no_line_number",),
         owner=_IOWNER),
+    # -- ESC-GX-SEEDA-001 piece (c): the funnel's last fourteen. -------------
+    Mutation(
+        id="MK-I16", module=_IS, enclosing="CompiledRule._decide_closed",
+        before='        return Verdict("contradicted", f"sec:{domain}", pid, 0,\n'
+               '                       f"{pid}: the obligation is violated but no '
+               'single record "',
+        after='        return Verdict("contradicted", f"sec:{domain}", pid, 1,\n'
+              '                       f"{pid}: the obligation is violated but no '
+              'single record "',
+        line_hint=264,
+        behaviour="the lineno on \"the obligation is violated but no single "
+                  "record witnesses it\", widened by its message line",
+        must_fail=(_TS + "test_a_violation_no_single_record_witnesses_is_identified_"
+                         "and_has_no_lineno",),
+        owner=_IOWNER),
+    Mutation(
+        id="MK-I17", module=_IS, enclosing="CompiledRule._decide_open",
+        before='            return Verdict("grounded", f"sec:{domain}", pid, 0,',
+        after='            return Verdict("grounded", f"sec:{domain}", pid, 1,',
+        line_hint=279,
+        behaviour="the lineno on the open-or-validity grounded verdict",
+        must_fail=(_TS + "test_the_validity_fallback_grounds_with_an_identity_and_"
+                         "no_line_number",),
+        owner=_IOWNER),
+    Mutation(
+        id="MK-I18", module=_IS, enclosing="_render_model",
+        before="model_completion=True", after="model_completion=False",
+        line_hint=332,
+        behaviour="with completion off, unassigned terms render as bare symbol "
+                  "names instead of concrete values, so a contradicted verdict's "
+                  "counter-model stops being concrete evidence while still "
+                  "reading like one",
+        must_fail=(_TS + "test_a_counter_model_renders_a_value_for_every_term",),
+        owner=_IOWNER),
+    Mutation(
+        id="MK-I19", module=_IS, enclosing="_org_constraint_name",
+        before="name.split(marker, 1)", after="name.split(marker, 2)",
+        line_hint=474,
+        behaviour="the MAXSPLIT of the org-policy name split, not an index: with "
+                  "maxsplit 2 a name containing two policy markers yields a "
+                  "different constraint id",
+        must_fail=(_TS + "test_the_constraint_id_is_the_whole_tail_after_the_"
+                         "first_marker",),
+        owner=_IOWNER),
+    Mutation(
+        id="MK-I20", module=_IS, enclosing="org_policy_rules",
+        before="if not isinstance(policy, Mapping):",
+        after="if isinstance(policy, Mapping):", line_hint=487,
+        behaviour="CATASTROPHIC AND FREE TODAY: a VALID org policy returns "
+                  "immediately with \"the Org Policy is not a JSON object\", so the "
+                  "org-policy rule tier ALWAYS abstains. It survives because "
+                  "nothing in the whole suite drives that tier with a real "
+                  "org-policy document",
+        must_fail=(_TS + "test_a_real_org_policy_yields_records_and_no_reason",),
+        owner=_IOWNER),
+    Mutation(
+        id="MK-I21", module=_IS, enclosing="org_policy_rules",
+        before='bool(rule.get("enforce", False))',
+        after='bool(rule.get("enforce", True))', line_hint=507,
+        behaviour="an ABSENT enforce key records enforce True — a silent inversion "
+                  "of the org-policy enforcement dimension, which is decision-"
+                  "relevant and is exactly the axis gx-org-prior-content reasons over",
+        must_fail=(_TS + "test_an_absent_enforce_key_records_enforce_false",),
+        owner=_IOWNER),
+    Mutation(
+        id="MK-I22", module=_IS, enclosing="org_policy_rules",
+        before="if not isinstance(entry, str):",
+        after="if isinstance(entry, str):", line_hint=521,
+        behaviour="the surprise guard inverted, so string entries refuse and "
+                  "non-string entries are appended into records",
+        must_fail=(_TS + "test_a_list_of_strings_is_accepted_and_a_non_string_"
+                         "entry_refuses",),
+        owner=_IOWNER),
+    Mutation(
+        id="MK-I23", module=_IS, enclosing="_carry_verdict",
+        before='        return Verdict("unverified", f"sec:{promise.domain}", '
+               'promise.id, 0,',
+        after='        return Verdict("unverified", f"sec:{promise.domain}", '
+              'promise.id, 1,',
+        line_hint=567,
+        behaviour="the lineno on the not-run verdict for a rejected or failed "
+                  "promise, sliced with the REJECTED arm's own indent",
+        must_fail=(_TS + "test_a_carry_verdict_names_the_requirement_and_has_no_"
+                         "line_number",),
+        owner=_IOWNER),
+    Mutation(
+        id="MK-I24", module=_IS, enclosing="_admit",
+        before='"integrity was not verified; the rule was registered")], True)',
+        after='"integrity was not verified; the rule was registered")], False)',
+        line_hint=595,
+        behaviour="NOT a lineno: it is the REGISTER flag returned on the "
+                  "unsupported-term path, whose own message says the rule WAS "
+                  "registered. The mutant makes the message lie and silently "
+                  "unregisters a rule whose stored AST cannot be re-encoded",
+        must_fail=(_TS + "test_an_unsupported_term_registers_the_rule_its_message_"
+                         "says_it_registered",),
+        owner=_IOWNER),
+    Mutation(
+        id="MK-I25", module=_IS, enclosing="_admit",
+        before="if positive_ok is None or negative_ok is None:",
+        after="if positive_ok is None and negative_ok is None:", line_hint=616,
+        behaviour="ONE undecidable pinned witness stops reporting \"a pinned "
+                  "witness could not be re-classified\" and integrity reads as "
+                  "fully verified — an abstention silently converted into a "
+                  "positive, RC1's shape at the artifact tier",
+        must_fail=(_TS + "test_one_undecidable_witness_is_reported_and_the_rule_"
+                         "still_registers",),
+        owner=_IOWNER),
+    Mutation(
+        id="MK-I26", module=_IS, enclosing="load_rules",
+        before='        verdicts.append(Verdict("contradicted", "sec:artifact", pid, 0,',
+        after='        verdicts.append(Verdict("contradicted", "sec:artifact", pid, 1,',
+        line_hint=664,
+        behaviour="the lineno on the duplicate-promise-id-across-artifacts verdict",
+        must_fail=(_TS + "test_a_duplicate_promise_id_is_identified_and_has_no_"
+                         "line_number",),
+        owner=_IOWNER),
+    Mutation(
+        id="MK-I27", module=_IR, enclosing="_stands_on_nothing",
+        before="led.collections_read > 0 and", after="led.collections_read > 0 or",
+        line_hint=220,
+        behaviour="the downgrade predicate THIS TASK writes — already killed by "
+                  "this task's own tests. Named so it stays killed",
+        must_fail=(_TF + "test_a_check_that_reads_nothing_is_not_downgraded",),
+        owner=_IOWNER),
+    Mutation(
+        id="MK-I28", module=_IR, enclosing="_stands_on_nothing",
+        before="led.rows_examined == 0", after="led.rows_examined == 1",
+        line_hint=220,
+        behaviour="the `rows_examined == 0` comparison in the same predicate, "
+                  "which is also the REGISTERED predicate — already killed. "
+                  "Named so it stays killed",
+        must_fail=(_TF + "test_a_decision_over_an_empty_collection_is_downgraded",),
+        owner=_IOWNER),
+    Mutation(
+        id="MK-I29", module=_IS, enclosing="CompiledRule._decide_closed",
+        before='("; " + "; ".join(observed_empty))',
+        after='("; " - "; ".join(observed_empty))', line_hint=248,
+        behaviour="on the line this task writes in the compiled-rule tier — "
+                  "already killed. Named so it stays killed",
+        must_fail=(_TS + "test_attested_empty_collection_keeps_the_quantifier_"
+                         "semantics",),
+        owner=_IOWNER),
 )
 
-#: DELIBERATELY EMPTY, and named rather than omitted: the removal set is split
-#: out by ESC-GX-SEEDA-001 along with MK-I01..MK-I29, on the measured budget.
-REMOVALS: tuple = ()
+
+@dataclass(frozen=True)
+class SeededRemoval(Removal):
+    """The FROZEN ``Removal`` plus the three fields seed-a's body mandates and
+    that type lacks -- ESC-GX-SEEDA-001's finding, answered by SUBCLASSING and
+    never by dropping one. ``owner`` is REQUIRED: no family is parked forever."""
+
+    owner: str = ""
+    pending: bool = True
+    spelling: str = ""
+
+
+AFTER_COLLECTION = ("monkeypatched after collection; the family's cases keep "
+                    "RUNNING and must FAIL on the verdicts that stop existing")
+IMPORT_TIME = ("bound to None in sys.modules; its probes go false and its cases "
+               "SKIP, so must_fail names the not-all-cases-may-skip guard and "
+               "the capability-liveness assertion")
+
+
+def _patch(monkeypatch, module: str, **fields) -> None:
+    target = import_module(module)
+    for name, value in fields.items():
+        monkeypatch.setattr(target, name, value)
+
+
+def _unimport(monkeypatch, *names: str) -> None:
+    for name in names:
+        monkeypatch.setitem(sys.modules, name, None)
+    import_module("gcp_grounding.registry").reset_cache()
+
+
+_AI = ("tests/test_gcp_agentic_iam.py::"
+       "test_adversarial_proposal_is_blocked_or_recorded[")
+_AN, _AV = "tests/test_gcp_agentic_network.py::", "tests/test_gcp_agentic_vpcsc.py::"
+_AB = "tests/test_gcp_agentic_abstain.py::"
+
+#: The RC2-measured removals: the review EXECUTED each -- 19 of 19, 27 of 27,
+#: 22 of 27, 10 of 14 green with the subject GONE -- so each is a must-kill and
+#: not a hypothesis. ALL SEVEN ARE `pending`, each naming the task that must
+#: make it live, and whose body requires the nodes that do not collect TODAY.
+REMOVALS: tuple[SeededRemoval, ...] = (
+    SeededRemoval(
+        id="RM-IAM-ESCALATION-LAYER", family="iam",
+        subject="iam_checks.DOCUMENT_CHECKS, the escalation decision layer",
+        apply=lambda mp: _patch(mp, "gcp_grounding.iam_checks", DOCUMENT_CHECKS=()),
+        must_fail=(_AI + "A07_sa_token_creator]", _AI + "A08_sa_user_actas]",
+                   _AI + "A09_owner_to_real_principal]"),
+        owner="gx-agentic-iam-repin", spelling=AFTER_COLLECTION),
+    SeededRemoval(
+        id="RM-IAM-PUBLIC-PRINCIPAL-KIND", family="iam",
+        subject="the public_principal claim kind, dropped from claims.KINDS",
+        apply=lambda mp: _patch(mp, "gcp_grounding.claims", KINDS=tuple(
+            k for k in import_module("gcp_grounding.claims").KINDS
+            if k != "public_principal")),
+        must_fail=(_AI + "A11_allusers_public]",),
+        owner="gx-agentic-iam-repin", spelling=AFTER_COLLECTION),
+    SeededRemoval(
+        id="RM-NETWORK-PLANE-UNAVAILABLE", family="network",
+        subject="fw_checks and hfw_checks, the network-plane check modules",
+        apply=lambda mp: _unimport(mp, "gcp_grounding.fw_checks",
+                                   "gcp_grounding.hfw_checks"),
+        must_fail=(_AN + "test_not_every_network_case_may_skip",
+                   _AN + "test_the_network_capabilities_are_live"),
+        owner="gx-agentic-network-repin", spelling=IMPORT_TIME),
+    SeededRemoval(
+        id="RM-VPCSC-DOCUMENT-AND-PAIR-CHECKS", family="vpcsc",
+        subject="vpcsc_checks.DOCUMENT_CHECKS and PAIR_CHECKS, unregistered",
+        apply=lambda mp: _patch(mp, "gcp_grounding.vpcsc_checks",
+                                DOCUMENT_CHECKS=(), PAIR_CHECKS={}),
+        must_fail=(_AV + "test_A05_egress_punch_blocks",
+                   _AV + "test_A24_ingress_any_identity_blocks",
+                   _AV + "test_A25_restricted_service_removed_blocks"),
+        owner="gx-agentic-vpcsc-repin", spelling=AFTER_COLLECTION),
+    SeededRemoval(
+        id="RM-VPCSC-DOMAIN-UNREGISTERED", family="vpcsc",
+        subject="the whole VPC-SC domain: vpcsc_checks and vpcsc_claims",
+        apply=lambda mp: _unimport(mp, "gcp_grounding.vpcsc_checks",
+                                   "gcp_grounding.vpcsc_claims"),
+        must_fail=(_AV + "test_not_every_vpcsc_case_may_skip",
+                   _AV + "test_the_vpcsc_capabilities_are_live"),
+        owner="gx-agentic-vpcsc-repin", spelling=IMPORT_TIME),
+    SeededRemoval(
+        id="RM-VPCSC-ABSENT-VERSUS-EMPTY", family="vpcsc",
+        subject="vpcsc_checks._unreadable_field, the record-level "
+                "absent-versus-empty guard",
+        apply=lambda mp: _patch(mp, "gcp_grounding.vpcsc_checks",
+                                _unreadable_field=lambda *a, **k: None),
+        must_fail=(_AV + "test_a_removed_policy_list_yields_the_absent_versus_"
+                         "empty_abstention",),
+        owner="gx-agentic-vpcsc-repin", spelling=AFTER_COLLECTION),
+    SeededRemoval(
+        id="RM-HOOK-SUCCESS-BEFORE-THE-EVENT", family="abstain",
+        subject="cli._run_hook: the hook returns success as its FIRST "
+                "statement, never reading the event",
+        apply=lambda mp: _patch(mp, "gcp_grounding.cli", _run_hook=lambda args: 0),
+        must_fail=(_AB + "test_c01_raw_hcl_abstains_and_never_blocks",
+                   _AB + "test_c04_unrecognized_kind_abstains_naming_the_keys",
+                   _AB + "test_c08_uncaptured_category_is_unverified_never_ungrounded"),
+        owner="gx-agentic-abstain-repin", spelling=AFTER_COLLECTION),
+)

@@ -6,7 +6,8 @@ their final form measured 648 characters each, so the whole seed projects past
 34,000. The clause is escalated rather than thinned, and the assertion that would
 discharge it is LANDED here under a STRICT xfail instead of being deleted -- the
 day the remaining parts seed MK-I01..MK-I29 and the removal set, this XPASSes and
-goes RED, which is what retires the escalation deliberately.
+goes RED. PIECE (c) IS THAT DAY, so the marker is CONDITIONAL now on an
+incomplete register -- STRICT still, as the frozen escalation self-test requires.
 """
 
 from __future__ import annotations
@@ -59,9 +60,24 @@ def test_every_seeded_entry_carries_the_whole_mandated_shape():
     assert len(set(ids)) == len(ids), ids
 
 
-@pytest.mark.xfail(strict=True, reason="ESC-GX-SEEDA-001: the 44 entries and the "
-                                       "removal set do not fit one 18,000-character diff")
+SEED_INCOMPLETE = bool([i for i in REQUIRED_IDS
+                        if i not in {e.id for e in register()}]) or not removal_register()
+
+
+@pytest.mark.xfail(SEED_INCOMPLETE, strict=True,
+                   reason="ESC-GX-SEEDA-001: the 44 entries and the removal set "
+                          "do not fit one 18,000-character diff")
 def test_the_seed_covers_every_amendment_2_entry_and_the_removal_set():
     seeded = [e.id for e in register()]
     assert not [i for i in REQUIRED_IDS if i not in seeded]
     assert removal_register(), "the removal set is unseeded"
+
+
+def test_the_removal_set_keeps_the_three_fields_the_frozen_type_lacks():
+    """Unconditional: a mandated field may not be dropped to fit a frozen type."""
+    from tests.agentic.asserts import FAMILY_KINDS
+
+    assert len(removal_register()) == 7, "the RC2-measured removals"
+    for r in removal_register():
+        assert r.family in FAMILY_KINDS and r.subject and r.must_fail, r.id
+        assert r.owner and r.spelling and r.pending is True, r.id
