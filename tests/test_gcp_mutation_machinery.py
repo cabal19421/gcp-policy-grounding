@@ -21,7 +21,9 @@ from tests.mutation_contract import (
     collects_in, execute, floor_failure, kill_failure, materialise, mutate,
     owner_is_present, owner_signals, parse_outcomes, present_owners, register,
     resolve_span, state_of, strip_parametrization,
-    AWAITING_MAX, INERT, apply_removal, contract_failures, removal_failure, run_nodes)
+    AWAITING_MAX, INERT, apply_removal, contract_failures, removal_failure, run_nodes,
+    CONTRACT_CONTROL_SPAWNS, SPAWNS_PER_ENTRY, contract_spawn_ceiling,
+    owner_test_modules)
 from tests.spec_assertions import ASSERTIONS
 
 SAMPLE = '''\
@@ -199,7 +201,8 @@ GOOD = Mutation(
     must_fail=(PIN.node_id,), owner="gx-preflight-empty-key")
 MISSHAPEN = [(dict(owner="gx-nope"), "no task this document declares"),
              (dict(must_fail=()), "must_fail is EMPTY"),
-             (dict(must_fail=(STRIP_NODE,)), "not a pytest node id"),
+             (dict(must_fail=("tests/mutation_contract.py::test_x",)),
+              "not a pytest node id"),
              (dict(after=PIN.predicate), "before == after")]
 
 
@@ -250,3 +253,37 @@ def test_the_contract_is_now_ENFORCED_live_over_whatever_the_register_holds(tmp_
     print(debt)
     assert not bad, "\n".join(bad) + "\n" + debt
     assert {s.id for s in at if s.state == AWAITING} <= AWAITING_MAX, debt
+
+
+# -- SLICE 5: cross-module witnesses, and a spawn budget of the contract's own
+
+
+def test_a_witness_may_name_any_test_module_the_repo_owns_and_no_other_file():
+    """BLOCKER ONE, cleared: the one-module restriction was slice 4's and not
+    the design's, and excluded 26 of the evidence funnel's 29 entries. A node in
+    a file that is no test module of this repo's is still REFUSED."""
+    seams = dict(present=lambda o: True, collects=collects_in(REPO_ROOT))
+    assert STRIP_NODE.partition("::")[0] != owner_test_modules()[GOOD.owner]
+    cross = replace(GOOD, id="selftest-cross", must_fail=(PIN.node_id, STRIP_NODE))
+    bad, at = contract_failures([cross], REPO_ROOT, **seams)
+    assert bad == [] and [s.state for s in at] == [ACTIVE], bad
+    off = [replace(GOOD, must_fail=("tests/mutation_contract.py::t",))]
+    assert any("not a pytest" in b for b in contract_failures(off, REPO_ROOT, **seams)[0])
+
+
+def test_the_contract_spawns_land_on_a_ceiling_of_its_own(tmp_path, subprocess_budget):
+    """BLOCKER TWO, cleared: the suite's 450 measures 447 in a full run -- THREE
+    spawns of headroom against an ACTIVE entry's FOUR -- so the machinery's
+    children are MARKED and counted apart, EXACTLY. Zero entries cost ZERO, and
+    EVERY child is marked: counting some and losing others is the leak."""
+    budget, live = subprocess_budget, dict(
+        present=lambda o: owner_is_present(o, REPO_ROOT),
+        collects=collects_in(REPO_ROOT), parent=tmp_path)
+    before = budget.marked_total
+    assert contract_failures(register(), REPO_ROOT, **live) == ([], []), "zero entries"
+    assert budget.marked_total == before, "zero entries, and so ZERO marked spawns"
+    assert contract_failures([GOOD], REPO_ROOT, **live)[0] == []
+    assert budget.marked_total - before == SPAWNS_PER_ENTRY, budget.marked
+    assert contract_spawn_ceiling() == CONTRACT_CONTROL_SPAWNS == budget.max_marked, (
+        "an empty register costs the controls alone, and the fixture pins it")
+    assert not [k for k in budget.counts if k.startswith("tests.mutation_contract")]
