@@ -236,6 +236,46 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_mutation_entries.py::"
                  "test_the_seed_covers_every_amendment_2_entry_and_the_removal_set"),
     ),
+    Escalation(
+        id="ESC-GX-GATE-001",
+        clause=("assert the set of `Mutation` ids is a SUPERSET of an explicit "
+                "tuple naming ALL 65 MK ids"),
+        unsatisfiable=(
+            "MEASURED: the register holds 44 of the 65 (MK-P01..P15, "
+            "MK-I01..I29) and tests/mutation_entries.py is FROZEN here, so the "
+            "missing 21 cannot be added from this task. Its declared dependency "
+            "`gx-mutation-contract-seed-b`, which owns them, was NOT seeded — "
+            "`git merge-base --is-ancestor agent/gx-mutation-contract-seed-b "
+            "HEAD` is false while seed-a, -a2 and -a3 are — and that branch holds "
+            "20 of the 21, MK-V05 having been held out, so even a correctly "
+            "seeded tree reaches 64. A MIS-SEEDED-TREE FINDING, NOT A LICENCE: "
+            "the AWAITING pin stays at ZERO, nothing is parked, and the tuple "
+            "names all 65 already, so this xfail XPASSes the day they land."
+        ),
+        owner_task="gx-mutation-contract-gate",
+        node_id=("tests/test_gcp_mutation_contract.py::"
+                 "test_every_required_must_kill_id_is_in_the_register"),
+    ),
+    Escalation(
+        id="ESC-GX-GATE-002",
+        clause="EXECUTE EVERY ACTIVE ENTRY, both types, and read the result the same way",
+        unsatisfiable=(
+            "The MUTATION half already executes once per session, in the FROZEN "
+            "tests/test_gcp_mutation_machinery.py::test_the_contract_is_now_"
+            "ENFORCED_live_over_whatever_the_register_holds, which calls "
+            "contract_failures(register(), REPO_ROOT, parent=tmp_path). MEASURED, "
+            "that spends 192 of the 199 marked spawns contract_spawn_ceiling() "
+            "allows, and the ceiling is 4*len(register()) + "
+            "len(removal_register()) + 16 — ONE whole-register execution plus one "
+            "child per Removal. A second needs 177 more, mutation_contract is "
+            "frozen here so the formula cannot be rescaled, and raising a ceiling "
+            "is a threshold move this document forbids. Rescaling it, or dropping "
+            "the duplicate execution from the frozen module, closes this."
+        ),
+        owner_task="gx-mutation-contract-gate",
+        node_id=("tests/test_gcp_mutation_contract.py::"
+                 "test_this_gate_can_afford_to_execute_every_active_mutation_itself"),
+    ),
 )
 
 
