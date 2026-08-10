@@ -593,6 +593,8 @@ no network. Run from the repo root after the Development setup above.
 | 1 | A violating terraform diff: world-open SSH + `roles/owner` to an outsider (step 7) | `examples/terraform/main.tf.json` | DENIED — two promises VIOLATED, each refutation naming its block |
 | 2a | Custom-role swap meant to reduce scope; the accidental extra permission is harmless (step 8) | `examples/terraform-roles/proposal_a.tf.json` | APPROVED — with the `[iam_scope_diff]` warning naming the extra permission |
 | 2b | The same swap, but the extra permission is `iam.serviceAccounts.actAs` (step 8) | `examples/terraform-roles/proposal_b.tf.json` | DENIED — the permission promise VIOLATED, custom-role block named |
+| 3 | Masked deny removed — the dormant allow wakes up world-open (step 9) | `examples/terraform-masked/proposal.tf.json` | DENIED — exposure + shadow verdicts |
+| 3b | The benign counterpart: deleting the dead allow instead (step 9) | `examples/terraform-masked/cleanup.tf.json` | DENIED — the restated deny still reads as killing the allow the state carries; deletion-awareness is the parked pair tier's territory |
 
 Steps 0–6 below are the non-terraform acts: the acceptance suite, compiling
 the promises, the REST attack, the hallucination did-you-mean, shell-command
@@ -809,6 +811,95 @@ as the terraform finale. A REST document, for the record, simply cannot
 exercise this promise: no REST document kind carries a custom role's
 permission list, and the rule abstains naming that fact instead of passing
 vacuously.
+
+### 9. Scenario three: the masked deny
+
+The estate has carried a world-open RDP allow for years and nobody noticed,
+because a higher-precedence deny masks it: `allow-rdp-broad` (allow tcp/3389
+from 0.0.0.0/0, priority 1000) is dead — every packet it matches is decided
+first by `deny-external-rdp` (deny tcp/3389 from 0.0.0.0/0, priority 900). A
+refactor accidentally drops the deny block, and the dormant rule wakes up
+world-open. `examples/terraform-masked/` holds the pieces: `base.tf.json`
+declares the pair exactly as `terraform.tfstate` carries it,
+`proposal.tf.json` is the accident (base minus the deny block) and
+`cleanup.tf.json` is the intended fix (base minus the dead allow). No promise
+corpus this time — every verdict below comes from the built-in estate checks,
+so there is no compile step and no `--requirements` flag:
+
+```bash
+# 9a. The current state itself — EXPECTED TO EXIT 1: a masked pair is
+#     hygiene debt, and the gate names it from both directions on arrival.
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-masked/base.tf.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --terraform-state examples/terraform-masked/terraform.tfstate \
+    --explain
+
+# 9b. The accident (deny removed) — EXPECTED TO EXIT 1: the dormant allow
+#     wakes up world-open, and the gate tells both halves of the story.
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-masked/proposal.tf.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --terraform-state examples/terraform-masked/terraform.tfstate \
+    --explain
+
+# 9c. The cleanup (dead allow removed) — EXPECTED TO EXIT 1 TOO, honestly:
+#     deletions are invisible without the pair tier, so the restated deny
+#     still reads as killing the allow the state carries.
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-masked/cleanup.tf.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --terraform-state examples/terraform-masked/terraform.tfstate \
+    --explain
+```
+
+**9a — the base is DENIED (exit 1), three findings.** Run the *current*
+configuration through the gate and the masked pair is named from both
+directions. `[firewall_exposure]` reads one rule's own text — no snapshot, no
+baseline, no other rule — and the allow's text is world-open on a sensitive
+port: *"a public source (…) can reach tcp/3389 through this rule"* (the
+witness address is a solver-minted example, not a constant of the rule —
+nothing should pin it). `[firewall_shadow]`
+folds the captured estate and answers the question a diff cannot — does this
+rule do anything at all: the allow is *"unreachable — every packet this rule
+matches is already decided by higher-precedence rule(s) deny-external-rdp;
+the rule has no effect"*, and the restated deny draws the mirror finding,
+*"this deny at priority 900 makes the existing allow 'allow-rdp-broad' at
+priority 1000 unreachable"*. Had this gate been standing when the pair first
+landed, the hygiene debt would never have arrived.
+
+**9b — the accident is DENIED (exit 1), and the two findings tell the whole
+story between them.** The exposure finding is the *after*: nothing in the
+proposed document decides tcp/3389 ahead of the allow anymore, and its own
+text admits every public source. The shadow finding is the *before*: the
+estate fold still holds `deny-external-rdp` — the very rule this change
+deletes — so the same allow is also *"unreachable … already decided by …
+deny-external-rdp"* today. Dead today, world-open the moment this applies.
+Note what the gate does NOT say: there is no *"you removed deny-external-rdp"*
+line — that pair-tier articulation (old set versus new set) is the parked
+verification tasks' territory. The deny's absence is never named; what is
+named is what its absence leaves behind — the exposure check condemns the
+allow from its own text (as 9a shows, it does so even while the deny still
+stands beside it), and with the deny gone from the document nothing softens
+that verdict's meaning: the allow is simply live.
+
+**9c — the cleanup is DENIED (exit 1) too, and that is this scenario's honest
+sharp edge.** Deleting the dead allow *narrows* the estate and was expected
+to approve; empirically it does not, for the same reason 9b works at all:
+deletions are invisible to a gate without the pair tier. The cleanup restates
+the deny (a terraform configuration declares everything it keeps), the estate
+fold still carries `allow-rdp-broad`, and the restated deny draws the same
+kill-report the base drew: *"this deny at priority 900 makes the existing
+allow 'allow-rdp-broad' at priority 1000 unreachable"* — its only blocking
+finding. That sentence is true of today's estate — it is the mask itself,
+re-discovered — but attributing it to the document that merely restates the
+deny over-blocks the benign fix. Until the pair tier lands, a masked pair has
+no clean one-sided exit: any document restating either rule draws a finding,
+and the gate's conservative failure mode is a loud block, never a silent
+pass. The abstention noise is the usual fixture-snapshot taste — staleness,
+the two provenance notes, the network-existence abstention — plus one honest
+*"no offline check is wired for claim kind 'firewall_rule'"* on the deny,
+none of them deciding anything here.
 
 In production the five flags collapse into a `.gcp-grounding.json` config file
 discovered next to the proposal (see "Two overlapping ways to get the current

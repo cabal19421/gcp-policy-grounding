@@ -1,0 +1,299 @@
+"""Scenario three — the masked deny — pinned in-process.
+
+``examples/terraform-masked/`` is the README's third scenario: the estate
+carries a world-open RDP allow (``allow-rdp-broad``, tcp/3389 from 0.0.0.0/0,
+priority 1000) that is DEAD, fully masked by a higher-precedence deny
+(``deny-external-rdp``, priority 900). ``base.tf.json`` declares the pair
+exactly as ``terraform.tfstate`` carries it, ``proposal.tf.json`` is the
+accident (base minus the deny block — the dormant allow wakes up world-open)
+and ``cleanup.tf.json`` is the intended fix (base minus the dead allow). This
+module pins three things:
+
+* the FIXTURES — each variant differs from the base by exactly the one deleted
+  block, and the state carries both rules with the attributes the base
+  declares, so the README's story cannot drift from the committed files;
+* the GROUNDING, decided empirically and pinned as observed — ALL THREE
+  documents are denied. The base draws the ``firewall_exposure`` finding (the
+  allow's own text admits a public source to tcp/3389 — that check reads one
+  rule's payload, no estate), the FINDING-A ``firewall_shadow`` (the allow is
+  unreachable behind ``deny-external-rdp``) and the FINDING-C mirror (the
+  restated deny kills the estate's allow). The proposal keeps exposure plus
+  FINDING A — dead today by the estate fold, world-open by its own text. The
+  cleanup was EXPECTED to approve and empirically does NOT: deletions are
+  invisible without the parked pair tier, so the restated deny is compared
+  against an estate that still holds ``allow-rdp-broad`` and draws the same
+  kill-report the base drew — a true sentence about today's estate (it IS the
+  mask), conservatively mis-attributed to the document that restates the deny;
+* the README's step-9 invocations — four flags each, no ``--requirements``
+  (nothing here is a compiled promise; every finding is a built-in estate
+  check), each exiting 1 with the narrative the README quotes.
+
+Everything is in-process (no subprocess), and environment-honest: without z3
+neither the exposure nor the shadow check decides anything, so every denial
+pin is skipped rather than vacuously branched. The grounding pins run through
+the same ``sources.load_current`` route the CLI takes; the shadow and exposure
+verdicts rest on the tfstate fold (fresh) and the rule's own text, so unlike
+scenario two's scope-diff warning they are NOT re-graded by the stale fixture
+snapshot. The exposure witness address is a z3 model — a solver-minted example,
+so the pins name the flow, never the address.
+"""
+
+import json
+import os
+from copy import deepcopy
+from pathlib import Path
+
+import pytest
+
+from gcp_grounding import baseline, drift, engine, gate, sources
+from gcp_grounding.cli import main
+from gcp_grounding.core.solver import get_solver
+
+FIXTURES = Path(__file__).parent / "fixtures" / "gcp"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+EXAMPLE = REPO_ROOT / "examples" / "terraform-masked"
+BASE = EXAMPLE / "base.tf.json"
+PROPOSAL = EXAMPLE / "proposal.tf.json"
+CLEANUP = EXAMPLE / "cleanup.tf.json"
+STATE = EXAMPLE / "terraform.tfstate"
+
+SNAPSHOT = FIXTURES / "agentic_snapshot.json"
+
+ALLOW_ADDRESS = "google_compute_firewall.allow_rdp_broad"
+DENY_ADDRESS = "google_compute_firewall.deny_rdp"
+ALLOW_NAME = "allow-rdp-broad"
+DENY_NAME = "deny-external-rdp"
+
+#: The exposure witness is a z3 model — a solver-minted example; the
+#: flow it exhibits does not.
+EXPOSED_FLOW = "can reach tcp/3389 through this rule"
+#: FINDING A on the allow: dead behind the higher-precedence deny.
+MASKED = (f"unreachable — every packet this rule matches is already decided "
+          f"by higher-precedence rule(s) {DENY_NAME}; the rule has no effect")
+#: FINDING C on the deny: the kill-report against the estate's allow — the
+#: mask itself, re-discovered from the other side.
+KILL_REPORT = (f"this deny at priority 900 makes the existing allow "
+               f"'{ALLOW_NAME}' at priority 1000 unreachable")
+
+HAVE_Z3 = get_solver().backend == "z3"
+
+_needs_z3 = pytest.mark.skipif(
+    not HAVE_Z3, reason="no z3: neither the exposure nor the shadow check "
+                        "decides anything, so no document here can deny")
+
+
+@pytest.fixture(autouse=True)
+def _env_off(monkeypatch):
+    """No test here inherits a developer's exported grounding configuration."""
+    for name in list(os.environ):
+        if name.startswith("GCP_GROUNDING"):
+            monkeypatch.delenv(name, raising=False)
+
+
+def invoke(capsys, *argv: str) -> tuple[int, str, str]:
+    code = main(list(argv))
+    out, err = capsys.readouterr()
+    return code, out, err
+
+
+def _evaluate(proposal: Path):
+    """The library route the CLI takes, with the built-in checks only: this
+    scenario compiles no promises, so there is no rule set to load."""
+    built = gate.terraform_proposal(str(proposal), raw=False)
+    assert built.proposal is not None, built.note
+    current = sources.load_current(sources.SourceOptions(
+        primary=str(SNAPSHOT), terraform_state=(str(STATE),)))
+    assert not current.problem, current.problem
+    report = engine.evaluate(built.proposal, current, engine.RuleSet()).report
+    # The CLI's one finishing pass (cli._finish_report) re-grades existence
+    # verdicts minted over a stale or partial view; the library route applies
+    # the same post-pass so it pins the same decision the README commands show.
+    snapshot, _ledger = baseline.current_view(current)
+    drift.postpass(report, snapshot)
+    return report
+
+
+def _blocking(report):
+    return [v for v in report.verdicts
+            if v.status in ("contradicted", "ungrounded")]
+
+
+# -- the fixtures themselves ---------------------------------------------------
+
+
+def test_the_proposal_is_the_base_minus_exactly_the_deny_block():
+    expected = deepcopy(json.loads(BASE.read_text(encoding="utf-8")))
+    del expected["resource"]["google_compute_firewall"]["deny_rdp"]
+    proposed = json.loads(PROPOSAL.read_text(encoding="utf-8"))
+    assert proposed == expected, (
+        "proposal.tf.json must be base.tf.json minus exactly the deny block — "
+        "nothing more, nothing less")
+
+
+def test_the_cleanup_is_the_base_minus_exactly_the_allow_block():
+    expected = deepcopy(json.loads(BASE.read_text(encoding="utf-8")))
+    del expected["resource"]["google_compute_firewall"]["allow_rdp_broad"]
+    cleaned = json.loads(CLEANUP.read_text(encoding="utf-8"))
+    assert cleaned == expected, (
+        "cleanup.tf.json must be base.tf.json minus exactly the allow block — "
+        "nothing more, nothing less")
+
+
+def test_the_state_carries_both_rules_the_base_declares():
+    declared = json.loads(BASE.read_text(encoding="utf-8"))[
+        "resource"]["google_compute_firewall"]
+    state = json.loads(STATE.read_text(encoding="utf-8"))
+    assert state["version"] == 4
+    rules = {r["name"]: r for r in state["resources"]
+             if r["type"] == "google_compute_firewall"}
+    assert set(rules) == {"allow_rdp_broad", "deny_rdp"}
+    for name, block in declared.items():
+        attributes = rules[name]["instances"][0]["attributes"]
+        for key in block:
+            assert attributes[key] == block[key], f"{name}.{key}"
+
+
+def test_the_pair_is_the_masked_shape_the_story_needs():
+    """The scenario's premise as data: same flow, same sources, and the deny
+    outranks the allow — which is exactly why the allow is dead today."""
+    declared = json.loads(BASE.read_text(encoding="utf-8"))[
+        "resource"]["google_compute_firewall"]
+    allow, deny = declared["allow_rdp_broad"], declared["deny_rdp"]
+    assert allow["allow"] == [{"ports": ["3389"], "protocol": "tcp"}]
+    assert deny["deny"] == [{"ports": ["3389"], "protocol": "tcp"}]
+    assert allow["source_ranges"] == deny["source_ranges"] == ["0.0.0.0/0"]
+    assert deny["priority"] == 900 < allow["priority"] == 1000
+    assert allow["name"] == ALLOW_NAME and deny["name"] == DENY_NAME
+    assert allow["network"] == deny["network"]
+
+
+def test_the_example_ships_no_config_file():
+    assert not (EXAMPLE / ".gcp-grounding.json").exists()
+
+
+# -- the grounding, through the library route the CLI itself takes -------------
+
+
+@_needs_z3
+def test_the_base_is_denied_naming_the_dead_pair_from_both_directions():
+    """Hygiene debt on arrival: the dead allow is named twice (world-open by
+    its own text, unreachable behind the deny) and the restated deny draws the
+    mirror kill-report. Three contradictions, no more."""
+    report = _evaluate(BASE)
+    assert not report.ok
+
+    blocking = _blocking(report)
+    assert len(blocking) == 3, blocking
+    assert all(v.status == "contradicted" for v in blocking), blocking
+
+    exposure = [v for v in blocking if v.kind == "firewall_exposure"]
+    assert len(exposure) == 1, blocking
+    assert exposure[0].message.startswith(ALLOW_ADDRESS)
+    assert "a public source (" in exposure[0].message
+    assert EXPOSED_FLOW in exposure[0].message
+
+    shadows = sorted((v.message for v in blocking
+                      if v.kind == "firewall_shadow"))
+    assert len(shadows) == 2, blocking
+    assert shadows[0].startswith(ALLOW_ADDRESS) and MASKED in shadows[0]
+    assert shadows[1].startswith(DENY_ADDRESS) and KILL_REPORT in shadows[1]
+
+
+@_needs_z3
+def test_the_proposal_is_denied_on_the_exposure_and_shadow_interplay():
+    """The accident: with the deny gone from the document, the allow's own
+    text is world-open (exposure) while the estate fold — still holding the
+    very deny this change deletes — says the rule is dead today (shadow).
+    Together: dead today, world-open the moment this applies."""
+    report = _evaluate(PROPOSAL)
+    assert not report.ok
+
+    blocking = _blocking(report)
+    assert len(blocking) == 2, blocking
+
+    exposure = [v for v in blocking if v.kind == "firewall_exposure"]
+    assert len(exposure) == 1, blocking
+    assert exposure[0].status == "contradicted"
+    assert exposure[0].message.startswith(ALLOW_ADDRESS)
+    assert EXPOSED_FLOW in exposure[0].message
+
+    shadow = [v for v in blocking if v.kind == "firewall_shadow"]
+    assert len(shadow) == 1, blocking
+    assert shadow[0].status == "contradicted"
+    assert shadow[0].message.startswith(ALLOW_ADDRESS)
+    assert DENY_NAME in shadow[0].message, "the masking deny must be named"
+    assert MASKED in shadow[0].message
+
+
+@_needs_z3
+def test_the_cleanup_is_denied_too_the_pair_tier_gap_cuts_both_ways():
+    """EMPIRICAL, not the arc as first expected: deleting the dead allow was
+    meant to approve, but deletions are invisible without the pair tier. The
+    restated deny is compared against an estate that still carries the allow
+    and draws the kill-report — the ONLY blocker, and a true sentence about
+    today's estate (it is the mask itself), conservatively attributed to the
+    document that restates the deny."""
+    report = _evaluate(CLEANUP)
+    assert not report.ok
+
+    blocking = _blocking(report)
+    assert len(blocking) == 1, blocking
+    verdict = blocking[0]
+    assert verdict.status == "contradicted" and verdict.kind == "firewall_shadow"
+    assert verdict.message.startswith(DENY_ADDRESS)
+    assert KILL_REPORT in verdict.message
+    # No exposure finding anywhere: a deny exposes nothing on its own.
+    assert not [v for v in report.verdicts if v.kind == "firewall_exposure"]
+
+
+# -- the README's step-9 invocations, four flags each ---------------------------
+
+
+def _verify(capsys, proposal: Path) -> tuple[int, str, str]:
+    return invoke(
+        capsys, "verify-policy",
+        "--proposal", str(proposal),
+        "--snapshot", str(SNAPSHOT),
+        "--terraform-state", str(STATE),
+        "--explain")
+
+
+@_needs_z3
+def test_the_readme_base_invocation_denies_naming_all_three_findings(capsys):
+    code, out, err = _verify(capsys, BASE)
+    assert code == 1
+    assert "FAILED" in out
+    assert "decision: DENIED (exit 1)" in err
+    for stream in (out, err):
+        assert "[firewall_exposure]" in stream
+        assert "[firewall_shadow]" in stream
+        assert MASKED in stream
+        assert KILL_REPORT in stream
+
+
+@_needs_z3
+def test_the_readme_proposal_invocation_denies_with_the_two_stories(capsys):
+    code, out, err = _verify(capsys, PROPOSAL)
+    assert code == 1
+    assert "FAILED" in out
+    assert "decision: DENIED (exit 1)" in err
+    # The recap — the last lines a terminal shows — carries both stories:
+    # world-open by its own text, dead today behind the deny being deleted.
+    recap = err[err.index("decision recap:"):]
+    assert "DENIED (exit 1)" in recap
+    assert "[firewall_exposure]" in recap and EXPOSED_FLOW in recap
+    assert "[firewall_shadow]" in recap and MASKED in recap
+    assert KILL_REPORT not in err, "no deny in the document, no kill-report"
+
+
+@_needs_z3
+def test_the_readme_cleanup_invocation_denies_on_the_kill_report_alone(capsys):
+    code, out, err = _verify(capsys, CLEANUP)
+    assert code == 1
+    assert "FAILED" in out
+    assert "decision: DENIED (exit 1)" in err
+    recap = err[err.index("decision recap:"):]
+    assert "[firewall_shadow]" in recap and KILL_REPORT in recap
+    assert "[firewall_exposure]" not in err, \
+        "a deny exposes nothing on its own"
