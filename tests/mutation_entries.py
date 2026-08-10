@@ -22,7 +22,7 @@ appended under those same rules, read from ``agent/gx-evidence-invokers``.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import import_module
 from pathlib import Path
 
@@ -541,6 +541,36 @@ def _drop_extractor(monkeypatch, rtype: str) -> None:
     _patch(monkeypatch, "gcp_grounding.tf_claims",
            _EXTRACTORS=dict(table, **{rtype: lambda address, values: []}))
 
+#: `gx-agentic-secreq-repin`'s two, and the nodes each reddens. A BENIGN case
+#: cannot tell a real positive from a rubber-stamped one — silence is exactly
+#: what a rule set that stopped deciding produces — so both name VIOLATING nodes
+#: only, and never one of the false-positive-budget cases.
+_SQ = "tests/test_gcp_agentic_secreq.py::"
+_SOWNER = "gx-agentic-secreq-repin"
+SECREQ_IN_PROCESS = ("monkeypatched after collection; the secreq module's report "
+                     "sidecars are an IN-PROCESS `cli.main` mirror, which is "
+                     "where a removal reaches them — the hook runs beside them "
+                     "stay children and are untouched, so each named node fails "
+                     "on its report assertion and not on its block")
+
+
+def _mute_rule_evaluator(monkeypatch) -> None:
+    """Take away THE RULE EVALUATOR: every compiled requirement returns the
+    not-applicable answer, so no promise ever reaches a verdict."""
+    sec_rules = import_module("gcp_grounding.sec_rules")
+    monkeypatch.setattr(sec_rules.CompiledRule, "evaluate",
+                        lambda self, ctx: None)
+
+
+def _empty_the_artifact_writer(monkeypatch) -> None:
+    """Take away THE ARTIFACT WRITER's promise records: what it serialises is a
+    well-formed ``*.promises.json`` holding no promise at all."""
+    sec_artifact = import_module("gcp_grounding.sec_artifact")
+    real = sec_artifact.dumps
+    monkeypatch.setattr(sec_artifact, "dumps",
+                        lambda doc: real(replace(doc, promises=())))
+
+
 #: The path ``RM-HOOK-WRONG-FILE``'s mutant grounds instead of the event's. A
 #: repo-relative path that DOES NOT EXIST, so the hook reaches the gate, the
 #: gate opens nothing, and the abstention it prints names this file and not the
@@ -752,4 +782,32 @@ REMOVALS: tuple[SeededRemoval, ...] = (
                    _BPAIR + "B04_orgpolicy_shielded_vm]",
                    _BPAIR + "B06_tfplan_iam_member]"),
         owner=_BOWNER, pending=False, spelling=IN_PROCESS),
+    # THE REQUIREMENTS CAPSTONE'S TWO, the halves a compiled promise stands on:
+    # the thing that DECIDES it and the thing that WRITES it down. Both are LIVE
+    # (a new live removal is one slot and one `-rA` child, net zero on
+    # `contract_spawn_ceiling()`), and both were MEASURED both ways in this
+    # checkout: every node below reports FAILED under its removal and PASSES on
+    # clean source.
+    SeededRemoval(
+        id="RM-SECREQ-RULE-EVALUATOR", family="secreq",
+        subject="sec_rules.CompiledRule.evaluate, the compiled-requirement "
+                "evaluator — every promise answers not-applicable and none "
+                "ever reaches a verdict",
+        apply=_mute_rule_evaluator,
+        must_fail=(_SQ + "test_S03_agent_violates_each_promise",
+                   _SQ + "test_S03b_the_perimeter_vacuity_is_blocked",
+                   _SQ + "test_S09_the_pruned_artifact_still_blocks"),
+        owner=_SOWNER, pending=False, spelling=SECREQ_IN_PROCESS),
+    SeededRemoval(
+        id="RM-SECREQ-ARTIFACT-WRITER", family="secreq",
+        subject="the promise records sec_artifact.dumps writes: the artifact is "
+                "still well-formed and still loads, and holds no promise",
+        apply=_empty_the_artifact_writer,
+        # ONE node, and a violating one on purpose. The pruned artifact this
+        # module builds in process is the false-positive budget's instrument,
+        # and an instrument that lost its rules is BYTE-SILENT — which is what
+        # the benign cases assert. Only a document that must be REFUTED can tell
+        # the two apart.
+        must_fail=(_SQ + "test_S09_the_pruned_artifact_still_blocks",),
+        owner=_SOWNER, pending=False, spelling=SECREQ_IN_PROCESS),
 )

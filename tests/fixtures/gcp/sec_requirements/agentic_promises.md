@@ -62,13 +62,14 @@ smt:
 
 ## Service account key creation stays disabled
 
-constraints/iam.disableServiceAccountKeyCreation must be enforced.
+Every Org Policy rule for constraints/iam.disableServiceAccountKeyCreation must set enforce to true.
 
 ```promise
 id: sa-key-creation-disabled
 domain: org_policy
 vocab: constraint constraints/iam.disableServiceAccountKeyCreation
 note: org_policy_rules spells the constraint the way the document's name does, as the tail after /policies/, so the literal here carries no constraints/ prefix
+note: the sentence says what the rule CHECKS — the refutation of a rule that leaves enforce false — and not "the constraint must be enforced", which this formula cannot decide from a proposal that carries no rule for it at all; the vocab line above is what scopes the promise, so a document about another constraint abstains instead of grounding vacuously
 smt:
   exists r in org_policy_rules
     and
@@ -103,13 +104,15 @@ Every service perimeter must keep storage.googleapis.com in restricted_services.
 ```promise
 id: perimeter-restricts-storage
 domain: vpc_sc
-note: perimeter_restricted_services is one row per (perimeter, service, section), so "every perimeter keeps it" is the refutation of "some perimeter has restricted services and storage.googleapis.com is not among them"
+note: the universal binds over perimeter_resources, NOT over perimeter_restricted_services — a perimeter whose restricted-services list is empty contributes no service row, so an existential over that collection has nothing to bind and refute mode grounds over a perimeter that restricts nothing
+note: the section is bound too, because status is the enforced half and spec the dry-run one — without it a perimeter that restricts storage only in spec reads as keeping it
 smt:
-  exists p in perimeter_restricted_services
+  exists p in perimeter_resources
     not
       exists q in perimeter_restricted_services
         and
           cmp eq field q.perimeter field p.perimeter
+          cmp eq field q.section field p.section
           cmp eq field q.service str "storage.googleapis.com"
 ```
 
