@@ -1051,6 +1051,10 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
     _incomplete_notice(ground, settings, hook=False)
     if args.explain:
         # After the report, so the decision is the last thing on the terminal.
+        # The explicit flush is what makes that true under a pipe or 2>&1,
+        # where stdout is block-buffered and would otherwise drain at exit,
+        # AFTER this stderr write, burying the recap mid-stream.
+        sys.stdout.flush()
         print("\n".join(_decision_recap_lines(ground.report, hook=False)),
               file=sys.stderr)
     return EXIT_OK if ground.report.ok else EXIT_FAILED
