@@ -722,8 +722,11 @@ def test_explain_prints_the_sexpr_and_both_witnesses(capsys, clean_artifacts):
                                "--format", "json", "--explain")
     assert code == 0
     json.loads(stdout)  # stdout stays JSON-parseable; the block goes to stderr
-    assert "[sec:iam] clean-no-primitive-owner" in err
-    assert '(exists ((b iam_bindings)) (eq b.role "roles/owner"))' in err
+    # The stanza carries the promise id, its domain and its verdict this run,
+    # the quoted source sentence, the s-expression, and both pinned witnesses.
+    assert "  holds     clean-no-primitive-owner [iam]" in err
+    assert '"No binding may grant the primitive owner role."' in err
+    assert 'rule: (exists ((b iam_bindings)) (eq b.role "roles/owner"))' in err
     assert "+ compliant:" in err
     assert "- violating:" in err
 
@@ -732,7 +735,67 @@ def test_explain_without_requirements_has_no_sec_block(capsys):
     code, _, err = invoke(capsys, "verify-policy", str(GOOD),
                           "--snapshot", str(SNAPSHOT), "--explain")
     assert code == 0
-    assert "compiled requirements loaded this run" not in err
+    assert "promises in force" not in err
+
+
+#: The agentic corpus and fixtures behind the end-to-end narrative test: A10
+#: proposes roles/owner for an external principal, which the compiled
+#: ``no-primitive-roles-outside-domain`` promise refutes.
+AGENTIC = FIXTURES / "agentic"
+AGENTIC_SNAPSHOT = FIXTURES / "agentic_snapshot.json"
+AGENTIC_REQUIREMENTS = FIXTURES / "sec_requirements"
+A10_POLICY = AGENTIC / "iam" / "A10_owner_to_external.policy.json"
+
+
+@_needs_z3
+def test_explain_reads_as_a_decision_narrative_on_a_denied_policy(
+        capsys, tmp_path):
+    """The full ``--explain`` story on the A10 fixture, in reading order:
+    what was proposed, then the decision with its reasons, then the promises
+    in force, then the unchanged reference blocks — with the report itself
+    still the stdout document it has always been."""
+    compiled = tmp_path / "compiled"
+    # Exit 1 by design: the corpus carries a rejected promise. The artifacts
+    # are still written, which is what the pickup reads.
+    assert main(["compile-requirements", str(AGENTIC_REQUIREMENTS),
+                 "--snapshot", str(AGENTIC_SNAPSHOT),
+                 "--out", str(compiled)]) == 1
+    capsys.readouterr()
+    code, stdout, err = invoke(capsys, "verify-policy", str(A10_POLICY),
+                               "--snapshot", str(AGENTIC_SNAPSHOT),
+                               "--requirements", str(compiled), "--explain")
+    assert code == 1
+    # The narrative sections, in order, ahead of the reference blocks.
+    proposed = err.index("what was proposed:")
+    decision = err.index("decision: DENIED (exit 1)")
+    promises = err.index("promises in force (6 enforcing, 2 not")
+    constraints = err.index("z3 constraints generated this run")
+    state = err.index("state used this run")
+    assert proposed < decision < promises < constraints < state
+    # What was proposed: the document, its kind, and the offending element.
+    assert f"{A10_POLICY} — an IAM allow-policy" in err
+    assert "binding: roles/owner -> user:attacker@evil.example" in err
+    # Why it was denied: the gate's own finding messages, plus the honest rest.
+    assert "why:" in err
+    assert "principal 'user:attacker@evil.example' does not exist" in err
+    assert "honestly undecided: 2 abstention(s)" in err
+    assert "checks that passed: 4" in err
+    # The violated promise's stanza: marker, sentence, refutation, rule.
+    assert "VIOLATED  no-primitive-roles-outside-domain [iam]" in err
+    assert ('"No binding may grant roles/owner or roles/editor to any '
+            'principal outside domain acme.example."') in err
+    assert "refuted by iam_bindings[0]" in err
+    assert ("rule: (exists ((b iam_bindings)) (and (not (suffix b.member "
+            '"acme.example")) (in b.role (set "roles/editor" '
+            '"roles/owner"))))') in err
+    # A promise that held, and the two that never compiled.
+    assert "holds     no-public-principals [iam]" in err
+    assert ("not enforcing  untranslated-security-review-before-merge — "
+            in err)
+    assert "the sentence was not translated" in err
+    # The stdout report is untouched by the narrative.
+    assert stdout.startswith("GCP policy grounding")
+    assert "FAILED" in stdout
 
 
 # -- the compiled artifacts actually enforce -----------------------------------

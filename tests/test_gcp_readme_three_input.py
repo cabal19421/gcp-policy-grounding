@@ -33,8 +33,12 @@ def _options(parser):
 
 
 def test_every_documented_flag_is_accepted_by_the_parser():
+    # A single-quoted string is DATA handed to a flag, not a flag being
+    # documented: the scan-command demo quotes a gcloud invocation whose own
+    # --member/--role must not be read as gcp-ground flags.
     shown = {f for block in BASH
-             for f in re.findall(r"--[A-Za-z0-9][A-Za-z0-9-]*", block)}
+             for f in re.findall(r"--[A-Za-z0-9][A-Za-z0-9-]*",
+                                 re.sub(r"'[^']*'", "", block))}
     unknown = sorted(shown - _options(cli.build_parser()))
     assert shown and not unknown, f"documented but not a CLI flag: {unknown}"
 

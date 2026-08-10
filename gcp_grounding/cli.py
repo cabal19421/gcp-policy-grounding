@@ -285,13 +285,32 @@ When every loaded promise is enforcing, nothing is printed — a channel that
 fires on a healthy configuration is noise, and noise gets guardrails switched
 off.
 
-``--explain`` re-derives and dumps (to stderr, keeping stdout parseable for
-``--format json``) the z3 constraints this run generated: the translated
-formula per ``cel`` condition and the new⊈old satisfiability assertion when
-a ``--baseline`` comparison ran. The derivation is deterministic, so the
-re-generated formulas are exactly the ones the checks decided. With requirements
-configured it also prints each compiled promise's s-expression and its two
-pinned witnesses (:func:`gcp_grounding.sec_evidence.explain_lines`).
+``--explain`` writes a DECISION NARRATIVE to stderr (keeping stdout parseable
+for ``--format json``), in reading order:
+
+- WHAT WAS PROPOSED — the document, the human name of its detected kind, and
+  one line per proposed element (bindings for an IAM policy, constraint and
+  rules for an Org Policy, changed resource addresses for a terraform plan),
+  bounded at :data:`_PROPOSAL_LINE_CAP` lines with an elision count;
+- the DECISION — APPROVED or DENIED with the exit code, then why: every
+  ungrounded/contradicted verdict's own message, the abstentions, and the
+  count of checks that passed;
+- the PROMISES IN FORCE (:func:`gcp_grounding.sec_evidence.explain_lines`,
+  with requirements configured) — one stanza per compiled promise, marked
+  VIOLATED / holds / undecided by cross-referencing this run's verdicts, each
+  carrying the source sentence with its file:line, the s-expression and the
+  two pinned witnesses, plus one ``not enforcing`` line per promise that
+  never compiled;
+- then the reference blocks, unchanged: the z3 constraints this run generated
+  — the translated formula per ``cel`` condition and the new⊈old
+  satisfiability assertion when a ``--baseline`` comparison ran, re-derived
+  deterministically so the dumped formulas are exactly the ones the checks
+  decided — and the state block.
+
+The narrative prints BEFORE the stdout report, so the combined output reads
+top to bottom as one story ending in the report itself. A document the
+narrative cannot read or summarize costs the proposal block its summary and
+nothing else — the explain path never crashes a run.
 
 ``--format json`` emits :func:`gcp_grounding.sec_evidence.sec_document` instead
 of :meth:`~gcp_grounding.report.PolicyReport.to_dict` whenever a requirements
@@ -985,12 +1004,13 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
     # format's key, and the human render carries the same content through
     # --state-explain.
     state = _state_document(ground, settings) if args.format == "json" else None
-    print(_render_policy(policy_report, args.format, source, rules, state=state))
     if args.explain:
-        lines = _explain_lines(args.file, args.baseline)
-        lines.extend(_sec_explain_lines(source, rules))
-        lines.extend(_state_explain_lines(ground, settings, ""))
-        print("\n".join(lines), file=sys.stderr)
+        # The narrative precedes the stdout report so the combined streams read
+        # top to bottom as one story ending in the report itself.
+        print("\n".join(_narrative_lines(args.file, args.baseline, ground,
+                                         settings, source, rules, carried,
+                                         hook=False)), file=sys.stderr)
+    print(_render_policy(policy_report, args.format, source, rules, state=state))
     if args.state_explain is not None:
         print("\n".join(_state_explain_lines(ground, settings, args.state_explain)),
               file=sys.stderr)
@@ -1694,12 +1714,16 @@ def _sec_document(policy_report: PolicyReport, rules, fallback: Any) -> Any:
         policy_report, _witness_table(sec_evidence, sec_rules, rules), rules)
 
 
-def _sec_explain_lines(source: str | None, rules) -> list[str]:
-    """The ``--explain`` stanzas for the compiled requirements, or ``[]``.
+def _sec_explain_lines(source: str | None, rules,
+                       report: GroundingReport | None = None,
+                       carried=()) -> list[str]:
+    """The promises-in-force block, or ``[]`` when requirements are off.
 
-    Each loaded promise's s-expression and pinned witnesses print next to the
-    CEL and subset formulas: the reviewer's cross-check that what shipped in the
-    artifact is what actually ran.
+    The renderer cross-references the report's verdicts by promise id, so each
+    stanza's marker (VIOLATED / holds / undecided) cannot drift from what the
+    gate decided; *carried* supplies the ``not enforcing`` lines, and each
+    promise's s-expression and pinned witnesses stay the reviewer's cross-check
+    that what shipped in the artifact is what actually ran.
     """
     if source is None:
         return []
@@ -1708,8 +1732,29 @@ def _sec_explain_lines(source: str | None, rules) -> list[str]:
     except ImportError:
         logger.debug("the sec evidence channel is unavailable", exc_info=True)
         return []
-    return ["compiled requirements loaded this run:",
-            *sec_evidence.explain_lines(rules)]
+    verdicts = report.verdicts if report is not None else ()
+    return sec_evidence.explain_lines(rules, verdicts=verdicts, carried=carried,
+                                      source=source)
+
+
+def _narrative_lines(path: str, baseline: str | None, ground: _Ground,
+                     settings: discovery.Settings, source: str | None, rules,
+                     carried, *, hook: bool) -> list[str]:
+    """The ``--explain`` story, in reading order: what was proposed, the
+    decision and its reasons, the promises in force, then the reference blocks
+    (the z3 constraints and the state provenance) exactly as they have always
+    rendered. One blank line separates the narrative sections."""
+    lines = _proposed_lines(path)
+    lines.append("")
+    lines.extend(_decision_lines(ground.report, hook=hook))
+    sec = _sec_explain_lines(source, rules, ground.report, carried)
+    if sec:
+        lines.append("")
+        lines.extend(sec)
+    lines.append("")
+    lines.extend(_explain_lines(path, baseline))
+    lines.extend(_state_explain_lines(ground, settings, ""))
+    return lines
 
 
 # -- --hook: Claude-Code PostToolUse ------------------------------------------
@@ -1786,10 +1831,9 @@ def _run_hook(args: argparse.Namespace) -> int:
         return _usage(ground.problem, hook=True)
     report = ground.report
     if args.explain:
-        lines = _explain_lines(path, args.baseline)
-        lines.extend(_sec_explain_lines(source, rules))
-        lines.extend(_state_explain_lines(ground, settings, ""))
-        print("\n".join(lines), file=sys.stderr)
+        print("\n".join(_narrative_lines(path, args.baseline, ground, settings,
+                                         source, rules, carried, hook=True)),
+              file=sys.stderr)
     if args.state_explain is not None:
         print("\n".join(_state_explain_lines(ground, settings, args.state_explain)),
               file=sys.stderr)
@@ -2604,6 +2648,185 @@ def _llm_note(enabled: bool, sec_compile: Any) -> None:
     if "llm" not in inspect.signature(sec_compile.compile_directory).parameters:
         print(f"{note}: this build's compiler exposes no LLM-assisted stage — "
               f"compiling deterministically", file=sys.stderr)
+
+
+# -- --explain: the decision narrative ------------------------------------------
+
+
+#: Human names for :func:`preflight.detect_kind`'s answers, on the proposal
+#: block's header line.
+_KIND_NAMES = {
+    "iam_policy": "an IAM allow-policy",
+    "org_policy": "an Org Policy constraint change",
+    "tf_plan": "a terraform plan",
+    "iam_deny_policy": "an IAM deny-policy",
+    "vpc_sc_perimeter": "a VPC Service Controls perimeter",
+    "access_level": "an Access Context Manager access level",
+    "firewall_rule": "a VPC firewall rule",
+    "firewall_policy": "a VPC firewall policy",
+    "security_policy": "a Cloud Armor security policy",
+}
+
+#: The proposal summary's line budget; past it the count of elided elements
+#: prints instead of the elements.
+_PROPOSAL_LINE_CAP = 20
+
+#: The decision's "why" lines: the statuses that fail the gate, in the human
+#: render's own findings-first order.
+_FINDING_STATUSES = ("contradicted", "ungrounded")
+
+
+def _proposed_lines(path: str) -> list[str]:
+    """The "what was proposed" block: the document, the human name of its
+    detected kind, and one bounded line per proposed element.
+
+    Tolerant end to end — an unreadable or unrecognized document names the
+    problem on the header line and costs only the summary, because the explain
+    path must never crash a run the gate itself survived.
+    """
+    lines = ["what was proposed:"]
+    doc, error = _read_json(path)
+    if error is not None:
+        lines.append(f"  {path} — {error}")
+        return lines
+    kind = detect_kind(doc)
+    name = _KIND_NAMES.get(kind, "not a recognized policy document kind")
+    lines.append(f"  {path} — {name}")
+    summary = _proposal_summary(doc, kind)
+    if len(summary) > _PROPOSAL_LINE_CAP:
+        elided = len(summary) - _PROPOSAL_LINE_CAP
+        summary = summary[:_PROPOSAL_LINE_CAP]
+        summary.append(f"    (... and {elided} more)")
+    lines.extend(summary)
+    return lines
+
+
+def _proposal_summary(doc: Any, kind: str | None) -> list[str]:
+    """One line per proposed element for the kinds with a natural element list;
+    ``[]`` for everything else (the header line already names the kind). Never
+    raises: a malformed element is the verdicts' business, not the
+    narrative's."""
+    try:
+        if kind == "iam_policy":
+            return _iam_summary(doc)
+        if kind == "org_policy":
+            return _org_summary(doc)
+        if kind == "tf_plan":
+            return _plan_summary(doc)
+    except Exception:
+        logger.debug("--explain: the proposal summary failed", exc_info=True)
+    return []
+
+
+def _iam_summary(doc: Mapping[str, Any]) -> list[str]:
+    """One line per binding: role, members, and whether a condition gates it."""
+    lines: list[str] = []
+    bindings = doc.get("bindings")
+    if not isinstance(bindings, list):
+        return lines
+    for binding in bindings:
+        if not isinstance(binding, Mapping):
+            continue
+        role = binding.get("role") or "(no role)"
+        members = binding.get("members")
+        who = (", ".join(str(m) for m in members)
+               if isinstance(members, list) and members else "(no members)")
+        condition = binding.get("condition")
+        gated = ""
+        if isinstance(condition, Mapping):
+            label = condition.get("title") or condition.get("expression")
+            gated = f"  (conditional: {label})" if label else "  (conditional)"
+        elif condition is not None:
+            gated = "  (conditional)"
+        lines.append(f"    binding: {role} -> {who}{gated}")
+    return lines
+
+
+def _org_summary(doc: Mapping[str, Any]) -> list[str]:
+    """The constraint plus one line per rule — v1 (boolean/list policy) and v2
+    (``spec.rules``) shapes both."""
+    lines: list[str] = []
+    constraint = doc.get("constraint") or doc.get("name")
+    if constraint:
+        lines.append(f"    constraint: {constraint}")
+    boolean = doc.get("booleanPolicy")
+    if isinstance(boolean, Mapping):
+        lines.append(f"    enforce: {boolean.get('enforced')}")
+    listed = doc.get("listPolicy")
+    if isinstance(listed, Mapping):
+        for key, word in (("allowedValues", "allow"), ("deniedValues", "deny")):
+            values = listed.get(key)
+            if isinstance(values, list):
+                lines.append(f"    {word} values: "
+                             f"{', '.join(str(v) for v in values)}")
+        if listed.get("allValues") is not None:
+            lines.append(f"    all values: {listed.get('allValues')}")
+    spec = doc.get("spec")
+    rules = spec.get("rules") if isinstance(spec, Mapping) else None
+    if isinstance(rules, list):
+        for rule in rules:
+            if not isinstance(rule, Mapping):
+                continue
+            parts: list[str] = []
+            if "enforce" in rule:
+                parts.append(f"enforce={rule.get('enforce')}")
+            values = rule.get("values")
+            if isinstance(values, Mapping):
+                for key, word in (("allowedValues", "allow"),
+                                  ("deniedValues", "deny")):
+                    got = values.get(key)
+                    if isinstance(got, list):
+                        parts.append(f"{word} {', '.join(str(v) for v in got)}")
+            if rule.get("condition") is not None:
+                parts.append("(conditional)")
+            lines.append(f"    rule: {' '.join(parts) if parts else '(empty)'}")
+    return lines
+
+
+def _plan_summary(doc: Mapping[str, Any]) -> list[str]:
+    """One line per changed resource address; no-op entries are not changes."""
+    lines: list[str] = []
+    changes = doc.get("resource_changes")
+    if not isinstance(changes, list):
+        return lines
+    for entry in changes:
+        if not isinstance(entry, Mapping):
+            continue
+        change = entry.get("change")
+        actions = change.get("actions") if isinstance(change, Mapping) else None
+        if actions == ["no-op"]:
+            continue
+        verb = ("/".join(str(a) for a in actions)
+                if isinstance(actions, list) and actions else "change")
+        lines.append(f"    {verb}: {entry.get('address') or '(no address)'}")
+    return lines
+
+
+def _decision_lines(report: GroundingReport, *, hook: bool) -> list[str]:
+    """The decision and its reasons, read straight off the gate: APPROVED or
+    DENIED with the exit code this mode returns, then the verdicts' own
+    messages — nothing here is recomputed, so the narrative cannot disagree
+    with the exit code. Abstentions and the passed count close the block: an
+    approval that rested on ignorance says so in the same breath."""
+    marks = dict(_MARKS)
+    if report.ok:
+        lines = [f"decision: APPROVED (exit {EXIT_OK})",
+                 "  why: nothing was ungrounded and nothing was contradicted — "
+                 "honest ignorance never fails the gate"]
+    else:
+        lines = [f"decision: DENIED (exit {EXIT_BLOCK if hook else EXIT_FAILED})",
+                 "  why:"]
+        for status in _FINDING_STATUSES:
+            for verdict in report.by_status(status):
+                lines.append(f"    {marks[status]} [{verdict.kind}] "
+                             f"{verdict.message}")
+    undecided = report.by_status("unverified")
+    lines.append(f"  honestly undecided: {len(undecided)} abstention(s)")
+    for verdict in undecided:
+        lines.append(f"    {marks['unverified']} [{verdict.kind}] "
+                     f"{verdict.message}")
+    lines.append(f"  checks that passed: {report.counts()['grounded']}")
+    return lines
 
 
 # -- --explain: the z3 constraints generated this run --------------------------

@@ -543,13 +543,17 @@ def test_state_explain_with_a_domain_and_key_prints_the_drill_down(capsys, tmp_p
 
 
 def test_explain_appends_the_state_lines_after_the_solver_block(capsys, tmp_path):
-    """The existing flag keeps its existing block and gains this one AFTER it."""
+    """The narrative leads, the solver block keeps its place as reference
+    detail, and the state block still comes AFTER it."""
     state = write_json(tmp_path / "terraform.tfstate", firewall_state())
     _, _, err = _state_run(capsys, GOOD, "--terraform-state", state, "--explain")
     lines = err.splitlines()
-    assert lines[0].startswith("z3 constraints generated this run")
-    assert any(line.startswith("state used this run:") for line in lines)
-    assert lines.index("sources:") > 0
+    solver = next(i for i, line in enumerate(lines)
+                  if line.startswith("z3 constraints generated this run"))
+    assert lines[0].startswith("what was proposed:")
+    assert any(line.startswith("state used this run:")
+               for line in lines[solver:])
+    assert lines.index("sources:") > solver
 
 
 def test_the_json_state_key_follows_configuration_and_not_load_outcome(

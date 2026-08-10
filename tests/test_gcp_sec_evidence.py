@@ -242,31 +242,66 @@ def test_the_table_takes_only_witness_rows():
 # -- the --explain block ------------------------------------------------------
 
 
-def test_explain_lines_render_the_documented_shape(rules):
-    lines = explain_lines(rules)
-    assert len(lines) == 6
-    assert lines[0] == ("  [sec:iam] no-public-editor "
-                        "(sec_requirements/iam.md:12): "
+def test_explain_lines_render_the_documented_shape(report, rules):
+    """One stanza per promise, marked from the report's verdicts, carrying the
+    quoted sentence with its file:line, the s-expression and both witnesses —
+    with the ``collection#`` prefixes stripped and empty values as ``''``."""
+    lines = explain_lines(rules, verdicts=report.report.verdicts,
+                          source="artifacts/")
+    assert lines[0] == "promises in force (2 enforcing, 0 not — from artifacts/)"
+    # The VIOLATED stanza comes first, whatever the id order says.
+    assert lines[1] == "  VIOLATED  no-public-editor [iam]"
+    assert lines[2] == ("      \"No IAM binding may grant a role to allUsers.\""
+                        " (sec_requirements/iam.md:12)")
+    assert lines[3] == ("      refuted by iam_bindings[1] member='allUsers' "
+                        "role='roles/editor'")
+    assert lines[4] == ("      rule: "
                         "(not (= iam_bindings#b.member \"allUsers\"))")
-    assert lines[1] == ("      + compliant: "
-                        "iam_bindings#b.member=user:alice@acme.example, "
-                        "iam_bindings#b.role=roles/viewer")
-    assert lines[2] == ("      - violating:  "
-                        "iam_bindings#b.member=allUsers, "
-                        "iam_bindings#b.role=roles/editor")
-    assert lines[3].startswith("  [sec:iam] no-public-iam ")
+    assert lines[5] == ("      + compliant: "
+                        "b.member=user:alice@acme.example, b.role=roles/viewer")
+    assert lines[6] == ("      - violating:  "
+                        "b.member=allUsers, b.role=roles/editor")
+    assert lines[7] == ""  # one blank line between stanzas
+    assert lines[8] == "  holds     no-public-iam [iam]"
 
 
-def test_explain_lines_are_ordered_by_promise_id(rules):
-    ids = [line.split("] ", 1)[1].split(" (", 1)[0]
-           for line in explain_lines(tuple(reversed(rules)))
-           if line.startswith("  [sec:")]
-    assert ids == sorted(ids) == ["no-public-editor", "no-public-iam"]
+def test_explain_lines_order_is_decision_relevant_then_id(report, rules):
+    """VIOLATED before holds; and without verdicts to cross-reference every
+    stanza is "not checked" and falls back to promise-id order."""
+    judged = [line for line in explain_lines(tuple(reversed(rules)),
+                                             verdicts=report.report.verdicts)
+              if line.startswith(("  VIOLATED", "  holds"))]
+    assert judged == ["  VIOLATED  no-public-editor [iam]",
+                      "  holds     no-public-iam [iam]"]
+    unjudged = [line for line in explain_lines(tuple(reversed(rules)))
+                if line.startswith("  not checked")]
+    assert unjudged == ["  not checked  no-public-editor [iam]",
+                        "  not checked  no-public-iam [iam]"]
 
 
 def test_explain_lines_with_no_rules_say_so():
-    assert explain_lines() == ["  (no compiled requirements were loaded)"]
-    assert explain_lines(()) == ["  (no compiled requirements were loaded)"]
+    assert explain_lines() == ["promises in force (0 enforcing, 0 not)",
+                               "  (no compiled requirements were loaded)"]
+    assert explain_lines((), source="artifacts/") == [
+        "promises in force (0 enforcing, 0 not — from artifacts/)",
+        "  (no compiled requirements were loaded)"]
+
+
+def test_explain_lines_name_the_promises_that_are_not_enforcing(rules):
+    """A carry verdict whose target never compiled becomes a ``not enforcing``
+    line — counted in the header, never rendered as a stanza."""
+    carry = Verdict("unverified", "sec:iam", "not-compiled", 0,
+                    "sec_requirements/iam.md:40: 'Reviews are required.' — "
+                    "no promise block — the sentence was not translated")
+    lines = explain_lines(rules, carried=[carry], source="artifacts/")
+    assert lines[0] == "promises in force (2 enforcing, 1 not — from artifacts/)"
+    assert lines[-1] == ("  not enforcing  not-compiled — "
+                         "sec_requirements/iam.md:40: 'Reviews are required.' — "
+                         "no promise block — the sentence was not translated")
+    # A carry verdict for an ENFORCING promise is not a stall.
+    riding = Verdict("unverified", "sec:iam", "no-public-iam", 0, "carried")
+    assert explain_lines(rules, carried=[riding])[0].startswith(
+        "promises in force (2 enforcing, 0 not")
 
 
 def test_explain_lines_never_fabricate_a_missing_witness():
@@ -274,6 +309,6 @@ def test_explain_lines_never_fabricate_a_missing_witness():
                          reason="the requirement named an unknown collection",
                          ast=None, sexpr="", positive=None, negative=None,
                          wellformedness=Wellformedness())
-    _head, positive, negative = explain_lines([unverified])
-    assert positive == "      + compliant: (no pinned witness)"
-    assert negative == "      - violating:  (no pinned witness)"
+    lines = explain_lines([unverified])
+    assert "      + compliant: (no pinned witness)" in lines
+    assert "      - violating:  (no pinned witness)" in lines
