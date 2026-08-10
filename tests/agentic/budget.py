@@ -34,28 +34,55 @@ class SubprocessBudget:
     #: cap, and each module's own teardown cap is unchanged and unrelaxed.
     MAX_SUBPROCESS_SPAWNS = 450
 
-    def __init__(self, max_spawns: int | None = None) -> None:
+    #: The env name the mutation contract's machinery stamps on every child it
+    #: spawns. A spawn carrying it is counted against :attr:`max_marked` — the
+    #: contract's own ceiling, scaled to its register — and never against the
+    #: one above, left untouched. Neither is raisable by a seeding task.
+    CHILD_MARK = "GCP_MUTATION_CONTRACT_CHILD"
+
+    #: Zero: a run never reaching the machinery marks nothing, and the exact
+    #: accounting is handed in by ``tests/conftest.py`` from the register.
+    MAX_MARKED_SPAWNS = 0
+
+    def __init__(self, max_spawns: int | None = None,
+                 max_marked: int | None = None) -> None:
         self.max_spawns = self.MAX_SUBPROCESS_SPAWNS if max_spawns is None else max_spawns
+        self.max_marked = self.MAX_MARKED_SPAWNS if max_marked is None else max_marked
         self.counts: dict[str, int] = {}
+        self.marked: dict[str, int] = {}
 
     @property
     def total(self) -> int:
         return sum(self.counts.values())
 
-    def increment(self, label: str) -> int:
-        """Record one spawn attributed to *label*; return the running total."""
-        self.counts[label] = self.counts.get(label, 0) + 1
-        return self.total
+    @property
+    def marked_total(self) -> int:
+        return sum(self.marked.values())
+
+    def increment(self, label: str, env=None) -> int:
+        """Record one spawn attributed to *label*; return the running total.
+        The mark is read from *env*, the child's OWN environment, so routing
+        follows the process spawned; :attr:`total` is the UNMARKED half."""
+        marked = env is not None and str(env.get(self.CHILD_MARK, "")) == "1"
+        book = self.marked if marked else self.counts
+        book[label] = book.get(label, 0) + 1
+        return self.total + self.marked_total
 
     def check(self) -> None:
         """Raise ``AssertionError`` naming the per-label counts if the total
-        exceeded the ceiling. Called at session teardown, and directly by the
+        exceeded EITHER ceiling. Called at session teardown, and directly by the
         plumbing test against a stub counter with a tiny ceiling."""
-        if self.total > self.max_spawns:
+        self._ceiling("subprocess spawn", self.total, self.max_spawns, self.counts)
+        self._ceiling("mutation-contract spawn", self.marked_total,
+                      self.max_marked, self.marked)
+
+    @staticmethod
+    def _ceiling(what, total, ceiling, counts) -> None:
+        if total > ceiling:
             breakdown = ", ".join(
-                f"{label}={count}" for label, count in sorted(self.counts.items())
+                f"{label}={count}" for label, count in sorted(counts.items())
             ) or "no labels"
             raise AssertionError(
-                f"subprocess spawn budget exceeded: {self.total} spawns > "
-                f"ceiling {self.max_spawns} ({breakdown})"
+                f"{what} budget exceeded: {total} spawns > "
+                f"ceiling {ceiling} ({breakdown})"
             )
