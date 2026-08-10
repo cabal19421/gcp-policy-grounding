@@ -459,6 +459,41 @@ at evaluation time), and comparisons against terraform-managed resources work.
 What you give up is hallucination-blocking and absence reasoning — the tool
 will say so honestly (`PASSED — NOTHING VERIFIED`) rather than pretend.
 
+## Authoring promises: what the compiler proves, what you review
+
+Writing a promise — by hand, or drafted by the optional LLM assist — does not
+mean writing tests for it. Per promise, at compile time, automatically:
+
+1. **Grammar and types** — sorts, bounds, unknown keywords: honest rejection.
+2. **Vocabulary grounding** — every role, permission, principal and constraint
+   the promise *names* is checked against the estate snapshot; a hallucinated
+   name fails to compile, with a did-you-mean.
+3. **Satisfiability, proven** — the solver confirms some record *could*
+   violate the rule; a rule that can never fire is rejected.
+4. **Non-tautology, proven** — some record *could* comply; a rule that forbids
+   nothing is rejected as vacuous. A vacuous security rule is worse than none,
+   because it reads as coverage.
+5. **Auto-generated test vectors** — the compiler extracts a concrete
+   compliant example and a concrete violating example from the solver's own
+   models and pins them into the artifact as literals. They are re-classified
+   on every recompile and at every load, forever: if a solver upgrade, an
+   edit, or tampering ever changes what the formula decides, the pinned
+   witnesses stop classifying and the rule **refuses to load** rather than
+   silently meaning something else.
+6. **Independence probing** across promises, and the `--check` CI drift gate.
+
+Two things remain yours, because no prover can do them:
+
+- **Semantic fidelity.** Does the formula mean what your English sentence
+  says? The pinned witnesses are the designed review surface — read the
+  violating example and ask "is *this* what I meant to forbid?"
+  (`show_promises.py` renders sentence, rule and witnesses side by side.)
+- **End-to-end acceptance, if you want it.** One violating document and one
+  benign document per promise, asserted to block and pass — the pattern the
+  bundled promises' own tests use, a few lines per case. It is the only layer
+  that catches "compiled, meaningful, but the extractor never feeds it the
+  records I assumed."
+
 ## Capturing the API snapshot from a live estate
 
 There is no network code anywhere in the gate itself; capture is one read-only
