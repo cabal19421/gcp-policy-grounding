@@ -64,8 +64,13 @@ mode), is under **Running the demo** below.
 
 ### 1. What the engine compares
 
-Three things go in. Every answer comes out of comparing them, and the report
-says which of the three each answer came from.
+You hand the tool up to **four artifacts** (the quick start names each with a
+flag: `--proposal`, `--snapshot`, `--terraform-state`, `--requirements`), but
+the engine reads them as **three inputs** — because the API snapshot and the
+terraform files are not separate inputs, they are two *suppliers of the same
+input*, the current state, deliberately merged and cross-checked so their
+disagreement is itself a finding (drift). Every answer comes out of comparing
+the three, and the report says which of them each answer came from.
 
 ```text
       PROPOSAL                    CURRENT                       RULES
@@ -383,6 +388,9 @@ between them.
 
 ## The pieces, in one sentence
 
+Four artifacts in your hands, three inputs to the engine — the snapshot and
+the terraform files both feed the *current* side:
+
 - The **API snapshot** is what is currently live plus an inventory of what is
   real: half of it lists the names that exist (every role and permission GCP
   defines, your org's policy constraints, every account that appears anywhere
@@ -630,22 +638,32 @@ One command grounds the change, and each of the five inputs is one flag:
 
 What you see, in the narrative's own reading order: **what was proposed** — the
 document as `a terraform configuration (8 resources)`, one line per resource
-address; the decision — **DENIED (exit 1)**, because the compiled promise
-`no-open-ssh-rdp-ingress` is **VIOLATED** — the stanza quotes its English
-sentence, *"No ingress firewall rule may allow tcp/22 or tcp/3389 from
-0.0.0.0/0."*, and its refutation names the terraform block to edit
-(`google_compute_firewall.allow_ssh_world`) — and `[firewall_exposure]` names
-the same block as reachable on tcp/22 from a public source. The owner grant
+address; the decision — **DENIED (exit 1)**, on BOTH violating blocks at once.
+The compiled promise `no-open-ssh-rdp-ingress` is **VIOLATED** — the stanza
+quotes its English sentence, *"No ingress firewall rule may allow tcp/22 or
+tcp/3389 from 0.0.0.0/0."*, and its refutation names the terraform block to
+edit (`google_compute_firewall.allow_ssh_world`) — and `[firewall_exposure]`
+names the same block as reachable on tcp/22 from a public source. The owner
+grant violates `no-primitive-roles-outside-domain` the same way: its refutation
+reads `refuted by iam_bindings[1] (google_project_iam_binding.contractor_owner)
+member='user:mallory@outsider.example' role='roles/owner'` — the block, the
+member and the role, rebuilt from the proposal's own terraform claims. All six
+promise domains now evaluate a terraform proposal: the perimeter promise
+reports that it *holds*, and so does `sa-key-creation-disabled`, because the
+proposal's `no_sa_keys` block enforces the constraint. The owner grant still
 draws the `[iam_escalation]` warning on `contractor_owner` (roles/owner to
 `user:mallory@outsider.example`), and the `[subset]` widening note stays
 honestly unverified: the baseline came from terraform state, terraform
 enumerates only what terraform manages, and a never-complete baseline "cannot
 tell a real widening from a row that view never saw" — the gate's own words —
-instead of manufacturing certainty. One caveat, stated rather than papered
-over: IAM-domain promises report `not evaluated — the document under review is
-not an IAM allow policy` over a terraform document today, so the firewall and
-perimeter promises evaluate here (the perimeter one reports that it *holds*)
-while the three IAM promises abstain.
+instead of manufacturing certainty. What still abstains, stated rather than
+papered over: pair-tier promises (they need the old/new pair this run does not
+supply), and every shape the conservative terraform extraction refuses to
+guess at — a block whose `count`/`for_each` multiplicity is undecided, an
+org-policy rule set through `allow_all`/`deny_all`, a condition-mentioning
+promise over a binding whose condition the claims could not pin — each is a
+named abstention, never a fabricated row, because a fabricated row could
+fabricate a refutation.
 
 In production the five flags collapse into a `.gcp-grounding.json` config file
 discovered next to the proposal (see "Two overlapping ways to get the current
