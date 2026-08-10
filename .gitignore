@@ -9,7 +9,14 @@ designs/
 demo/
 
 # Agent tooling — the published project is agent-agnostic; nothing
-# Claude Code / Anthropic specific is tracked.
+# Claude Code / Anthropic specific is tracked. The globs are deliberately
+# broad: any file whose name references either stays untracked.
 .claude/
+.claude*
 CLAUDE.md
+CLAUDE.local.md
 .mcp.json
+*[Cc]laude*
+*[Aa]nthropic*
+*CLAUDE*
+*ANTHROPIC*
