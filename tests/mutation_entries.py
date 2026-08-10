@@ -513,6 +513,34 @@ _AI = ("tests/test_gcp_agentic_iam.py::"
 _AN, _AV = "tests/test_gcp_agentic_network.py::", "tests/test_gcp_agentic_vpcsc.py::"
 _AB = "tests/test_gcp_agentic_abstain.py::"
 
+#: `gx-agentic-benign-repin`'s six, and the nodes each reddens.
+_BG = "tests/test_gcp_agentic_benign.py::"
+_BID = _BG + "test_spot_checked_turns_ground_the_claims_by_identity["
+_BPAIR = _BG + "test_the_paired_hook_really_opened_that_path["
+_BOWNER = "gx-agentic-benign-repin"
+IN_PROCESS = ("monkeypatched after collection; the benign module's report and its "
+              "hook MIRROR both run IN PROCESS, which is where a removal reaches "
+              "them -- it can never reach a spawned child")
+
+
+def _drop_claim_kind(monkeypatch, kind: str) -> None:
+    """Take away exactly the claims of one KIND, at BOTH bindings: `preflight` and
+    `tf_claims` each did `from .claims import iam_policy_claims`, so patching
+    `claims` alone leaves the plan turn holding what the IAM turn lost."""
+    real = import_module("gcp_grounding.claims").iam_policy_claims
+    without = lambda policy: [c for c in real(policy) if c.kind != kind]  # noqa: E731
+    for module in ("gcp_grounding.preflight", "gcp_grounding.tf_claims"):
+        _patch(monkeypatch, module, iam_policy_claims=without)
+
+
+def _drop_extractor(monkeypatch, rtype: str) -> None:
+    """Empty ONE terraform resource type's extractor, leaving the walker's own
+    unconditional `resource_type_ref` claim and nothing else -- the exact state
+    the design measured a grounded-COUNT floor staying green over."""
+    table = import_module("gcp_grounding.tf_claims")._EXTRACTORS
+    _patch(monkeypatch, "gcp_grounding.tf_claims",
+           _EXTRACTORS=dict(table, **{rtype: lambda address, values: []}))
+
 #: The path ``RM-HOOK-WRONG-FILE``'s mutant grounds instead of the event's. A
 #: repo-relative path that DOES NOT EXIST, so the hook reaches the gate, the
 #: gate opens nothing, and the abstention it prints names this file and not the
@@ -667,4 +695,61 @@ REMOVALS: tuple[SeededRemoval, ...] = (
                          "[nonexistent_path]"),
         owner="gx-agentic-abstain-repin", pending=False,
         spelling=AFTER_COLLECTION),
+    # THE FIVE CLAIM-EXTRACTION DELETIONS AND THE EMPTIED HOOK SUFFIX SET, the six
+    # `gx-agentic-benign-repin` measured. BEFORE that repin all six left
+    # tests/test_gcp_agentic_benign.py GREEN -- 19 of 19 passed, each mutant applied
+    # alone to a `git archive HEAD` copy -- because the spot-checks asserted a
+    # grounded COUNT and the hook was asserted only for silence. AFTER it each node
+    # below reports FAILED and every one PASSES on clean source. All six are LIVE:
+    # a NEW live removal is one slot and one `-rA` child, net zero on
+    # `contract_spawn_ceiling()`, so none of them needs the flip
+    # ESC-GX-ABSTAIN-REMOVAL-CEILING records as unaffordable.
+    SeededRemoval(
+        id="RM-BENIGN-PLAN-MEMBER-EXTRACTION", family="iam",
+        subject="the plan walker's whole role and principal extraction for "
+                "google_project_iam_member",
+        apply=lambda mp: _drop_extractor(mp, "google_project_iam_member"),
+        must_fail=(_BID + "B06_tfplan_iam_member]",
+                   _BPAIR + "B06_tfplan_iam_member]"),
+        owner=_BOWNER, pending=False, spelling=IN_PROCESS),
+    SeededRemoval(
+        id="RM-BENIGN-ROLE-CLAIMS", family="iam",
+        subject="every role claim an IAM policy makes, at both extractor bindings",
+        apply=lambda mp: _drop_claim_kind(mp, "role"),
+        must_fail=(_BID + "B02_iam_grant_data_eng]",
+                   _BID + "B06_tfplan_iam_member]"),
+        owner=_BOWNER, pending=False, spelling=IN_PROCESS),
+    SeededRemoval(
+        id="RM-BENIGN-PRINCIPAL-CLAIMS", family="iam",
+        subject="every principal claim an IAM policy makes, at both bindings",
+        apply=lambda mp: _drop_claim_kind(mp, "principal"),
+        must_fail=(_BID + "B02_iam_grant_data_eng]",
+                   _BID + "B06_tfplan_iam_member]"),
+        owner=_BOWNER, pending=False, spelling=IN_PROCESS),
+    SeededRemoval(
+        id="RM-BENIGN-CUSTOM-ROLE-PERMISSIONS", family="iam",
+        subject="every permission claim a google_project_iam_custom_role makes",
+        apply=lambda mp: _drop_extractor(mp, "google_project_iam_custom_role"),
+        must_fail=(_BID + "B07_tfplan_custom_role]",),
+        owner=_BOWNER, pending=False, spelling=IN_PROCESS),
+    SeededRemoval(
+        id="RM-BENIGN-CONSTRAINT-EXISTENCE", family="orgpolicy",
+        subject="the constraint-existence claim an org policy makes, leaving only "
+                "its value-type one",
+        apply=lambda mp: _patch(
+            mp, "gcp_grounding.preflight",
+            org_policy_claims=lambda policy: [
+                c for c in import_module("gcp_grounding.claims").org_policy_claims(
+                    policy) if c.kind != "constraint"]),
+        must_fail=(_BID + "B04_orgpolicy_shielded_vm]",),
+        owner=_BOWNER, pending=False, spelling=IN_PROCESS),
+    SeededRemoval(
+        id="RM-BENIGN-HOOK-SUFFIXES", family="abstain",
+        subject="cli._HOOK_SUFFIXES: the hook recognizes no file as a policy "
+                "document, so it grounds nothing and can never block",
+        apply=lambda mp: _patch(mp, "gcp_grounding.cli", _HOOK_SUFFIXES=()),
+        must_fail=(_BPAIR + "B02_iam_grant_data_eng]",
+                   _BPAIR + "B04_orgpolicy_shielded_vm]",
+                   _BPAIR + "B06_tfplan_iam_member]"),
+        owner=_BOWNER, pending=False, spelling=IN_PROCESS),
 )

@@ -581,6 +581,42 @@ ESCALATIONS: tuple[Escalation, ...] = (
                  "test_the_headline_of_a_report_that_checked_nothing_carries_a_"
                  "qualifier"),
     ),
+    Escalation(
+        id="ESC-GX-BENIGN-GROUNDED-FLOOR",
+        clause=("the assertion is a grounded-count floor with no claim identity, "
+                "satisfied by any single surviving verdict"),
+        unsatisfiable=(
+            "THE CLAUSE'S OWN BOUND IS TOO WEAK, and the design says to record "
+            "that rather than quietly replace it. The predecessor clause the "
+            "benign spot-checks were built to spells the floor as ok, nothing "
+            "ungrounded, nothing contradicted and AT LEAST ONE THING ACTUALLY "
+            "GROUNDED — a COUNT. MEASURED in this checkout, that count is met by "
+            "the `resource_type_ref` claim `tf_claims.terraform_plan_claims` "
+            "emits for EVERY google resource before any extractor is consulted, "
+            "which the Datalog pass grounds under the snapshot category "
+            "`resource_type`: with the plan's whole role and principal extraction "
+            "emptied, the report still carries one grounded verdict and the floor "
+            "still reads CHECKED. The floor cannot be repaired from a test — it "
+            "is a bound written in the design, and satisfying it is not the same "
+            "as satisfying its intent — so it is landed LITERALLY under the "
+            "strict xfail below, driven over exactly that stripped report, and "
+            "the STRENGTHENED form is what the module actually asserts: every "
+            "spot-checked turn names its claims BY KIND AND TARGET through "
+            "`assert_recorded`'s exactly-one semantics, and requires ALL of them "
+            "— the plan turn's role AND principal, the constraint turn's "
+            "existence AND value type — so no single survivor can carry an "
+            "assertion alone. NOTHING IS WEAKENED BY THIS ENTRY: all six mutants "
+            "the design measured green (five claim-extraction deletions and the "
+            "emptied hook suffix set) now redden a named spot-check, all six are "
+            "LIVE `Removal` entries in the contract, and each was measured FAILED "
+            "under its mutant and PASSED on clean source. Amending the design's "
+            "floor to name the claims — or the plan walker ceasing to mint an "
+            "unconditional reference — XPASSes the node below and retires this."
+        ),
+        owner_task="gx-agentic-benign-repin",
+        node_id=("tests/test_gcp_agentic_benign.py::"
+                 "test_the_clauses_grounded_floor_tells_checked_from_never_looked"),
+    ),
 )
 
 
