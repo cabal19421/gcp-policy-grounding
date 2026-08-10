@@ -200,6 +200,82 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_agentic_tf_benign.py::"
                  "test_the_promise_contradicts_the_widening_over_the_estate"),
     ),
+    Escalation(
+        id="ESC-GX-SEEDA-001",
+        clause="if it will not fit, escalate for a further split rather than ship it",
+        unsatisfiable=(
+            "MEASURED, not projected, and measured BEFORE the rest was written as "
+            "the body directs. Five entries of the mandated ten-field shape were "
+            "written in final form and measured as diff lines: MK-P01 778, MK-P02 "
+            "729, MK-P03 662, MK-I01 531, MK-I02 542 — mean 648, inside the body's "
+            "own 450-700 estimate. So 44 entries alone are ~28,500 characters, the "
+            "file header measured 743, and the removal set sits on top: ~34,000 "
+            "against a binding 18,000. THE TWO HALVES THE BODY ASKS FOR DO NOT BOTH "
+            "FIT EITHER: MK-I01..MK-I29 alone measure ~17,700 before a header, and "
+            "the removal set cannot join either half. THE SPLIT THAT DOES FIT IS "
+            "THREE WAYS, on MK id ranges: (a) MK-P01..MK-P15, measured 11,686 "
+            "including the header, WHICH THIS DIFF SHIPS; (b) MK-I01..MK-I15, "
+            "~9,200; (c) MK-I16..MK-I29 plus the removal set, ~14,200. Slicing to "
+            "the measured diff and handing the remainder on is this chain's own "
+            "established answer — the five machinery slices each did exactly that "
+            "— and every guard is intact: nothing is thinned, no must_fail or "
+            "behaviour trimmed, no annotation lowered, no exclusion added, no "
+            "third state invented, and the 15 shipped entries are all ACTIVE and "
+            "all MEASURED killing (mutant applied alone to a git archive HEAD "
+            "copy, -rA reporting FAILED, the unmutated copy green). ONE FURTHER "
+            "FINDING FOR WHOEVER SEEDS THE REMOVALS: the body mandates a `pending` "
+            "mark, an `owner` and an EXPLICIT field naming which of the two "
+            "spellings each removal uses, and the frozen `Removal` dataclass "
+            "carries none of those three — it is id, subject, family, apply, "
+            "must_fail — so that part must either subclass it in this data module "
+            "or the frozen type must gain the fields, which is a decision for the "
+            "gate's owner and not something to settle by dropping a mandated "
+            "field. Landing parts (b) and (c) is what closes this."
+        ),
+        owner_task="gx-mutation-contract-seed-a",
+        node_id=("tests/test_gcp_mutation_entries.py::"
+                 "test_the_seed_covers_every_amendment_2_entry_and_the_removal_set"),
+    ),
+    Escalation(
+        id="ESC-GX-GATE-001",
+        clause=("assert the set of `Mutation` ids is a SUPERSET of an explicit "
+                "tuple naming ALL 65 MK ids"),
+        unsatisfiable=(
+            "MEASURED: the register holds 44 of the 65 (MK-P01..P15, "
+            "MK-I01..I29) and tests/mutation_entries.py is FROZEN here, so the "
+            "missing 21 cannot be added from this task. Its declared dependency "
+            "`gx-mutation-contract-seed-b`, which owns them, was NOT seeded — "
+            "`git merge-base --is-ancestor agent/gx-mutation-contract-seed-b "
+            "HEAD` is false while seed-a, -a2 and -a3 are — and that branch holds "
+            "20 of the 21, MK-V05 having been held out, so even a correctly "
+            "seeded tree reaches 64. A MIS-SEEDED-TREE FINDING, NOT A LICENCE: "
+            "the AWAITING pin stays at ZERO, nothing is parked, and the tuple "
+            "names all 65 already, so this xfail XPASSes the day they land."
+        ),
+        owner_task="gx-mutation-contract-gate",
+        node_id=("tests/test_gcp_mutation_contract.py::"
+                 "test_every_required_must_kill_id_is_in_the_register"),
+    ),
+    Escalation(
+        id="ESC-GX-GATE-002",
+        clause="EXECUTE EVERY ACTIVE ENTRY, both types, and read the result the same way",
+        unsatisfiable=(
+            "The MUTATION half already executes once per session, in the FROZEN "
+            "tests/test_gcp_mutation_machinery.py::test_the_contract_is_now_"
+            "ENFORCED_live_over_whatever_the_register_holds, which calls "
+            "contract_failures(register(), REPO_ROOT, parent=tmp_path). MEASURED, "
+            "that spends 192 of the 199 marked spawns contract_spawn_ceiling() "
+            "allows, and the ceiling is 4*len(register()) + "
+            "len(removal_register()) + 16 — ONE whole-register execution plus one "
+            "child per Removal. A second needs 177 more, mutation_contract is "
+            "frozen here so the formula cannot be rescaled, and raising a ceiling "
+            "is a threshold move this document forbids. Rescaling it, or dropping "
+            "the duplicate execution from the frozen module, closes this."
+        ),
+        owner_task="gx-mutation-contract-gate",
+        node_id=("tests/test_gcp_mutation_contract.py::"
+                 "test_this_gate_can_afford_to_execute_every_active_mutation_itself"),
+    ),
 )
 
 
