@@ -1,0 +1,12 @@
+{
+  "bindings": [
+    {
+      "members": [
+        "allUsers"
+      ],
+      "role": "roles/owner"
+    }
+  ],
+  "etag": "BwYCa19EscPublic=",
+  "version": 1
+}
