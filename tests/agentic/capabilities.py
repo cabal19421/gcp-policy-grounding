@@ -57,6 +57,7 @@ __all__ = [
     "Capability",
     "FIREWALL",
     "HIER_FIREWALL",
+    "IAM_ESCALATION",
     "IAM_EXISTENCE",
     "ORG_CONSTRAINT_VALUE",
     "ORG_ENFORCEMENT",
@@ -440,6 +441,20 @@ PUBLIC_PRINCIPAL = Capability(
           ("gcp_grounding.iam_checks", "DOCUMENT_CHECKS")),
 )
 
+IAM_ESCALATION = Capability(
+    name="iam_escalation",
+    family="iam",
+    kinds=frozenset({"iam_escalation"}),
+    # An escalation-class role granted to the PUBLIC is the escalation check's
+    # one blocking branch; the same role granted to a real group is a warning
+    # riding on a grounded verdict, which is not a finding, so the near-twin
+    # stays quiet on this channel exactly as it must.
+    bad=lambda: (_iam_policy("roles/owner", "allUsers"), estate_snapshot()),
+    good=lambda: (_iam_policy("roles/owner", "group:platform-sre@acme.example"),
+                  estate_snapshot()),
+    guts=(("gcp_grounding.iam_checks", "DOCUMENT_CHECKS"),),
+)
+
 ORG_ENFORCEMENT = Capability(
     name="org_enforcement",
     family="orgpolicy",
@@ -456,6 +471,7 @@ ORG_ENFORCEMENT = Capability(
 CAPABILITIES: dict[str, Capability] = {
     cap.name: cap for cap in (
         IAM_EXISTENCE, TF_CLAIMS, ORG_CONSTRAINT_VALUE, FIREWALL,
-        HIER_FIREWALL, ARMOR, VPCSC, PUBLIC_PRINCIPAL, ORG_ENFORCEMENT,
+        HIER_FIREWALL, ARMOR, VPCSC, PUBLIC_PRINCIPAL, IAM_ESCALATION,
+        ORG_ENFORCEMENT,
     )
 }

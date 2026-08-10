@@ -510,8 +510,9 @@ _AB = "tests/test_gcp_agentic_abstain.py::"
 
 #: The RC2-measured removals: the review EXECUTED each -- 19 of 19, 27 of 27,
 #: 22 of 27, 10 of 14 green with the subject GONE -- so each is a must-kill and
-#: not a hypothesis. ALL SEVEN ARE `pending`, each naming the task that must
-#: make it live, and whose body requires the nodes that do not collect TODAY.
+#: not a hypothesis. Each names the task that must make it live and whose body
+#: requires the nodes that do not collect TODAY; the two `gx-agentic-iam-repin`
+#: owns are LIVE, so the frozen gate EXECUTES them, and five stay `pending`.
 REMOVALS: tuple[SeededRemoval, ...] = (
     SeededRemoval(
         id="RM-IAM-ESCALATION-LAYER", family="iam",
@@ -519,7 +520,7 @@ REMOVALS: tuple[SeededRemoval, ...] = (
         apply=lambda mp: _patch(mp, "gcp_grounding.iam_checks", DOCUMENT_CHECKS=()),
         must_fail=(_AI + "A07_sa_token_creator]", _AI + "A08_sa_user_actas]",
                    _AI + "A09_owner_to_real_principal]"),
-        owner="gx-agentic-iam-repin", spelling=AFTER_COLLECTION),
+        owner="gx-agentic-iam-repin", pending=False, spelling=AFTER_COLLECTION),
     SeededRemoval(
         id="RM-IAM-PUBLIC-PRINCIPAL-KIND", family="iam",
         subject="the public_principal claim kind, dropped from claims.KINDS",
@@ -527,7 +528,7 @@ REMOVALS: tuple[SeededRemoval, ...] = (
             k for k in import_module("gcp_grounding.claims").KINDS
             if k != "public_principal")),
         must_fail=(_AI + "A11_allusers_public]",),
-        owner="gx-agentic-iam-repin", spelling=AFTER_COLLECTION),
+        owner="gx-agentic-iam-repin", pending=False, spelling=AFTER_COLLECTION),
     SeededRemoval(
         id="RM-NETWORK-PLANE-UNAVAILABLE", family="network",
         subject="fw_checks and hfw_checks, the network-plane check modules",
