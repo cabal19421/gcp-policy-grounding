@@ -24,6 +24,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from importlib import import_module
+from pathlib import Path
 
 from tests.mutation_contract import Mutation, Removal
 
@@ -489,6 +490,10 @@ AFTER_COLLECTION = ("monkeypatched after collection; the family's cases keep "
 IMPORT_TIME = ("bound to None in sys.modules; its probes go false and its cases "
                "SKIP, so must_fail names the not-all-cases-may-skip guard and "
                "the capability-liveness assertion")
+RE_MEASURED = ("bound to None in sys.modules AFTER collection, so the marks are "
+               "already fixed and nothing skips; the two guards named below "
+               "RE-MEASURE the probes instead of reading a memo taken before "
+               "the removal, and both go RED when the plane cannot decide")
 
 
 def _patch(monkeypatch, module: str, **fields) -> None:
@@ -508,10 +513,18 @@ _AI = ("tests/test_gcp_agentic_iam.py::"
 _AN, _AV = "tests/test_gcp_agentic_network.py::", "tests/test_gcp_agentic_vpcsc.py::"
 _AB = "tests/test_gcp_agentic_abstain.py::"
 
+#: The path ``RM-HOOK-WRONG-FILE``'s mutant grounds instead of the event's. A
+#: repo-relative path that DOES NOT EXIST, so the hook reaches the gate, the
+#: gate opens nothing, and the abstention it prints names this file and not the
+#: one the agent edited -- the same answer on every backend.
+_HARDCODED = str(Path(__file__).resolve().parents[1]
+                 / "hardcoded_by_the_mutant.policy.json")
+
 #: The RC2-measured removals: the review EXECUTED each -- 19 of 19, 27 of 27,
 #: 22 of 27, 10 of 14 green with the subject GONE -- so each is a must-kill and
-#: not a hypothesis. ALL SEVEN ARE `pending`, each naming the task that must
-#: make it live, and whose body requires the nodes that do not collect TODAY.
+#: not a hypothesis. Each names the task that must make it live and whose body
+#: requires the nodes that do not collect TODAY; the two `gx-agentic-iam-repin`
+#: owns are LIVE, so the frozen gate EXECUTES them, and five stay `pending`.
 REMOVALS: tuple[SeededRemoval, ...] = (
     SeededRemoval(
         id="RM-IAM-ESCALATION-LAYER", family="iam",
@@ -519,7 +532,7 @@ REMOVALS: tuple[SeededRemoval, ...] = (
         apply=lambda mp: _patch(mp, "gcp_grounding.iam_checks", DOCUMENT_CHECKS=()),
         must_fail=(_AI + "A07_sa_token_creator]", _AI + "A08_sa_user_actas]",
                    _AI + "A09_owner_to_real_principal]"),
-        owner="gx-agentic-iam-repin", spelling=AFTER_COLLECTION),
+        owner="gx-agentic-iam-repin", pending=False, spelling=AFTER_COLLECTION),
     SeededRemoval(
         id="RM-IAM-PUBLIC-PRINCIPAL-KIND", family="iam",
         subject="the public_principal claim kind, dropped from claims.KINDS",
@@ -527,23 +540,67 @@ REMOVALS: tuple[SeededRemoval, ...] = (
             k for k in import_module("gcp_grounding.claims").KINDS
             if k != "public_principal")),
         must_fail=(_AI + "A11_allusers_public]",),
-        owner="gx-agentic-iam-repin", spelling=AFTER_COLLECTION),
+        owner="gx-agentic-iam-repin", pending=False, spelling=AFTER_COLLECTION),
     SeededRemoval(
         id="RM-NETWORK-PLANE-UNAVAILABLE", family="network",
-        subject="fw_checks and hfw_checks, the network-plane check modules",
+        subject="fw_checks, fw_estate, hfw_checks and armor_checks — the whole "
+                "network-plane check layer the catalogue is decided by",
+        # armor_checks and fw_estate join the two the seed named. MEASURED on
+        # HEAD's module: renaming all FOUR away leaves it 19 of 19 GREEN, which
+        # is the defect; renaming only three leaves A01 still blocked by the
+        # estate tier, and renaming only the seed's two leaves the armor
+        # capability live, both guards passing, and the removal SURVIVING.
+        #
+        # STILL `pending`, and NOT because it does not kill: MEASURED both ways
+        # in this checkout, both nodes report FAILED under the mutant and
+        # PASSED on clean source. It cannot be flipped live from here on the
+        # SPAWN CEILING alone -- ESC-GX-NETWORK-REMOVAL-CEILING, which carries
+        # the arithmetic.
         apply=lambda mp: _unimport(mp, "gcp_grounding.fw_checks",
-                                   "gcp_grounding.hfw_checks"),
+                                   "gcp_grounding.fw_estate",
+                                   "gcp_grounding.hfw_checks",
+                                   "gcp_grounding.armor_checks"),
         must_fail=(_AN + "test_not_every_network_case_may_skip",
                    _AN + "test_the_network_capabilities_are_live"),
-        owner="gx-agentic-network-repin", spelling=IMPORT_TIME),
+        owner="gx-agentic-network-repin", spelling=RE_MEASURED),
+    SeededRemoval(
+        id="RM-NETWORK-PAIR-CHECKS", family="network",
+        subject="fw_checks.PAIR_CHECKS, the packet-set non-enlargement map",
+        apply=lambda mp: _patch(mp, "gcp_grounding.fw_checks", PAIR_CHECKS={}),
+        must_fail=(_AN + "test_the_pair_check_decides_a_widening_against_a_"
+                         "baseline",),
+        owner="gx-agentic-network-repin", pending=False,
+        spelling=AFTER_COLLECTION),
+    SeededRemoval(
+        id="RM-NETWORK-VOCABULARY-KIND", family="network",
+        subject="the resource_type verdict kind, renamed where the Datalog "
+                "pass maps a claim kind to its snapshot category",
+        apply=lambda mp: _patch(
+            mp, "gcp_grounding.reasoner",
+            _CLAIM_CATEGORIES=dict(
+                import_module("gcp_grounding.reasoner")._CLAIM_CATEGORIES,
+                resource_type_ref="resource_kind")),
+        must_fail=(_AN + "test_the_false_vocabulary_block_guard_can_fire_and_"
+                         "is_silent",),
+        owner="gx-agentic-network-repin", pending=False,
+        spelling=AFTER_COLLECTION),
     SeededRemoval(
         id="RM-VPCSC-DOCUMENT-AND-PAIR-CHECKS", family="vpcsc",
         subject="vpcsc_checks.DOCUMENT_CHECKS and PAIR_CHECKS, unregistered",
         apply=lambda mp: _patch(mp, "gcp_grounding.vpcsc_checks",
                                 DOCUMENT_CHECKS=(), PAIR_CHECKS={}),
-        must_fail=(_AV + "test_A05_egress_punch_blocks",
-                   _AV + "test_A24_ingress_any_identity_blocks",
-                   _AV + "test_A25_restricted_service_removed_blocks"),
+        # RETARGETED ON MEASUREMENT, never widened: the seed named A05, A24 and
+        # A25, and all three drive the gate in a CHILD process, which an
+        # after-collection monkeypatch of the parent cannot reach -- measured,
+        # all three still PASSED with both tables emptied. The three nodes below
+        # ground IN PROCESS, one per half of what this removal takes: the pair
+        # check, the document check's estate arm, and its solver arm.
+        must_fail=(_AV + "test_the_pair_check_decides_a_removal_against_a_"
+                         "baseline",
+                   _AV + "test_an_uncaptured_perimeter_category_abstains_once_"
+                         "per_perimeter",
+                   _AV + "test_a_widening_against_a_narrow_previous_policy_is_"
+                         "decided"),
         owner="gx-agentic-vpcsc-repin", spelling=AFTER_COLLECTION),
     SeededRemoval(
         id="RM-VPCSC-DOMAIN-UNREGISTERED", family="vpcsc",
@@ -567,8 +624,47 @@ REMOVALS: tuple[SeededRemoval, ...] = (
         subject="cli._run_hook: the hook returns success as its FIRST "
                 "statement, never reading the event",
         apply=lambda mp: _patch(mp, "gcp_grounding.cli", _run_hook=lambda args: 0),
+        # MEASURED BOTH WAYS in this checkout. Before `gx-agentic-abstain-repin`
+        # this removal killed NOTHING: every one of the module's 14 cases drove
+        # the hook in a CHILD process, which an after-collection monkeypatch of
+        # the PARENT cannot reach, so all 14 PASSED with the subject gone. The
+        # repin gives every case an IN-PROCESS mirror of the same
+        # `cli._run_hook`, and under the mutant all three nodes below now report
+        # FAILED and all three PASS on clean source.
+        #
+        # STILL `pending`, and NOT because it does not kill:
+        # `contract_spawn_ceiling()` is `4*len(register()) +
+        # len(removal_register()) + CONTRACT_CONTROL_SPAWNS`, and a full run
+        # measures the marked total at exactly the ceiling. A NEW live removal
+        # is net zero (one slot, one `-rA` child); flipping an ALREADY-COUNTED
+        # one from pending to live is +1 spawn and +0 slots, so it overflows by
+        # exactly one whatever else the diff does. This task's NEW removal below
+        # is therefore the live one -- ESC-GX-ABSTAIN-REMOVAL-CEILING carries
+        # the arithmetic, exactly as ESC-GX-NETWORK-REMOVAL-CEILING does.
         must_fail=(_AB + "test_c01_raw_hcl_abstains_and_never_blocks",
                    _AB + "test_c04_unrecognized_kind_abstains_naming_the_keys",
                    _AB + "test_c08_uncaptured_category_is_unverified_never_ungrounded"),
         owner="gx-agentic-abstain-repin", spelling=AFTER_COLLECTION),
+    SeededRemoval(
+        id="RM-HOOK-WRONG-FILE", family="abstain",
+        subject="cli._hook_file_path: the hook ignores the event's path and "
+                "grounds a hardcoded one instead",
+        # The second mutant `gx-agentic-abstain-repin` records: a hook that
+        # never reads the event's `file_path` still exits 0 with byte-empty
+        # stdout and still abstains -- about a document nobody edited -- which
+        # left 11 of that module's 14 cases green before the repin. The
+        # hardcoded path is deliberately one that does not exist, so the mutant
+        # is world-independent: the gate opens it, fails to READ it, and prints
+        # a reason no case here asks for, whatever the solver backend is.
+        apply=lambda mp: _patch(mp, "gcp_grounding.cli",
+                                _hook_file_path=lambda event: _HARDCODED),
+        must_fail=(_AB + "test_c01_raw_hcl_abstains_and_never_blocks",
+                   _AB + "test_c04_unrecognized_kind_abstains_naming_the_keys",
+                   _AB + "test_c08_uncaptured_category_is_unverified_never_ungrounded",
+                   _AB + "test_a_document_whose_grants_were_never_read_is_not_a_"
+                         "verdictless_pass[bindings_key_mis_cased]",
+                   _AB + "test_c10_bad_baseline_abstains_on_the_subset"
+                         "[nonexistent_path]"),
+        owner="gx-agentic-abstain-repin", pending=False,
+        spelling=AFTER_COLLECTION),
 )

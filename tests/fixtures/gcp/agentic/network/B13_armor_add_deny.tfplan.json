@@ -14,7 +14,7 @@
             "project": "acme-prod",
             "security_policy": "projects/acme-prod/global/securityPolicies/acme-edge-waf",
             "description": "block the scanner ranges reported by the SOC",
-            "action": "deny(403)",
+            "action": "deny-403",
             "priority": 900,
             "preview": false,
             "match": [
@@ -42,7 +42,7 @@
           "project": "acme-prod",
           "security_policy": "projects/acme-prod/global/securityPolicies/acme-edge-waf",
           "description": "block the scanner ranges reported by the SOC",
-          "action": "deny(403)",
+          "action": "deny-403",
           "priority": 900,
           "preview": false,
           "match": [
