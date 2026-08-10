@@ -1,0 +1,58 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_compute_security_policy_rule.deny_scanner_ranges",
+          "mode": "managed",
+          "type": "google_compute_security_policy_rule",
+          "name": "deny_scanner_ranges",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "project": "acme-prod",
+            "security_policy": "projects/acme-prod/global/securityPolicies/acme-edge-waf",
+            "description": "block the scanner ranges reported by the SOC",
+            "action": "deny-403",
+            "priority": 900,
+            "preview": false,
+            "match": [
+              {
+                "versioned_expr": "SRC_IPS_V1",
+                "config": [{"src_ip_ranges": ["198.51.100.0/24", "203.0.113.0/24"]}]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "google_compute_security_policy_rule.deny_scanner_ranges",
+      "mode": "managed",
+      "type": "google_compute_security_policy_rule",
+      "name": "deny_scanner_ranges",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "project": "acme-prod",
+          "security_policy": "projects/acme-prod/global/securityPolicies/acme-edge-waf",
+          "description": "block the scanner ranges reported by the SOC",
+          "action": "deny-403",
+          "priority": 900,
+          "preview": false,
+          "match": [
+            {
+              "versioned_expr": "SRC_IPS_V1",
+              "config": [{"src_ip_ranges": ["198.51.100.0/24", "203.0.113.0/24"]}]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

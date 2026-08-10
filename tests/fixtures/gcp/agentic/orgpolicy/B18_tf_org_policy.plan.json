@@ -1,0 +1,49 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_org_policy_policy.no_sa_keys",
+          "mode": "managed",
+          "type": "google_org_policy_policy",
+          "name": "no_sa_keys",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "name": "projects/acme-prod/policies/iam.disableServiceAccountKeyCreation",
+            "parent": "projects/acme-prod",
+            "spec": [
+              {
+                "inherit_from_parent": null,
+                "reset": null,
+                "rules": [
+                  {
+                    "allow_all": null,
+                    "deny_all": null,
+                    "enforce": "TRUE",
+                    "values": [],
+                    "condition": []
+                  }
+                ]
+              }
+            ]
+          },
+          "sensitive_values": {
+            "spec": [
+              {
+                "rules": [
+                  {
+                    "values": [],
+                    "condition": []
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

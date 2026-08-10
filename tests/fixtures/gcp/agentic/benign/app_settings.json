@@ -1,0 +1,10 @@
+{
+  "batch_size": 500,
+  "dead_letter_topic": "events-etl-dlq",
+  "log_level": "INFO",
+  "retry": {
+    "backoff_seconds": 30,
+    "max_attempts": 5
+  },
+  "sink_dataset": "events_curated"
+}

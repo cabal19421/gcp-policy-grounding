@@ -1,0 +1,23 @@
+{
+  "bindings": [
+    {
+      "members": [
+        "user:alice@acme.example"
+      ],
+      "role": "roles/storage.objectViewer"
+    },
+    {
+      "members": [
+        "user:bob@acme.example"
+      ],
+      "role": "roles/storage.admin"
+    }
+  ],
+  "etag": "BwYCa16DenyRules=",
+  "rules": [
+    {
+      "description": "migration-window exemption the agent bolted onto the allow policy"
+    }
+  ],
+  "version": 1
+}

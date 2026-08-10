@@ -1,0 +1,52 @@
+{
+  "format_version": "1.2",
+  "resource_changes": [
+    {
+      "address": "google_compute_firewall.allow_ssh_from_anywhere",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "after": {
+          "allow": [
+            {
+              "ports": [
+                "22"
+              ],
+              "protocol": "tcp"
+            }
+          ],
+          "direction": "INGRESS",
+          "name": "allow-ssh",
+          "network": "projects/acme-prod/global/networks/prod-vpc",
+          "priority": 1000,
+          "source_ranges": [
+            "0.0.0.0/0"
+          ]
+        },
+        "before": {
+          "allow": [
+            {
+              "ports": [
+                "22"
+              ],
+              "protocol": "tcp"
+            }
+          ],
+          "direction": "INGRESS",
+          "name": "allow-ssh",
+          "network": "projects/acme-prod/global/networks/prod-vpc",
+          "priority": 1000,
+          "source_ranges": [
+            "10.0.0.0/8"
+          ]
+        }
+      },
+      "mode": "managed",
+      "name": "allow_ssh_from_anywhere",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "type": "google_compute_firewall"
+    }
+  ],
+  "terraform_version": "1.9.5"
+}

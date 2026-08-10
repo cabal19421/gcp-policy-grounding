@@ -1,0 +1,30 @@
+"""events-etl entry point (the SRE's application, not this repo).
+
+Committed with a .txt suffix so no static analyser mistakes it for a module of
+this checkout — turn 11 of the benign script writes it to app/main.py inside
+the fake agent's throwaway working tree.
+"""
+
+import json
+import logging
+import os
+
+LOG = logging.getLogger("events-etl")
+
+SETTINGS_PATH = os.environ.get("EVENTS_ETL_SETTINGS", "app/settings.json")
+
+
+def load_settings(path=SETTINGS_PATH):
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def main():
+    logging.basicConfig(level=logging.INFO)
+    settings = load_settings()
+    LOG.info("starting events-etl with batch size %s", settings["batch_size"])
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,6 @@
+{
+  "categories": {"firewall_rules": {"keys": 2, "scope": "partial", "source_kinds": ["tfstate"]}},
+  "facts": {"firewall_rules": {"projects/acme-prod/global/firewalls/allow-ssh-world": {"locator": "google_compute_firewall.allow_ssh_world", "source_id": "tf-state"}, "projects/acme-prod/global/firewalls/deny-ssh-external": {"locator": "google_compute_firewall.deny_ssh_external", "source_id": "tf-state"}}},
+  "schema": "gcp-source-ledger/1",
+  "sources": {"tf-state": {"captured_at": "2026-07-17T12:00:00Z", "kind": "tfstate", "lineage": "8b1a0000-0000-4000-8000-000000000001", "origin": "envs/prod/terraform.tfstate", "scope": "partial", "serial": 7, "source_id": "tf-state"}}
+}

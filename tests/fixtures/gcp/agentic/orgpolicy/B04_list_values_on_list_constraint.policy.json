@@ -1,0 +1,15 @@
+{
+  "etag": "CNy0oO0GEODctcAB",
+  "name": "projects/acme-prod/policies/compute.vmExternalIpAccess",
+  "spec": {
+    "rules": [
+      {
+        "values": {
+          "allowedValues": [
+            "projects/acme-prod/zones/us-central1-a/instances/bastion-1"
+          ]
+        }
+      }
+    ]
+  }
+}

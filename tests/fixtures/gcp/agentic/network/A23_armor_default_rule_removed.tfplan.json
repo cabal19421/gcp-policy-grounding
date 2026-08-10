@@ -1,0 +1,98 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_compute_security_policy.edge_waf",
+          "mode": "managed",
+          "type": "google_compute_security_policy",
+          "name": "edge_waf",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "name": "acme-edge-waf",
+            "project": "acme-prod",
+            "type": "CLOUD_ARMOR",
+            "rule": [
+              {
+                "action": "deny-403",
+                "description": "block the scanner ranges",
+                "preview": false,
+                "priority": 1000,
+                "match": [
+                  {
+                    "versioned_expr": "SRC_IPS_V1",
+                    "config": [{"src_ip_ranges": ["198.51.100.0/24", "203.0.113.0/24"]}]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "google_compute_security_policy.edge_waf",
+      "mode": "managed",
+      "type": "google_compute_security_policy",
+      "name": "edge_waf",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "name": "acme-edge-waf",
+          "project": "acme-prod",
+          "type": "CLOUD_ARMOR",
+          "rule": [
+            {
+              "action": "deny-403",
+              "description": "block the scanner ranges",
+              "preview": false,
+              "priority": 1000,
+              "match": [
+                {
+                  "versioned_expr": "SRC_IPS_V1",
+                  "config": [{"src_ip_ranges": ["198.51.100.0/24", "203.0.113.0/24"]}]
+                }
+              ]
+            },
+            {
+              "action": "deny-403",
+              "description": "default rule",
+              "preview": false,
+              "priority": 2147483647,
+              "match": [
+                {
+                  "versioned_expr": "SRC_IPS_V1",
+                  "config": [{"src_ip_ranges": ["*"]}]
+                }
+              ]
+            }
+          ]
+        },
+        "after": {
+          "name": "acme-edge-waf",
+          "project": "acme-prod",
+          "type": "CLOUD_ARMOR",
+          "rule": [
+            {
+              "action": "deny-403",
+              "description": "block the scanner ranges",
+              "preview": false,
+              "priority": 1000,
+              "match": [
+                {
+                  "versioned_expr": "SRC_IPS_V1",
+                  "config": [{"src_ip_ranges": ["198.51.100.0/24", "203.0.113.0/24"]}]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

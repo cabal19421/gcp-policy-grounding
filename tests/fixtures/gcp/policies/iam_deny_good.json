@@ -1,0 +1,25 @@
+{
+  "name": "policies/cloudresourcemanager.googleapis.com%2Fprojects%2Facme-prod/denypolicies/block-sa-keys",
+  "displayName": "Block service account key creation",
+  "rules": [
+    {
+      "denyRule": {
+        "deniedPrincipals": [
+          "group:data-eng@acme.example",
+          "allUsers"
+        ],
+        "exceptionPrincipals": [
+          "serviceAccount:ci-deployer@acme-prod.iam.gserviceaccount.com"
+        ],
+        "deniedPermissions": [
+          "iam.googleapis.com/serviceAccountKeys.create"
+        ],
+        "denialCondition": {
+          "title": "business-hours-window",
+          "description": "Deny only during the 2026 change freeze",
+          "expression": "request.time > timestamp(\"2026-01-01T00:00:00Z\") && request.time < timestamp(\"2027-01-01T00:00:00Z\")"
+        }
+      }
+    }
+  ]
+}

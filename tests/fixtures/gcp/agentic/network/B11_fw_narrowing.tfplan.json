@@ -1,0 +1,74 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_compute_firewall.prod_web_admin",
+          "mode": "managed",
+          "type": "google_compute_firewall",
+          "name": "prod_web_admin",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "name": "allow-prod-web-admin",
+            "project": "acme-prod",
+            "network": "projects/acme-prod/global/networks/prod-vpc",
+            "direction": "INGRESS",
+            "priority": 100,
+            "disabled": false,
+            "source_ranges": ["10.0.0.0/8"],
+            "destination_ranges": [],
+            "source_tags": [],
+            "target_tags": ["prod-web"],
+            "source_service_accounts": [],
+            "target_service_accounts": [],
+            "allow": [{"protocol": "tcp", "ports": ["22", "3389"]}]
+          }
+        }
+      ]
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "google_compute_firewall.prod_web_admin",
+      "mode": "managed",
+      "type": "google_compute_firewall",
+      "name": "prod_web_admin",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "name": "allow-prod-web-admin",
+          "project": "acme-prod",
+          "network": "projects/acme-prod/global/networks/prod-vpc",
+          "direction": "INGRESS",
+          "priority": 100,
+          "disabled": false,
+          "source_ranges": ["0.0.0.0/0"],
+          "destination_ranges": [],
+          "source_tags": [],
+          "target_tags": ["prod-web"],
+          "source_service_accounts": [],
+          "target_service_accounts": [],
+          "allow": [{"protocol": "tcp", "ports": ["22", "3389"]}]
+        },
+        "after": {
+          "name": "allow-prod-web-admin",
+          "project": "acme-prod",
+          "network": "projects/acme-prod/global/networks/prod-vpc",
+          "direction": "INGRESS",
+          "priority": 100,
+          "disabled": false,
+          "source_ranges": ["10.0.0.0/8"],
+          "destination_ranges": [],
+          "source_tags": [],
+          "target_tags": ["prod-web"],
+          "source_service_accounts": [],
+          "target_service_accounts": [],
+          "allow": [{"protocol": "tcp", "ports": ["22", "3389"]}]
+        }
+      }
+    }
+  ]
+}

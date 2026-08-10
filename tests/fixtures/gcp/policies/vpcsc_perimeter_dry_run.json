@@ -1,0 +1,10 @@
+{
+  "name": "accessPolicies/987/servicePerimeters/prod",
+  "title": "prod perimeter",
+  "perimeterType": "PERIMETER_TYPE_REGULAR",
+  "spec": {
+    "resources": ["projects/123456"],
+    "restrictedServices": ["storage.googleapis.com"]
+  },
+  "useExplicitDryRunSpec": true
+}

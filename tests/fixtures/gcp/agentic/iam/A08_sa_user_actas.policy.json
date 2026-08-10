@@ -1,0 +1,12 @@
+{
+  "bindings": [
+    {
+      "members": [
+        "serviceAccount:ci-deployer@acme-prod.iam.gserviceaccount.com"
+      ],
+      "role": "roles/iam.serviceAccountUser"
+    }
+  ],
+  "etag": "BwYCa08SaUserAc=",
+  "version": 1
+}

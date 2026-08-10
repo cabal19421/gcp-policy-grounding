@@ -1,0 +1,32 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.0",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_compute_security_policy_rule.allow_all",
+          "mode": "managed",
+          "type": "google_compute_security_policy_rule",
+          "name": "allow_all",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "values": {
+            "priority": 1,
+            "action": "allow",
+            "preview": false,
+            "security_policy": "armor-policy-prod",
+            "match": [
+              {
+                "config": [
+                  {
+                    "src_ip_ranges": ["0.0.0.0/0"]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
