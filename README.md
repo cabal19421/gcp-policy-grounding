@@ -344,6 +344,110 @@ secrets never render identically either — a constant mask would make two
 sources' sensitive fields compare equal and silently suppress the drift finding
 between them.
 
+## The pieces, in one sentence
+
+- The **API snapshot** is what is currently live plus an inventory of what is
+  real: half of it lists the names that exist (every role and permission GCP
+  defines, your org's policy constraints, every account that appears anywhere
+  in your estate — what lets the tool call a name *fake* and suggest the real
+  one), and half records how things are configured right now (current grants,
+  firewall rules, perimeter settings — what lets it say *this change grants
+  something that was not granted before*).
+- The **terraform** files are your current state as captured in IaC — exactly
+  as fresh as your last `apply`, covering only what terraform manages, and
+  deliberately never trusted as the whole picture.
+- The **requirements** are your plain-English promises in `sec_requirements/`,
+  compiled by `compile-requirements` into solver-checked rules, each proven
+  non-vacuous and pinned with a concrete compliant and violating example.
+- The **proposal** is the document or terraform change being judged.
+
+Every run is one sentence: *judge the proposal, against current state (API +
+terraform, cross-checked), under the rules (built-ins + compiled promises),
+and report every answer with its provenance.*
+
+## Why the API snapshot, when everything is terraform
+
+Even in a shop where every change is applied through terraform, the snapshot
+carries two things terraform structurally cannot:
+
+- **Terraform records what you wrote, not which names are real.** Your state
+  file contains the role names you happened to use; it is not a catalog of the
+  names that exist. Only the snapshot's inventory can prove a typo'd role or a
+  made-up account is fiction — and people and groups never live in terraform at
+  all, they come from your identity system.
+- **"Everything goes through terraform" is a policy, not a law of physics** —
+  and it is exactly the policy an out-of-band change violates: a console
+  break-glass, a script, a compromised credential running `gcloud`. None of it
+  ever appears in your state file. With both sources configured, the tool
+  *checks* your IaC-only policy instead of assuming it: any divergence between
+  terraform's view and the live estate surfaces as drift, naming both sides.
+- **Proving absence needs a complete list.** "No existing rule already allows
+  this" is only sound over a source entitled to say *and there is nothing
+  else*. Terraform is deliberately capped below that, so estate-wide negative
+  reasoning abstains without the snapshot.
+
+Terraform-only is still a legitimate reduced mode: your compiled promises fire
+on every proposal (they judge the proposal's own content and need no snapshot
+at evaluation time), and comparisons against terraform-managed resources work.
+What you give up is hallucination-blocking and absence reasoning — the tool
+will say so honestly (`PASSED — NOTHING VERIFIED`) rather than pretend.
+
+## Capturing the API snapshot from a live estate
+
+There is no network code anywhere in the gate itself; capture is one read-only
+script driven by `gcp_grounding.fetch`, run wherever credentials live, on
+whatever schedule you like:
+
+```bash
+gcloud auth application-default login       # or a service-account key
+pip install google-api-python-client        # the one optional dependency
+```
+
+```python
+from gcp_grounding import fetch
+
+fetch.capture_snapshot(
+    # the inventory of what is real (hallucination-blocking):
+    iam=fetch.default_client("iam"),
+    custom_role_parents=["organizations/YOUR_ORG_ID"],
+    orgpolicy=fetch.default_client("orgpolicy"),
+    orgpolicy_parent="organizations/YOUR_ORG_ID",
+    asset=fetch.default_client("cloudasset"),
+    asset_scope="organizations/YOUR_ORG_ID",
+    capture_iam_bindings=True,              # ...and the live grants
+    out_path="estate/api-snapshot.json",
+)
+```
+
+Viewer-tier IAM roles suffice; only the categories you configure are captured
+(everything else honestly answers "not captured" rather than "absent"), and a
+snapshot older than the freshness ceiling (7 days by default) demotes itself —
+staleness can never silently bless a deleted role.
+
+## Proposing a terraform change — agent or human
+
+The proposal is always just the positional file argument; the gate neither
+knows nor cares whether an agent or a human wrote it. For terraform changes it
+accepts three forms, best first:
+
+```bash
+# 1. A rendered plan — resolved values, the form CI should use:
+terraform plan -out change.plan && terraform show -json change.plan > proposal.json
+gcp-ground verify-policy proposal.json --snapshot estate/api-snapshot.json
+
+# 2. Terraform JSON configuration (.tf.json), as edited in the repo
+gcp-ground verify-policy infra/prod/iam.tf.json --snapshot estate/api-snapshot.json
+
+# 3. Raw HCL (.tf) — read by a deliberately small built-in parser; anything it
+#    cannot resolve (module magic, interpolations) abstains loudly
+gcp-ground verify-policy infra/prod/iam.tf --snapshot estate/api-snapshot.json
+```
+
+Agents hit the same gate through hook mode automatically on every file edit;
+humans and CI call it directly as above. A `.tfstate` file is refused as a
+proposal — state describes what *is*, not what is *proposed*, and judging it
+as a change would approve the past instead of the future.
+
 ## Layout
 
 - `gcp_grounding/core/` — vendored grounding core (Datalog engine, solver
@@ -415,8 +519,14 @@ python3 show_promises.py demo/compiled
 .venv/bin/gcp-ground verify-policy tests/fixtures/gcp/policies/iam_policy_bad.json \
     --snapshot tests/fixtures/gcp/snapshot.json
 
-# 5. Shell-command classification: a state-mutating gcloud invocation is
-#    named as bypassing the document gate.
+# 5. The side-door channel, both halves. A state-mutating gcloud invocation
+#    bypasses the document gate entirely, so `scan-command` CLASSIFIES it
+#    against the curated mutation tables and says so honestly — the banner
+#    names the subcommand as audit-only and the report headlines
+#    "PASSED — NOTHING VERIFIED (1 unchecked)", because nothing here verifies
+#    or approves anything. Enforcement is the OTHER half: in hook mode
+#    (the channel step 6 drives), --bash-policy (default: block) BLOCKS the
+#    same command before it executes.
 .venv/bin/gcp-ground scan-command --command \
     'gcloud projects add-iam-policy-binding acme-prod --member=user:x@evil.example --role=roles/owner'
 
