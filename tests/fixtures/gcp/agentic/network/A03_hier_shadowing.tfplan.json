@@ -18,7 +18,7 @@
             "priority": 100,
             "disabled": false,
             "enable_logging": false,
-            "target_resources": [],
+            "target_resources": ["projects/acme-prod/global/networks/prod-vpc"],
             "target_service_accounts": [],
             "match": [
               {
@@ -62,7 +62,7 @@
           "priority": 100,
           "disabled": false,
           "enable_logging": false,
-          "target_resources": [],
+          "target_resources": ["projects/acme-prod/global/networks/prod-vpc"],
           "target_service_accounts": [],
           "match": [
             {

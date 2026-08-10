@@ -21,9 +21,19 @@ the test. So they are committed as files, in the order the session writes them:
 | 7 | `tfplan_custom_role.json` | `infra/custom_role.tfplan.json` | a custom role over permissions that all exist |
 | 8 | `iam_policy_conditional.json` | `pipeline/analytics.iam.policy.json` | a satisfiable time window |
 | 9 | `iam_policy_empty.json` | `pipeline/staging.iam.policy.json` | an allow policy that grants nothing |
-| 10 | `tfplan_firewall_narrow.json` | `pipeline/firewall.tfplan.json` | `0.0.0.0/0` narrowed to `10.0.0.0/8` |
+| 10 | `tfplan_firewall_narrow.json` | `pipeline/firewall.tfplan.json` | ingest stays on tcp/443, so no public source reaches a sensitive port |
 | 11 | `main_py.txt` | `app/main.py` | not a policy document at all |
 | 12 | `iam_policy_shrunk.json` | `pipeline/iam.policy.json` | strictly fewer grants than revision 3 |
+
+Row 10 states the property the gate DECIDES, not the one the plan performs. The
+narrowing itself — `0.0.0.0/0` down to `10.0.0.0/8` — is **not checked today**:
+`fw_checks.PAIR_CHECKS` is keyed by the detected document kind, a
+`terraform show -json` plan detects as `tf_plan`, and the hook path passes no
+baseline at all (`ESC-GX-NETWORK-PAIR-BASELINE`). MEASURED: widening the range
+back to `0.0.0.0/0` on tcp/443 leaves the turn grounded and the module green.
+What IS decided is exposure, and it bites — widened to every protocol, or to
+tcp/22, the same plan comes back `contradicted firewall_exposure` with a witness
+packet. Every other row here states a checkable property; this one now does too.
 
 `main_py.txt` carries a `.txt` suffix on purpose. It is the *content* of an
 application source file, not a module of this repo: committing it as `.py`
