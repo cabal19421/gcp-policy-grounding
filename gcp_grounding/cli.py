@@ -4,7 +4,8 @@
 Four subcommands, exposed both as the ``gcp-ground`` console script and as
 ``python -m gcp_grounding``::
 
-    gcp-ground verify-policy FILE [--snapshot PATH] [--baseline PATH]
+    gcp-ground verify-policy [FILE | --proposal PATH]
+                             [--snapshot PATH] [--baseline PATH]
                              [--format text|json] [--explain] [--hook]
                              [--bash-policy block|warn|off] [--abstain-notes]
                              [--requirements PATH]
@@ -60,7 +61,15 @@ THE THREE INPUTS
 RULES:
 
 - the PROPOSAL is ``FILE`` (or, in ``--hook`` mode, the edited file the
-  PostToolUse event names);
+  PostToolUse event names). ``--proposal PATH`` is the explicit spelling of the
+  same positional — for the invocation that names every input by flag, so the
+  command line reads as the mapping it is: ``--snapshot`` the live estate,
+  ``--terraform-state`` the current state as IaC captured it, ``--requirements``
+  the promises, ``--proposal`` the change under review. EXACTLY ONE of the two
+  spellings: both is a usage error naming both, neither keeps the existing
+  usage error, and everything downstream — config discovery rooted at the
+  document, the report header, the narrative — treats the two identically,
+  because the flag is resolved onto the positional before anything reads it;
 - the CURRENT state is whatever the state flags below configure — additional
   estate snapshots, terraform state, terraform plan JSON and terraform
   configuration directories, reconciled by
@@ -290,8 +299,11 @@ for ``--format json``), in reading order:
 
 - WHAT WAS PROPOSED — the document, the human name of its detected kind, and
   one line per proposed element (bindings for an IAM policy, constraint and
-  rules for an Org Policy, changed resource addresses for a terraform plan),
-  bounded at :data:`_PROPOSAL_LINE_CAP` lines with an elision count;
+  rules for an Org Policy, changed resource addresses for a terraform plan,
+  resource addresses for a terraform configuration — a ``.tf``/``.tf.json``
+  file, routed by the same :func:`gcp_grounding.gate.terraform_route` decision
+  the grounding pass makes), bounded at :data:`_PROPOSAL_LINE_CAP` lines with
+  an elision count;
 - the DECISION — APPROVED or DENIED with the exit code, then why: every
   ungrounded/contradicted verdict's own message, the abstentions, and the
   count of checks that passed;
@@ -647,6 +659,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="policy document to ground (omitted in --hook mode, where the "
              "edited file comes from the PostToolUse event)")
     verify.add_argument(
+        "--proposal", metavar="PATH",
+        help="the proposed change to ground — the explicit spelling of FILE, "
+             "for the invocation that names every input by flag; give exactly "
+             "one of the two, and the two behave identically (same config "
+             "discovery rooted at the document, same report, same narrative)")
+    verify.add_argument(
         "--snapshot", metavar="PATH",
         help=f"estate snapshot JSON (default: ${SNAPSHOT_ENV})")
     verify.add_argument(
@@ -951,9 +969,10 @@ def main(argv: list[str] | None = None) -> int:
 
 def _cmd_verify_policy(args: argparse.Namespace) -> int:
     if args.hook:
-        if args.file is not None:
-            return _usage("FILE and --hook are mutually exclusive — the hook "
-                          "event names the edited file", hook=True)
+        if args.file is not None or args.proposal is not None:
+            return _usage("FILE and --proposal are each mutually exclusive "
+                          "with --hook — the hook event names the edited file",
+                          hook=True)
         return _run_hook(args)
     if args.bash_policy is not None:
         # Accepted and ignored, never a usage error: one wrapper script tends to
@@ -961,6 +980,20 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
         # flag that is merely irrelevant there would be gratuitous.
         logger.debug("--bash-policy=%r is ignored outside --hook mode",
                      args.bash_policy)
+    if args.file is not None and args.proposal is not None:
+        # Two spellings of ONE document. Refusing is the only honest answer:
+        # picking either would silently ground a file the user may not have
+        # meant, and "the last one wins" is a rule nobody stated.
+        return _usage("FILE and --proposal are two spellings of the same "
+                      "document — name the proposal positionally or through "
+                      "--proposal, not both")
+    if args.proposal is not None:
+        # RESOLVED ONTO THE POSITIONAL BEFORE ANYTHING READS IT, so every
+        # downstream surface — config discovery rooted at the document, the
+        # report header, the narrative, the state-file refusal — treats the two
+        # spellings identically by construction rather than by N parallel
+        # branches.
+        args.file = args.proposal
     if args.file is None:
         return _usage("FILE is required (only --hook mode reads the file from "
                       "a PostToolUse event instead)")
@@ -2700,22 +2733,72 @@ def _proposed_lines(path: str) -> list[str]:
     Tolerant end to end — an unreadable or unrecognized document names the
     problem on the header line and costs only the summary, because the explain
     path must never crash a run the gate itself survived.
+
+    Terraform CONFIGURATION is routed by :func:`gcp_grounding.gate.
+    terraform_route` — the same suffix decision the grounding pass makes — and
+    never by ``detect_kind``, which does not recognize terraform's JSON
+    configuration syntax and would headline the demo's own proposal as "not a
+    recognized policy document kind" while the decision below it denies over
+    that very document.
     """
     lines = ["what was proposed:"]
-    doc, error = _read_json(path)
-    if error is not None:
-        lines.append(f"  {path} — {error}")
-        return lines
-    kind = detect_kind(doc)
-    name = _KIND_NAMES.get(kind, "not a recognized policy document kind")
-    lines.append(f"  {path} — {name}")
-    summary = _proposal_summary(doc, kind)
+    raw_hcl = gate.terraform_route(path)
+    if raw_hcl is not None:
+        name, summary = _terraform_summary(path, raw=raw_hcl)
+        lines.append(f"  {path} — {name}")
+    else:
+        doc, error = _read_json(path)
+        if error is not None:
+            lines.append(f"  {path} — {error}")
+            return lines
+        kind = detect_kind(doc)
+        name = _KIND_NAMES.get(kind, "not a recognized policy document kind")
+        lines.append(f"  {path} — {name}")
+        summary = _proposal_summary(doc, kind)
     if len(summary) > _PROPOSAL_LINE_CAP:
         elided = len(summary) - _PROPOSAL_LINE_CAP
         summary = summary[:_PROPOSAL_LINE_CAP]
         summary.append(f"    (... and {elided} more)")
     lines.extend(summary)
     return lines
+
+
+def _terraform_summary(path: str, *, raw: bool) -> tuple[str, list[str]]:
+    """The proposal block for a terraform configuration: the human name with
+    its resource count, and one line per resource ADDRESS —
+    ``google_compute_firewall.allow_ssh_world``, the same spelling the
+    decision's findings use, so a reader can join the two blocks by eye. Blame
+    stays in the decision section: this block says what was proposed, never
+    what is wrong with it.
+
+    The addresses come from the SAME readers the grounding pass uses
+    (:func:`gcp_grounding.gate.read_hcl` and gate's ``.tf.json`` entry walk —
+    private to the package, not the world), because a second terraform parser
+    here would let the summary drift from what was actually graded. Tolerant
+    like the rest of the narrative: an unreadable file names the problem on
+    the header line and costs only the summary.
+    """
+    try:
+        if raw:
+            triples, _unresolved, note = gate.read_hcl(path)
+            if triples is None:
+                return (note or "a terraform configuration that could not be "
+                                "read"), []
+            addresses = [address for address, _type, _values in triples]
+        else:
+            doc, error = _read_json(path)
+            if error is not None:
+                return error, []
+            addresses = [f"{rtype}.{name}"
+                         for rtype, name, _body in gate._tf_json_entries(doc)]
+    except Exception:
+        logger.debug("--explain: the terraform proposal summary failed",
+                     exc_info=True)
+        return "a terraform configuration (the summary failed; the gate's own "\
+               "verdicts below are unaffected)", []
+    noun = "resource" if len(addresses) == 1 else "resources"
+    return (f"a terraform configuration ({len(addresses)} {noun})",
+            [f"    {address}" for address in addresses])
 
 
 def _proposal_summary(doc: Any, kind: str | None) -> list[str]:

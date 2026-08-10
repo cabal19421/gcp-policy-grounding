@@ -119,12 +119,22 @@ __all__ = [
     "EXTRACTORS", "register_extractor",
     "iam_bindings", "new_iam_bindings", "old_iam_bindings", "org_policy_rules",
     "RULES", "load_rules", "load_directory", "by_state", "by_domain",
-    "last_witness", "ARTIFACT_KIND",
+    "last_witness", "ARTIFACT_KIND", "WITNESS_ADDRESS_FIELD",
 ]
 
 #: The kind the two artifact-integrity verdicts carry — and the one kind drift
 #: adjudication never touches. See the module docstring's carve-out.
 ARTIFACT_KIND = "sec:artifact"
+
+#: The optional record key carrying the proposing document's own locator — the
+#: terraform block address (``google_compute_firewall.allow_ssh_world``) a
+#: proposal-tier extractor threads through its rows. No collection spec
+#: declares it, so the encoder never reads it and no promise can quantify over
+#: it; its one consumer is :func:`_fmt_record`, which prints it in parentheses
+#: after the record's index so a refutation names the block an operator must
+#: edit rather than only the flattened row that witnessed it. A record without
+#: the key renders exactly as it always has.
+WITNESS_ADDRESS_FIELD = "address"
 
 
 # -- applicability table ------------------------------------------------------
@@ -574,9 +584,20 @@ def _render_model(z3, obl, model) -> str:
 
 
 def _fmt_record(collection: str, index: int, record: Mapping) -> str:
-    """``"collection[i] k=v ..."`` with keys sorted, for the witness message."""
-    fields = " ".join(f"{k}={v!r}" for k, v in sorted(record.items()))
-    return f"{collection}[{index}] {fields}".rstrip()
+    """``"collection[i] (address) k=v ..."`` with keys sorted, for the witness
+    message.
+
+    The parenthesized address prints only when the record carries
+    :data:`WITNESS_ADDRESS_FIELD` — the terraform block address its extractor
+    threaded through — and is excluded from the ``k=v`` fields: it locates the
+    record, it is not a value the obligation was decided over.
+    """
+    address = record[WITNESS_ADDRESS_FIELD] if WITNESS_ADDRESS_FIELD in record \
+        else ""
+    fields = " ".join(f"{k}={v!r}" for k, v in sorted(record.items())
+                      if k != WITNESS_ADDRESS_FIELD)
+    where = f"({address}) " if address else ""
+    return f"{collection}[{index}] {where}{fields}".rstrip()
 
 
 # -- structured witness store -------------------------------------------------

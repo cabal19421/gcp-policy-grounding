@@ -545,6 +545,77 @@ printf '{"hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file
     .venv/bin/gcp-ground verify-policy --hook; echo "exit=$?"
 ```
 
+### 7. The terraform finale: every input named by its flag
+
+The last step replays the whole pipeline over terraform. `examples/terraform/`
+holds the clean infrastructure (`base.tf.json`, with `terraform.tfstate` as its
+applied state) and `main.tf.json` — the same configuration after an agent, or a
+hurried human, added exactly two blocks:
+
+```diff
+ main.tf.json, against base.tf.json — the two added blocks
++"allow_ssh_world": {
++  "allow": [{"ports": ["22"], "protocol": "tcp"}],
++  "direction": "INGRESS",
++  "name": "allow-ssh-from-anywhere",
++  "network": "projects/acme-prod/global/networks/prod-vpc",
++  "priority": 800,
++  "project": "acme-prod",
++  "source_ranges": ["0.0.0.0/0"]        <- tcp/22 open to the world
++}
+...
++"contractor_owner": {
++  "members": ["user:mallory@outsider.example"],
++  "project": "acme-prod",
++  "role": "roles/owner"                 <- roles/owner to an outsider
++}
+```
+
+One command grounds the change, and each of the five inputs is one flag:
+
+- `--snapshot` — the API snapshot: what is real and live in the estate;
+- `--terraform-state` — the current state as captured in IaC;
+- `--requirements` — the promises compiled from `sec_requirements` (step 1
+  wrote them to `demo/compiled`);
+- `--proposal` — the proposed change, agent- or human-authored;
+- `--explain` — the decision narrative.
+
+```bash
+# 7. The terraform finale. EXPECTED TO EXIT 1: the two added blocks are the
+#    finding. (Run step 1 first — --requirements reads what it compiled.)
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform/main.tf.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --terraform-state examples/terraform/terraform.tfstate \
+    --requirements demo/compiled \
+    --explain
+```
+
+What you see, in the narrative's own reading order: **what was proposed** — the
+document as `a terraform configuration (8 resources)`, one line per resource
+address; the decision — **DENIED (exit 1)**, because the compiled promise
+`no-open-ssh-rdp-ingress` is **VIOLATED** — the stanza quotes its English
+sentence, *"No ingress firewall rule may allow tcp/22 or tcp/3389 from
+0.0.0.0/0."*, and its refutation names the terraform block to edit
+(`google_compute_firewall.allow_ssh_world`) — and `[firewall_exposure]` names
+the same block as reachable on tcp/22 from a public source. The owner grant
+draws the `[iam_escalation]` warning on `contractor_owner` (roles/owner to
+`user:mallory@outsider.example`), and the `[subset]` widening note stays
+honestly unverified: the baseline came from terraform state, terraform
+enumerates only what terraform manages, and a never-complete baseline "cannot
+tell a real widening from a row that view never saw" — the gate's own words —
+instead of manufacturing certainty. One caveat, stated rather than papered
+over: IAM-domain promises report `not evaluated — the document under review is
+not an IAM allow policy` over a terraform document today, so the firewall and
+perimeter promises evaluate here (the perimeter one reports that it *holds*)
+while the three IAM promises abstain.
+
+In production the five flags collapse into a `.gcp-grounding.json` config file
+discovered next to the proposal (see "Two overlapping ways to get the current
+state" above) — the same inputs, written once, so the command line shrinks to
+the proposal alone. The demo spells them out because the mapping *is* the
+lesson.
+
 Useful flags on `verify-policy`: `--explain` (dump the z3 constraints built
 this run), `--format json` (the stable machine report), `--abstain-notes`
 (surface what the gate could NOT decide on an otherwise-passing run). To

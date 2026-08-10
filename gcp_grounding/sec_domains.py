@@ -447,14 +447,26 @@ def _estate_table(snapshot, name: str) -> Mapping[str, Any]:
 
 def _firewall_records(rules: Iterable[tuple], label: str) -> tuple:
     """The flattened rows of ``(name, normalized rule)`` pairs — shared by the
-    proposal and estate VPC firewall collections, which share one field set."""
+    proposal and estate VPC firewall collections, which share one field set.
+
+    A rule tuple may carry a THIRD element: the proposing document's own
+    locator (a terraform block address), stored on every row of that rule under
+    :data:`gcp_grounding.sec_rules.WITNESS_ADDRESS_FIELD`. It is not in
+    :data:`_FIREWALL_FIELDS`, so no promise can quantify over it, the encoder
+    never reads it and :func:`_sorted` never keys on it — its one consumer is
+    the witness message, which uses it to name the block an operator must edit.
+    The estate tier passes pairs and its rows are unchanged."""
     records: list[dict] = []
-    for name, rule in rules:
+    for entry in rules:
+        name, rule = entry[0], entry[1]
+        address = entry[2] if len(entry) > 2 else ""
         if not isinstance(rule, Mapping):
             raise _Undecidable(f"{label} {name!r} is not a record — the rule was not "
                                "evaluated")
         _reject_unsupported(label, name, rule)
         base: dict[str, Any] = {"name": name}
+        if address:
+            base[sec_rules.WITNESS_ADDRESS_FIELD] = address
         for key in ("network", "direction", "action", "priority", "disabled"):
             value = rule.get(key)
             if value is not None:
@@ -471,13 +483,23 @@ def _firewall_records(rules: Iterable[tuple], label: str) -> tuple:
 
 
 def _proposed_firewall_rules(module) -> Callable:
-    """``proposed_firewall_rules`` from the document's ``firewall_rule`` claims."""
+    """``proposed_firewall_rules`` from the document's ``firewall_rule`` claims.
+
+    A terraform document's firewall claims carry the BLOCK ADDRESS as their
+    ``location`` (``google_compute_firewall.allow_ssh_world`` — see
+    ``fw_claims._tf_firewall_claims``), and it rides along on every row so a
+    refutation can name the block to edit instead of only the flattened row
+    that witnessed it. A REST document's ``location`` is a json path
+    (``"name"``), which locates nothing an operator can open, so it is not
+    threaded and those rows are byte-identical to what they always were."""
     def extract(ctx):
         claims, missing = _document_claims(ctx, module, "firewall_rule",
                                            "VPC firewall rule")
         if missing is not None:
             return (), missing
-        rules = [(_claim_name(c.fields(), c), c.fields()) for c in claims]
+        tf = ctx.document_kind == _TF_PLAN
+        rules = [(_claim_name(c.fields(), c), c.fields(),
+                  c.location if tf else "") for c in claims]
         return _firewall_records(rules, "firewall rule"), None
     return extract
 
