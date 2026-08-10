@@ -185,6 +185,7 @@ def extract(collection, context):
 #: the extractor count EXACTLY KNOWABLE in any checkout: a floor (``>= 2``) would
 #: have passed just as happily if a domain silently stopped registering.
 EXTRACTOR_DEPENDENCIES = {
+    "proposed_role_permissions": None,
     "proposed_firewall_rules": "fw_claims",
     "firewall_rules": None,
     "armor_rules": "armor_claims",

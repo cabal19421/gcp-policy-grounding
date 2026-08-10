@@ -38,7 +38,7 @@ degrade to explicit `unverified` when not.
 | **Hierarchical firewall policies** | policy JSON, terraform | cross-level evaluation order and `goto_next`; a folder allow re-opening an org deny; placement and replacement |
 | **Cloud Armor** | security-policy JSON, terraform | priority-order bypass; default-rule removal; match-expression grounding over the offline-decidable subset |
 | **VPC Service Controls** | perimeter / access-level JSON, terraform | perimeter shrink; restricted-service removal; ingress/egress widening (`ANY_IDENTITY`, wildcards); dry-run flips; ghost access levels |
-| **Custom roles** | role JSON, terraform | every included permission must exist in the estate's enumeration |
+| **Custom roles** | role JSON, terraform | every included permission must exist in the estate's enumeration; a predefined→custom swap is scope-diffed against the binding's current grant (extras drawn as warnings, never blocks) |
 | **Shell commands** | `gcloud` `gsutil` `bq` `terraform` `kubectl` `curl` text | state-mutation classification (audit via `scan-command`, blocking via the hook's `--bash-policy`) |
 
 Every surface gets the same four-bucket honesty contract, and every domain can
@@ -586,6 +586,18 @@ python3 -m venv .venv
 Everything below is fully offline — frozen fixture snapshots, no credentials,
 no network. Run from the repo root after the Development setup above.
 
+### The scenarios at a glance
+
+| # | Scenario | Proposal | Expect |
+| --- | --- | --- | --- |
+| 1 | A violating terraform diff: world-open SSH + `roles/owner` to an outsider (step 7) | `examples/terraform/main.tf.json` | DENIED — two promises VIOLATED, each refutation naming its block |
+| 2a | Custom-role swap meant to reduce scope; the accidental extra permission is harmless (step 8) | `examples/terraform-roles/proposal_a.tf.json` | APPROVED — with the `[iam_scope_diff]` warning naming the extra permission |
+| 2b | The same swap, but the extra permission is `iam.serviceAccounts.actAs` (step 8) | `examples/terraform-roles/proposal_b.tf.json` | DENIED — the permission promise VIOLATED, custom-role block named |
+
+Steps 0–6 below are the non-terraform acts: the acceptance suite, compiling
+the promises, the REST attack, the hallucination did-you-mean, shell-command
+scanning, and the hook pair (attack blocks, benign is byte-silent).
+
 ```bash
 # 0. The acceptance proof: the entire suite, including the agentic sessions
 #    driven through the real hook and the armed mutation contract (~100s).
@@ -724,6 +736,79 @@ org-policy rule set through `allow_all`/`deny_all`, a condition-mentioning
 promise over a binding whose condition the claims could not pin — each is a
 named abstention, never a fabricated row, because a fabricated row could
 fabricate a refutation.
+
+### 8. Scenario two: the custom-role swap
+
+An operator swaps a binding's predefined role for a custom role defined in the
+same change, intending to reduce its permission scope — but the custom role
+accidentally includes one permission the predefined role never granted. In
+case A that extra permission has no consequence, and in case B it violates a
+compiled promise. `examples/terraform-roles/` holds the pieces: `base.tf.json`
+grants `roles/bigquery.dataViewer` (four snapshot-enumerated permissions) to
+`group:data-eng@acme.example`, `terraform.tfstate` is that binding as current
+state, and each proposal swaps in `projects/acme-prod/roles/dataViewerScoped` —
+three of the predefined role's four permissions plus exactly one extra
+(`bigquery.jobs.create` in `proposal_a.tf.json`; `iam.serviceAccounts.actAs`,
+an escalation-class permission, in `proposal_b.tf.json`). The scenario has its
+own one-promise requirements corpus in the same directory — *"No role may
+include the permission iam.serviceAccounts.actAs."*, quantified over the
+proposal's own custom-role permission rows — compiled separately from step 1's
+corpus (exit 0: nothing in it is booby-trapped; the compiled artifacts are not
+committed):
+
+```bash
+# 8. Compile the scenario corpus, then judge both proposals.
+.venv/bin/gcp-ground compile-requirements examples/terraform-roles \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json --out demo/compiled-roles
+
+# 8a. Case A — EXPECTED TO EXIT 0: the accident is surfaced, not blocked.
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-roles/proposal_a.tf.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --terraform-state examples/terraform-roles/terraform.tfstate \
+    --requirements demo/compiled-roles \
+    --explain
+
+# 8b. Case B — EXPECTED TO EXIT 1: the same accident now breaks a promise.
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-roles/proposal_b.tf.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --terraform-state examples/terraform-roles/terraform.tfstate \
+    --requirements demo/compiled-roles \
+    --explain
+```
+
+**Case A is APPROVED (exit 0) with the accident surfaced.** The scope-diff
+check found the same binding in the terraform state, diffed the custom role's
+permissions against the predefined role's snapshot enumeration, and the
+`[iam_scope_diff]` warning leads the decision block's abstention taste: *swaps
+`roles/bigquery.dataViewer` for `projects/acme-prod/roles/dataViewerScoped`
+(`google_project_iam_custom_role.data_viewer_scoped`) … adds 1 permission(s)
+roles/bigquery.dataViewer never granted: `bigquery.jobs.create` — the swap is
+not only a scope reduction* — "reducing scope" verified as mostly-true, the
+one extra named, the custom-role block to review named, and nothing blocked:
+consequence is the promise layer's job, and no promise mentions
+`bigquery.jobs.create`. (In this demo the warning rides through as an
+abstention rather than a clean `grounded`, because the fixture snapshot's
+roles are past the freshness limit and drift adjudication refuses to rest a
+clean answer on a stale fact — the message is identical either way.)
+
+**Case B is DENIED (exit 1).** The identical swap shape, but the extra is
+`iam.serviceAccounts.actAs`, so the compiled promise is **VIOLATED** — the
+stanza quotes *"No role may include the permission
+iam.serviceAccounts.actAs."* and the refutation names the block to edit:
+`refuted by proposed_role_permissions[3]
+(google_project_iam_custom_role.data_viewer_scoped)
+permission='iam.serviceAccounts.actAs'`. The same `[iam_scope_diff]` warning
+appears with the extra annotated as `(impersonation)` — the escalation class
+the accident would have handed to every member of the binding. What still
+abstains, stated rather than papered over: the binding's role existence (the
+custom role is being created by this very change, so the snapshot cannot know
+it) and the `[subset]` widening note, both for the same partial-view reasons
+as the terraform finale. A REST document, for the record, simply cannot
+exercise this promise: no REST document kind carries a custom role's
+permission list, and the rule abstains naming that fact instead of passing
+vacuously.
 
 In production the five flags collapse into a `.gcp-grounding.json` config file
 discovered next to the proposal (see "Two overlapping ways to get the current

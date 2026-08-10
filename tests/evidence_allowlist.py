@@ -52,21 +52,21 @@ ALLOWLIST: tuple[Allowed, ...] = (
         "belongs to the fw-claims task that owns those byte-pinned payloads.",
     ),
     Allowed(
-        "gcp_grounding/sec_domains.py", 267, "_iterable(values)",
+        "gcp_grounding/sec_domains.py", 279, "_iterable(values)",
         "_iterable launders every dimension builder's input in sec_domains, and "
         "routing them through evidence.rows means opening a ledger inside the "
         "collection extractors, which is the sec-domains task's change.",
     ),
     Allowed(
-        "gcp_grounding/sec_domains.py", 285, "_iterable(values)",
+        "gcp_grounding/sec_domains.py", 297, "_iterable(values)",
         "Same _iterable laundering, in the string-dimension builder.",
     ),
     Allowed(
-        "gcp_grounding/sec_domains.py", 291, "_iterable(entries)",
+        "gcp_grounding/sec_domains.py", 303, "_iterable(entries)",
         "Same _iterable laundering, in the layer-4 dimension builder.",
     ),
     Allowed(
-        "gcp_grounding/sec_domains.py", 345, "_iterable(ports)",
+        "gcp_grounding/sec_domains.py", 357, "_iterable(ports)",
         "Same _iterable laundering, in the port-value builder.",
     ),
     Allowed(

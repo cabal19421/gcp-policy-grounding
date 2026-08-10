@@ -89,6 +89,7 @@ PROVIDER_MODULES = (
     "gcp_grounding.armor_claims", "gcp_grounding.armor_checks",
     "gcp_grounding.vpcsc_claims", "gcp_grounding.vpcsc_checks",
     "gcp_grounding.iam_deny", "gcp_grounding.iam_checks",
+    "gcp_grounding.iam_scope",
     "gcp_grounding.org_checks",
 )
 

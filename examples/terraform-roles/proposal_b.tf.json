@@ -1,0 +1,24 @@
+{
+  "resource": {
+    "google_project_iam_binding": {
+      "analysts": {
+        "members": ["group:data-eng@acme.example"],
+        "project": "acme-prod",
+        "role": "projects/acme-prod/roles/dataViewerScoped"
+      }
+    },
+    "google_project_iam_custom_role": {
+      "data_viewer_scoped": {
+        "permissions": [
+          "bigquery.datasets.get",
+          "bigquery.tables.get",
+          "bigquery.tables.getData",
+          "iam.serviceAccounts.actAs"
+        ],
+        "project": "acme-prod",
+        "role_id": "dataViewerScoped",
+        "title": "Acme Data Viewer (scoped)"
+      }
+    }
+  }
+}

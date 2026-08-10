@@ -64,6 +64,10 @@ DOCUMENT_CHECK_OWNERS = {
     # claim; it stays silent unless a role hits the curated escalation table,
     # which none of these fixtures' roles does.
     "gcp_grounding.iam_checks": {"check_escalation"},
+    # The custom-role swap diff needs three parties (custom role, binding,
+    # current grant); it stays silent unless a proposal both defines a custom
+    # role and binds it, which none of these fixtures does.
+    "gcp_grounding.iam_scope": {"check_role_scope_diff"},
     # A whole-document check that answered for another domain's document
     # kind would break the verdict-set equality below; that is what pins
     # its silence on these fixtures.

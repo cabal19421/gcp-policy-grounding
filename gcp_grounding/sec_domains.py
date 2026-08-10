@@ -159,9 +159,12 @@ _ARMOR_FIELDS = {
 _PERIMETER_RESOURCE_FIELDS = {"perimeter": "Str", "resource": "Str", "section": "Str"}
 _PERIMETER_SERVICE_FIELDS = {"perimeter": "Str", "service": "Str", "section": "Str"}
 
-#: Domain → its collections, in ``sec_artifact.DOMAINS``-compatible order (the
-#: two domains already covered by ``sec_rules``' built-ins are absent).
+#: Domain → its collections, in ``sec_artifact.DOMAINS``-compatible order. The
+#: ``iam`` entry is NOT the base ``iam_bindings`` collection (that one is
+#: ``sec_ast``'s own and its REST extractor a ``sec_rules`` built-in): it is the
+#: custom-role permission collection, which has no REST arm at all.
 DOMAIN_COLLECTIONS: dict[str, tuple[str, ...]] = {
+    "iam": ("proposed_role_permissions",),
     "vpc_firewall": ("proposed_firewall_rules", "firewall_rules"),
     "cloud_armor": ("armor_rules",),
     "hier_firewall": ("hier_firewall_rules",),
@@ -185,8 +188,17 @@ DOMAIN_MODULES: dict[str, str] = {
 #: ``claims``) is a hard import of this module already.
 BASE_COLLECTION_OVERRIDES: tuple[str, ...] = ("iam_bindings", "org_policy_rules")
 
+#: One row per permission a proposal's ``google_project_iam_custom_role`` block
+#: includes: the role's full name (``projects/<project>/roles/<role_id>``) and
+#: the permission, plus the block address under
+#: :data:`gcp_grounding.sec_rules.WITNESS_ADDRESS_FIELD` (not a declared field,
+#: so no promise can quantify over it — its one consumer is the witness message).
+_ROLE_PERMISSION_FIELDS = {"role": "Str", "permission": "Str"}
+
 #: Every spec :func:`register` installs, in :data:`DOMAIN_COLLECTIONS` order.
 COLLECTION_SPECS: tuple[CollectionSpec, ...] = (
+    CollectionSpec("proposed_role_permissions", "proposal",
+                   _ROLE_PERMISSION_FIELDS),
     CollectionSpec("proposed_firewall_rules", "proposal", _FIREWALL_FIELDS),
     CollectionSpec("firewall_rules", "estate", _FIREWALL_FIELDS),
     CollectionSpec("armor_rules", "proposal", _ARMOR_FIELDS),
@@ -1013,6 +1025,129 @@ def _tf_org_policy_rules(ctx):
     return _sorted(records, sec_ast.COLLECTIONS["org_policy_rules"].fields), None
 
 
+# -- the proposal-tier custom-role permission collection -----------------------
+#
+# ``proposed_role_permissions`` follows the same claims-are-the-records
+# discipline as the two base-collection terraform arms above: the rows are the
+# ``permission`` claims ``tf_claims._custom_role_claims`` already emits
+# (anchored at ``<block>.permissions[i]``), the one value the claims do not
+# carry — the role's own full name — is read from the plan at the claim's own
+# anchor through ``tf_claims``' walker, and every row carries the block address
+# under :data:`gcp_grounding.sec_rules.WITNESS_ADDRESS_FIELD`. There is NO REST
+# arm: no supported REST document kind carries a custom role's permission list,
+# and the non-terraform branch says exactly that instead of grounding vacuously.
+
+#: The claim-location grammar of a custom role's permission entries, exactly as
+#: ``tf_claims`` anchors them. In a terraform plan, ``permission`` claims come
+#: only from ``google_project_iam_custom_role`` blocks; one outside this
+#: grammar is a shape this extraction does not understand and abstains on.
+_PERMISSION_AT = re.compile(r"^(?P<address>.+)\.permissions\[\d+\]$")
+#: The plan-side census: custom-role resource addresses this extraction is
+#: responsible for, mirroring :data:`_IAM_BINDING_ADDRESS`. A block of this type
+#: that yielded NO permission claim (a stripped or malformed list) must abstain
+#: by name — unless its list is present and observed empty, which is the one
+#: honest "grants nothing" and contributes no row.
+_CUSTOM_ROLE_ADDRESS = re.compile(r"^google_project_iam_custom_role\.[^.]+$")
+
+
+def _custom_role_name(values: Mapping[str, Any], address: str, label: str) -> str:
+    """The full name of the custom role *address* creates, or abstain.
+
+    Built from the block's own literal ``project`` and ``role_id`` — never from
+    a provider default, which the configuration does not state and this
+    extraction will not guess at."""
+    role_id = values.get("role_id")
+    if not isinstance(role_id, str) or not role_id:
+        raise _Undecidable(
+            f"{label} {address!r} carries no readable 'role_id' — the role's "
+            "name was not decided, and a record without it would be a guess — "
+            "the rule was not evaluated")
+    project = values.get("project")
+    if not isinstance(project, str) or not project:
+        raise _Undecidable(
+            f"{label} {address!r} does not state its 'project' in the "
+            f"configuration, so the role's full name "
+            f"(projects/<project>/roles/{role_id}) was not decided — the rule "
+            "was not evaluated")
+    return f"projects/{project}/roles/{role_id}"
+
+
+def _tf_role_permissions(ctx):
+    """``proposed_role_permissions`` rows from a terraform document's
+    ``permission`` claims, grouped by the custom-role block each claim is
+    anchored to."""
+    label = "custom role"
+    _plan_envelope(ctx.document)
+    by_address = _plan_values(ctx.document)
+    groups: dict[str, list] = {}
+    for claim in tf_claims.terraform_plan_claims(ctx.document):
+        if claim.kind != "permission":
+            continue
+        matched = _PERMISSION_AT.match(claim.location)
+        if matched is None:
+            raise _Undecidable(
+                f"the permission claim at {claim.location!r} sits outside the "
+                "permissions[] grammar this extraction reads — the rule was "
+                "not evaluated")
+        groups.setdefault(matched.group("address"), []).append(claim)
+    granting = 0
+    unread: list[str] = []
+    for address in by_address:
+        if not _CUSTOM_ROLE_ADDRESS.match(address) or address in groups:
+            continue
+        values = by_address[address]
+        if isinstance(values, Mapping) and values.get("permissions") == []:
+            granting += 1  # present and observed empty: grants nothing
+            continue
+        unread.append(address)
+    if unread:
+        raise _Undecidable(
+            f"{label} resource(s) {', '.join(map(repr, sorted(unread)))} "
+            "yielded no permission claims — a custom role whose permission "
+            "list was stripped or malformed grants permissions nobody read — "
+            "the rule was not evaluated")
+    if not groups:
+        if granting:
+            raise _Undecidable(
+                f"{_PLAN_WHAT} carries {granting} custom role(s) and none of "
+                "them names a permission — the rule was not evaluated over "
+                "any record")
+        raise _no_tf_records(label)
+    records: list[dict] = []
+    for address in sorted(groups):
+        values = _resource_values(address, by_address, label)
+        raw = values.get("permissions")
+        if not isinstance(raw, list) or any(
+                not isinstance(p, str) or not p for p in raw):
+            raise _Undecidable(
+                f"{label} {address!r} carries a 'permissions' attribute that "
+                "is not a list of plain permission names — entries the claim "
+                "walker skipped would be permissions nobody read — the rule "
+                "was not evaluated")
+        role = _custom_role_name(values, address, label)
+        records.extend({"role": role, "permission": claim.value,
+                        sec_rules.WITNESS_ADDRESS_FIELD: address}
+                       for claim in groups[address])
+    return _sorted(records, _ROLE_PERMISSION_FIELDS), None
+
+
+def _proposed_role_permissions(ctx):
+    """``proposed_role_permissions``: the terraform arm, or the honest
+    not-applicable for every other document kind — pinned rather than implied,
+    because a REST custom-role document kind simply does not exist in
+    :data:`gcp_grounding.preflight.DOCUMENT_KINDS` and an author deserves to
+    read that fact off the abstention."""
+    if ctx.document is None:
+        return (), ("no document under review — the custom-role rule was not "
+                    "evaluated")
+    if ctx.document_kind != _TF_PLAN:
+        return (), ("the document under review is not a terraform plan — no "
+                    "supported REST document kind carries a custom role's "
+                    "permission list, so proposed_role_permissions has no "
+                    "records here and the rule was not evaluated")
+    return _tf_role_permissions(ctx)
+
+
 def _with_terraform_arm(tf_extract: Callable, builtin: Callable) -> Callable:
     """Dispatch for an overridden base collection: a ``tf_plan`` document takes
     *tf_extract*; every other kind — including the loud unrecognized/None
@@ -1132,6 +1267,12 @@ def register() -> None:
     sec_rules.register_extractor(
         "hier_firewall_rules",
         _guarded("hier_firewall_rules", _estate_hier_firewall_rules))
+
+    # Unconditional, like the base-collection overrides below: everything the
+    # custom-role arm needs (tf_claims, sec_rules) is a hard import already.
+    sec_rules.register_extractor(
+        "proposed_role_permissions",
+        _guarded("proposed_role_permissions", _proposed_role_permissions))
 
     vpcsc = _domain_module(DOMAIN_MODULES["vpc_sc"])
     if vpcsc is not None:

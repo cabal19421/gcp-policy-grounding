@@ -1,0 +1,11 @@
+{
+  "resource": {
+    "google_project_iam_binding": {
+      "analysts": {
+        "members": ["group:data-eng@acme.example"],
+        "project": "acme-prod",
+        "role": "roles/bigquery.dataViewer"
+      }
+    }
+  }
+}
