@@ -416,6 +416,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import importlib
+from collections import Counter
 import importlib.util
 import inspect
 import json
@@ -1048,6 +1049,10 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
         print("\n".join(_state_explain_lines(ground, settings, args.state_explain)),
               file=sys.stderr)
     _incomplete_notice(ground, settings, hook=False)
+    if args.explain:
+        # After the report, so the decision is the last thing on the terminal.
+        print("\n".join(_decision_recap_lines(ground.report, hook=False)),
+              file=sys.stderr)
     return EXIT_OK if ground.report.ok else EXIT_FAILED
 
 
@@ -2922,10 +2927,52 @@ def _decision_lines(report: GroundingReport, *, hook: bool) -> list[str]:
                              f"{verdict.message}")
     undecided = report.by_status("unverified")
     lines.append(f"  honestly undecided: {len(undecided)} abstention(s)")
-    for verdict in undecided:
+    # A stale or partial snapshot can abstain on dozens of rows at once; the
+    # decision block lists a taste and defers the rest to the report below, or
+    # the one actionable finding would scroll off before the reader sees it.
+    # JUDGMENT kinds lead the taste — an escalation warning, a widening note,
+    # staleness, a promise carry each say something about this change — and
+    # COVERAGE kinds ("snapshot did not capture X") trail however rare,
+    # because they say something about the snapshot. Rarer kinds first within
+    # each class; report order breaks ties.
+    kind_counts = Counter(v.kind for v in undecided)
+    taste = sorted(undecided, key=lambda v: (
+        0 if (v.kind in ("iam_escalation", "subset", "staleness")
+              or v.kind.startswith(("sec:", "drift", "baseline:"))) else 1,
+        kind_counts[v.kind]))
+    for verdict in taste[:_UNDECIDED_LINE_CAP]:
         lines.append(f"    {marks['unverified']} [{verdict.kind}] "
                      f"{verdict.message}")
+    if len(undecided) > _UNDECIDED_LINE_CAP:
+        lines.append(f"    … and {len(undecided) - _UNDECIDED_LINE_CAP} more "
+                     "abstention(s), each listed in the report below")
     lines.append(f"  checks that passed: {report.counts()['grounded']}")
+    return lines
+
+
+#: The decision block spells out at most this many abstentions; the report
+#: always carries every one.
+_UNDECIDED_LINE_CAP = 5
+
+
+def _decision_recap_lines(report: GroundingReport, *, hook: bool) -> list[str]:
+    """The last lines a terminal shows: the decision again, with only the
+    deciding verdicts. The full narrative printed first and a long report can
+    scroll it away — the recap means the reader never has to scroll to learn
+    the outcome. Content is read off the same report as :func:`_decision_lines`
+    so the two can never disagree."""
+    marks = dict(_MARKS)
+    if report.ok:
+        counts = report.counts()
+        return ["", f"decision recap: APPROVED (exit {EXIT_OK}) — "
+                    f"grounded={counts['grounded']} "
+                    f"unchecked={counts['unverified']} (narrative above)"]
+    lines = ["", f"decision recap: DENIED (exit "
+                 f"{EXIT_BLOCK if hook else EXIT_FAILED}) — because:"]
+    for status in _FINDING_STATUSES:
+        for verdict in report.by_status(status):
+            lines.append(f"  {marks[status]} [{verdict.kind}] {verdict.message}")
+    lines.append("(the full narrative is above, before the report)")
     return lines
 
 
