@@ -519,7 +519,7 @@ REMOVALS: tuple[SeededRemoval, ...] = (
         apply=lambda mp: _patch(mp, "gcp_grounding.iam_checks", DOCUMENT_CHECKS=()),
         must_fail=(_AI + "A07_sa_token_creator]", _AI + "A08_sa_user_actas]",
                    _AI + "A09_owner_to_real_principal]"),
-        owner="gx-agentic-iam-repin", spelling=AFTER_COLLECTION),
+        owner="gx-agentic-iam-repin", pending=False, spelling=AFTER_COLLECTION),
     SeededRemoval(
         id="RM-IAM-PUBLIC-PRINCIPAL-KIND", family="iam",
         subject="the public_principal claim kind, dropped from claims.KINDS",
@@ -527,7 +527,16 @@ REMOVALS: tuple[SeededRemoval, ...] = (
             k for k in import_module("gcp_grounding.claims").KINDS
             if k != "public_principal")),
         must_fail=(_AI + "A11_allusers_public]",),
-        owner="gx-agentic-iam-repin", spelling=AFTER_COLLECTION),
+        owner="gx-agentic-iam-repin", pending=False, spelling=AFTER_COLLECTION),
+    SeededRemoval(
+        id="RM-IAM-MEMBER-EXTRACTION", family="iam",
+        subject="iam_checks._MEMBER_KINDS: the escalation check stops pairing a "
+                "binding's role with the members it was granted to",
+        apply=lambda mp: _patch(mp, "gcp_grounding.iam_checks", _MEMBER_KINDS=()),
+        must_fail=(_AI + "A07_sa_token_creator]",
+                   _AI + "A09_owner_to_real_principal]",
+                   _AI + "A19_escalation_role_to_public]"),
+        owner="gx-agentic-iam-repin", pending=False, spelling=AFTER_COLLECTION),
     SeededRemoval(
         id="RM-NETWORK-PLANE-UNAVAILABLE", family="network",
         subject="fw_checks and hfw_checks, the network-plane check modules",
