@@ -489,6 +489,10 @@ AFTER_COLLECTION = ("monkeypatched after collection; the family's cases keep "
 IMPORT_TIME = ("bound to None in sys.modules; its probes go false and its cases "
                "SKIP, so must_fail names the not-all-cases-may-skip guard and "
                "the capability-liveness assertion")
+RE_MEASURED = ("bound to None in sys.modules AFTER collection, so the marks are "
+               "already fixed and nothing skips; the two guards named below "
+               "RE-MEASURE the probes instead of reading a memo taken before "
+               "the removal, and both go RED when the plane cannot decide")
 
 
 def _patch(monkeypatch, module: str, **fields) -> None:
@@ -531,12 +535,47 @@ REMOVALS: tuple[SeededRemoval, ...] = (
         owner="gx-agentic-iam-repin", pending=False, spelling=AFTER_COLLECTION),
     SeededRemoval(
         id="RM-NETWORK-PLANE-UNAVAILABLE", family="network",
-        subject="fw_checks and hfw_checks, the network-plane check modules",
+        subject="fw_checks, fw_estate, hfw_checks and armor_checks — the whole "
+                "network-plane check layer the catalogue is decided by",
+        # armor_checks and fw_estate join the two the seed named. MEASURED on
+        # HEAD's module: renaming all FOUR away leaves it 19 of 19 GREEN, which
+        # is the defect; renaming only three leaves A01 still blocked by the
+        # estate tier, and renaming only the seed's two leaves the armor
+        # capability live, both guards passing, and the removal SURVIVING.
+        #
+        # STILL `pending`, and NOT because it does not kill: MEASURED both ways
+        # in this checkout, both nodes report FAILED under the mutant and
+        # PASSED on clean source. It cannot be flipped live from here on the
+        # SPAWN CEILING alone -- ESC-GX-NETWORK-REMOVAL-CEILING, which carries
+        # the arithmetic.
         apply=lambda mp: _unimport(mp, "gcp_grounding.fw_checks",
-                                   "gcp_grounding.hfw_checks"),
+                                   "gcp_grounding.fw_estate",
+                                   "gcp_grounding.hfw_checks",
+                                   "gcp_grounding.armor_checks"),
         must_fail=(_AN + "test_not_every_network_case_may_skip",
                    _AN + "test_the_network_capabilities_are_live"),
-        owner="gx-agentic-network-repin", spelling=IMPORT_TIME),
+        owner="gx-agentic-network-repin", spelling=RE_MEASURED),
+    SeededRemoval(
+        id="RM-NETWORK-PAIR-CHECKS", family="network",
+        subject="fw_checks.PAIR_CHECKS, the packet-set non-enlargement map",
+        apply=lambda mp: _patch(mp, "gcp_grounding.fw_checks", PAIR_CHECKS={}),
+        must_fail=(_AN + "test_the_pair_check_decides_a_widening_against_a_"
+                         "baseline",),
+        owner="gx-agentic-network-repin", pending=False,
+        spelling=AFTER_COLLECTION),
+    SeededRemoval(
+        id="RM-NETWORK-VOCABULARY-KIND", family="network",
+        subject="the resource_type verdict kind, renamed where the Datalog "
+                "pass maps a claim kind to its snapshot category",
+        apply=lambda mp: _patch(
+            mp, "gcp_grounding.reasoner",
+            _CLAIM_CATEGORIES=dict(
+                import_module("gcp_grounding.reasoner")._CLAIM_CATEGORIES,
+                resource_type_ref="resource_kind")),
+        must_fail=(_AN + "test_the_false_vocabulary_block_guard_can_fire_and_"
+                         "is_silent",),
+        owner="gx-agentic-network-repin", pending=False,
+        spelling=AFTER_COLLECTION),
     SeededRemoval(
         id="RM-VPCSC-DOCUMENT-AND-PAIR-CHECKS", family="vpcsc",
         subject="vpcsc_checks.DOCUMENT_CHECKS and PAIR_CHECKS, unregistered",

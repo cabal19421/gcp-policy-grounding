@@ -330,6 +330,97 @@ ESCALATIONS: tuple[Escalation, ...] = (
                  "test_an_escalation_class_role_bound_to_the_public_is_a_"
                  "catalogue_case"),
     ),
+    Escalation(
+        id="ESC-GX-NETWORK-PAIR-BASELINE",
+        clause=("add one case that ONLY the pair check could catch and assert "
+                "the honest abstain naming the absent baseline"),
+        unsatisfiable=(
+            "THE ABSTENTION EXISTS AND IS UNREACHABLE, measured both ways. "
+            "`fw_checks.check_packet_set_pair` returns `unverified` naming \"no "
+            "baseline document was available — no packet-set comparison was "
+            "made\", but `preflight.ground_policy` calls `_subset_verdict` — the "
+            "only caller of `registry.pair_check` — INSIDE `if baseline is not "
+            "None`, and the `--hook` path passes no baseline at all, so on the "
+            "hook path the check is never entered and NOTHING names its "
+            "absence. A second wall sits behind that one: `PAIR_CHECKS` is keyed "
+            "by the DETECTED document kind and `fw_claims.detect_kind` answers "
+            "`firewall_rule` only for a Compute REST document (`kind == "
+            "\"compute#firewall\"`), while every fixture in this catalogue is a "
+            "`terraform show -json` plan detecting as `tf_plan` — so no agentic "
+            "case can reach the pair check even if a baseline were supplied. "
+            "Calling the resolved pair check on the no-baseline path, so the "
+            "gate abstains instead of staying silent, is what closes this, and "
+            "it is a change to `gcp_grounding/preflight.py`, not to a test. "
+            "MEANWHILE THE CONSTANT IS NOT LEFT READING AS COVERAGE: "
+            "`RM-NETWORK-PAIR-CHECKS` is LIVE, not pending, and kills through "
+            "`test_the_pair_check_decides_a_widening_against_a_baseline`, which "
+            "drives the committed REST pair in process — so emptying "
+            "`fw_checks.PAIR_CHECKS` reddens a named node instead of nothing."
+        ),
+        owner_task="gx-agentic-network-repin",
+        node_id=("tests/test_gcp_agentic_network.py::"
+                 "test_a_hook_shaped_run_abstains_naming_the_absent_baseline"),
+    ),
+    Escalation(
+        id="ESC-GX-NETWORK-REMOVAL-CEILING",
+        clause="after the repin that removal must redden named cases",
+        unsatisfiable=(
+            "IT DOES REDDEN THEM, MEASURED, AND THE CEILING STILL REFUSES THE "
+            "FLIP. Under `GCP_TEST_REMOVAL=RM-NETWORK-PLANE-UNAVAILABLE` both "
+            "named nodes report FAILED and both report PASSED on clean source, "
+            "so the removal is a kill and not a hypothesis. But "
+            "`contract_spawn_ceiling()` is `4*len(register()) + "
+            "len(removal_register()) + CONTRACT_CONTROL_SPAWNS`, and MEASURED "
+            "in this checkout the contract's real control cost is 21 against a "
+            "pinned `CONTRACT_CONTROL_SPAWNS = 16` — the five-slot gap is "
+            "absorbed by the per-Removal term for the five removals that are "
+            "NOT live, so a full run sits at exactly 199 of 199 with ZERO "
+            "headroom. A NEW live removal is net zero (one slot, one `-rA` "
+            "child); flipping an ALREADY-COUNTED one from pending to live is "
+            "+1 spawn and +0 slots, so it overflows by exactly one whatever "
+            "else the diff does. This task's two NEW removals — "
+            "`RM-NETWORK-PAIR-CHECKS` and `RM-NETWORK-VOCABULARY-KIND` — are "
+            "therefore LIVE and executed, and the seeded one stays `pending` "
+            "with its measurement recorded beside it rather than the ceiling "
+            "being raised, which mutation_contract.py is frozen against and "
+            "which this document forbids in any case. Rescaling "
+            "`CONTRACT_CONTROL_SPAWNS` to the 21 controls it really has — the "
+            "same rescale ESC-GX-GATE-002 asks for — closes this and XPASSes "
+            "the node below."
+        ),
+        owner_task="gx-agentic-network-repin",
+        node_id=("tests/test_gcp_agentic_network.py::"
+                 "test_the_network_plane_removal_is_live_in_the_contract"),
+    ),
+    Escalation(
+        id="ESC-GX-NETWORK-LAYER4-SPELLING",
+        clause=("then assert the CHANNEL and the PROPERTY — a re-open or "
+                "widening verdict naming the port and the priority of the "
+                "preempting deny — never a bare contradiction count"),
+        unsatisfiable=(
+            "THE PRIORITY HALF IS ASSERTED; THE PORT HALF CANNOT BE, for A02. "
+            "`hfw_claims._from_terraform` reads the repeated layer-4 block as "
+            "`match.layer4_config`, and the provider — with this repo's own real "
+            "captures, `tests/fixtures/gcp/tf/hcl/main.tf`, `estate_plan.json` "
+            "and `estate.tfstate` — spells it `layer4_configs`. An ABSENT key "
+            "legitimately declares NO layer-4 restriction "
+            "(`_unreadable_layer4` returns None for it), so A02's tcp/22 "
+            "proposal folds as matching EVERY port: MEASURED, the three "
+            "`hfw_reopen` verdicts it produces are against the estate's RDP "
+            "denies with witness `port=3389`, and asserting that port for an SSH "
+            "case would certify the gate with a finding about a rule the agent "
+            "did not write. Reading `layer4_configs` in "
+            "`gcp_grounding/hfw_claims.py` — or refusing a match block that "
+            "carries neither spelling — closes it; that module belongs to the "
+            "hierarchical-firewall tasks and not to this test-only repin. A02 "
+            "therefore asserts the channel and the PRIORITY of the deny it "
+            "preempts, A03 asserts port and priority both, and the port half is "
+            "landed under the strict xfail below rather than dropped."
+        ),
+        owner_task="gx-agentic-network-repin",
+        node_id=("tests/test_gcp_agentic_network.py::"
+                 "test_a_hierarchical_proposals_own_port_reaches_the_verdict"),
+    ),
 )
 
 
