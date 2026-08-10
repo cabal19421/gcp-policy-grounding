@@ -23,6 +23,43 @@ comparison questions — "is this CEL condition ever true?", "does the new polic
 grant a strict subset of the old one?" — go to **z3** when installed, and
 degrade to explicit `unverified` when not.
 
+## Quick start
+
+Sixty seconds from clone to a blocked terraform change, fully offline:
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+
+# compile the bundled plain-English security promises into enforced rules
+# (EXITS 1 by design: the corpus includes a deliberately rejected document)
+.venv/bin/gcp-ground compile-requirements tests/fixtures/gcp/sec_requirements \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json --out demo/compiled
+
+# judge a terraform change that violates them — every input named by its flag
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform/main.tf.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --terraform-state examples/terraform/terraform.tfstate \
+    --requirements demo/compiled \
+    --explain
+```
+
+Exit code 1, and the last lines on your terminal are the verdict:
+
+```text
+decision recap: DENIED (exit 1) — because:
+  ⚠ [firewall_exposure] google_compute_firewall.allow_ssh_world: a public
+      source can reach tcp/22 through this rule
+  ⚠ [sec:vpc_firewall] no-open-ssh-rdp-ingress: refuted by
+      proposed_firewall_rules[1] (google_compute_firewall.allow_ssh_world) …
+```
+
+— the violated promise is one of six English sentences compiled from
+`tests/fixtures/gcp/sec_requirements/`, and the refutation names the exact
+terraform block to fix. The full walkthrough, including what each flag is and
+every other act (hallucination did-you-mean, shell-command scanning, hook
+mode), is under **Running the demo** below.
+
 ## The three inputs
 
 ### 1. What the engine compares
