@@ -73,11 +73,30 @@ def test_the_seed_covers_every_amendment_2_entry_and_the_removal_set():
     assert removal_register(), "the removal set is unseeded"
 
 
+#: The seven RC2-MEASURED removals, named in full and GROW-ONLY: a repin task
+#: ADDS to this set, and no diff may drop one.
+RC2_REMOVAL_IDS = frozenset({
+    "RM-IAM-ESCALATION-LAYER", "RM-IAM-PUBLIC-PRINCIPAL-KIND",
+    "RM-NETWORK-PLANE-UNAVAILABLE", "RM-VPCSC-DOCUMENT-AND-PAIR-CHECKS",
+    "RM-VPCSC-DOMAIN-UNREGISTERED", "RM-VPCSC-ABSENT-VERSUS-EMPTY",
+    "RM-HOOK-SUCCESS-BEFORE-THE-EVENT"})
+
+#: SHRINK-ONLY, and never a licence: ``pending`` is the Gate 3 backlog, so a
+#: removal whose OWNER TASK is in the checkout must be LIVE — that is what makes
+#: the frozen gate EXECUTE it. Seeded at 7; MEASURED at 5, the two
+#: gx-agentic-iam-repin owns having gone live with this task.
+PENDING_REMOVAL_MAX = 5
+
+
 def test_the_removal_set_keeps_the_three_fields_the_frozen_type_lacks():
     """Unconditional: a mandated field may not be dropped to fit a frozen type."""
     from tests.agentic.asserts import FAMILY_KINDS
 
-    assert len(removal_register()) == 7, "the RC2-measured removals"
+    ids = {r.id for r in removal_register()}
+    assert RC2_REMOVAL_IDS <= ids, sorted(RC2_REMOVAL_IDS - ids)
     for r in removal_register():
         assert r.family in FAMILY_KINDS and r.subject and r.must_fail, r.id
-        assert r.owner and r.spelling and r.pending is True, r.id
+        assert r.owner and r.spelling and isinstance(r.pending, bool), r.id
+    pending = {r.id for r in removal_register() if r.pending}
+    assert pending <= RC2_REMOVAL_IDS, sorted(pending - RC2_REMOVAL_IDS)
+    assert len(pending) <= PENDING_REMOVAL_MAX, sorted(pending)

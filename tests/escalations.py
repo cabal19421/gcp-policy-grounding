@@ -164,6 +164,34 @@ ESCALATIONS: tuple[Escalation, ...] = (
                  "test_check_outside_the_repo_does_not_report_spurious_drift"),
     ),
     Escalation(
+        id="ESC-GX-HFW-FOLD-ENTRY",
+        clause=("append an `Escalation` naming it so a human lands it in the "
+                "register"),
+        unsatisfiable=(
+            "REM-GX-HFW-FOLD — the entry that empties the hierarchical fold — is "
+            "SPECIFIED IN FULL beside the node below (subject, family, the "
+            "`apply`, and the four node ids that must go RED, every one of them "
+            "MEASURED red under the mutant and green clean), but it cannot be "
+            "REGISTERED from here: as of AMENDMENT 2 both tests/mutation_entries.py "
+            "and tests/mutation_contract.py are FROZEN ACCEPTANCE PATHS for "
+            "`gx-hierfw-placement`, so any diff touching either fails review "
+            "outright — which is how `gx-vpcsc-record-guards` died — and neither "
+            "file is in this checkout at all, so there is nothing to append to "
+            "even if the freeze allowed it. `gx-mutation-contract-seed-a` owns "
+            "seeding it and has not landed. Landing that task, with this entry "
+            "among the ones it seeds, is what closes this: the node below then "
+            "XPASSes and forces the escalation to be retired. RESIDUAL RISK, the "
+            "id mismatch, recorded in the same shape the spec register records "
+            "its node-id one: seed-a landing the same subject under a DIFFERENT "
+            "id leaves the xfail in place and the escalation goes quiet instead "
+            "of biting, so the id is specified verbatim beside the node and the "
+            "review gate, not this suite, is what catches a rename."
+        ),
+        owner_task="gx-hierfw-placement",
+        node_id=("tests/test_gcp_hfw_checks.py::"
+                 "test_the_folds_mutation_entry_is_seeded_in_the_in_repo_contract"),
+    ),
+    Escalation(
         id="ESC-GX-TFPROMISE-001",
         clause="the abstention is only correct if the positive case still works",
         unsatisfiable=(
@@ -276,6 +304,123 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_mutation_contract.py::"
                  "test_this_gate_can_afford_to_execute_every_active_mutation_itself"),
     ),
+    Escalation(
+        id="ESC-GX-IAM-REPIN-SPLIT",
+        clause=("add the missing adversarial case binding an escalation-class "
+                "role to a public member"),
+        unsatisfiable=(
+            "A BUDGET SPLIT ADJUDICATED BY THE OPERATOR, not a finding about the "
+            "code. The whole repin MEASURED 30,422 diff characters against the "
+            "18,000 the prose binds and the 20,000 gitutil.diff_text clips at, "
+            "and the verifier's round-1 ruling was to land the spec-restoration "
+            "core here and hand the rest to `gx-agentic-iam-repin-2` by name. "
+            "DEFERRED, EACH ITEM NAMED: (1) this clause's A19 case and its "
+            "payload fixture; (2) B08's discriminating verdictless-pass "
+            "certificate — the detected kind and source, plus the near-miss "
+            "document the same assertion must REFUSE; (3) the three record-level "
+            "fixtures the catalogue lacks, members absent, members empty and a "
+            "mis-cased bindings key; (4) `RM-IAM-MEMBER-EXTRACTION`, whose "
+            "must_fail names A19. NOTHING WAS WEAKENED TO FIT: the escalation "
+            "channel is asserted by identity, A11's public channel by target, "
+            "A15b's REGISTERED predicate is unconditional, and the two removals "
+            "this task owns are LIVE. Landing A19 XPASSes the node below."
+        ),
+        owner_task="gx-agentic-iam-repin",
+        node_id=("tests/test_gcp_agentic_iam.py::"
+                 "test_an_escalation_class_role_bound_to_the_public_is_a_"
+                 "catalogue_case"),
+    ),
+    Escalation(
+        id="ESC-GX-NETWORK-PAIR-BASELINE",
+        clause=("add one case that ONLY the pair check could catch and assert "
+                "the honest abstain naming the absent baseline"),
+        unsatisfiable=(
+            "THE ABSTENTION EXISTS AND IS UNREACHABLE, measured both ways. "
+            "`fw_checks.check_packet_set_pair` returns `unverified` naming \"no "
+            "baseline document was available — no packet-set comparison was "
+            "made\", but `preflight.ground_policy` calls `_subset_verdict` — the "
+            "only caller of `registry.pair_check` — INSIDE `if baseline is not "
+            "None`, and the `--hook` path passes no baseline at all, so on the "
+            "hook path the check is never entered and NOTHING names its "
+            "absence. A second wall sits behind that one: `PAIR_CHECKS` is keyed "
+            "by the DETECTED document kind and `fw_claims.detect_kind` answers "
+            "`firewall_rule` only for a Compute REST document (`kind == "
+            "\"compute#firewall\"`), while every fixture in this catalogue is a "
+            "`terraform show -json` plan detecting as `tf_plan` — so no agentic "
+            "case can reach the pair check even if a baseline were supplied. "
+            "Calling the resolved pair check on the no-baseline path, so the "
+            "gate abstains instead of staying silent, is what closes this, and "
+            "it is a change to `gcp_grounding/preflight.py`, not to a test. "
+            "MEANWHILE THE CONSTANT IS NOT LEFT READING AS COVERAGE: "
+            "`RM-NETWORK-PAIR-CHECKS` is LIVE, not pending, and kills through "
+            "`test_the_pair_check_decides_a_widening_against_a_baseline`, which "
+            "drives the committed REST pair in process — so emptying "
+            "`fw_checks.PAIR_CHECKS` reddens a named node instead of nothing."
+        ),
+        owner_task="gx-agentic-network-repin",
+        node_id=("tests/test_gcp_agentic_network.py::"
+                 "test_a_hook_shaped_run_abstains_naming_the_absent_baseline"),
+    ),
+    Escalation(
+        id="ESC-GX-NETWORK-REMOVAL-CEILING",
+        clause="after the repin that removal must redden named cases",
+        unsatisfiable=(
+            "IT DOES REDDEN THEM, MEASURED, AND THE CEILING STILL REFUSES THE "
+            "FLIP. Under `GCP_TEST_REMOVAL=RM-NETWORK-PLANE-UNAVAILABLE` both "
+            "named nodes report FAILED and both report PASSED on clean source, "
+            "so the removal is a kill and not a hypothesis. But "
+            "`contract_spawn_ceiling()` is `4*len(register()) + "
+            "len(removal_register()) + CONTRACT_CONTROL_SPAWNS`, and MEASURED "
+            "in this checkout the contract's real control cost is 21 against a "
+            "pinned `CONTRACT_CONTROL_SPAWNS = 16` — the five-slot gap is "
+            "absorbed by the per-Removal term for the five removals that are "
+            "NOT live, so a full run sits at exactly 199 of 199 with ZERO "
+            "headroom. A NEW live removal is net zero (one slot, one `-rA` "
+            "child); flipping an ALREADY-COUNTED one from pending to live is "
+            "+1 spawn and +0 slots, so it overflows by exactly one whatever "
+            "else the diff does. This task's two NEW removals — "
+            "`RM-NETWORK-PAIR-CHECKS` and `RM-NETWORK-VOCABULARY-KIND` — are "
+            "therefore LIVE and executed, and the seeded one stays `pending` "
+            "with its measurement recorded beside it rather than the ceiling "
+            "being raised, which mutation_contract.py is frozen against and "
+            "which this document forbids in any case. Rescaling "
+            "`CONTRACT_CONTROL_SPAWNS` to the 21 controls it really has — the "
+            "same rescale ESC-GX-GATE-002 asks for — closes this and XPASSes "
+            "the node below."
+        ),
+        owner_task="gx-agentic-network-repin",
+        node_id=("tests/test_gcp_agentic_network.py::"
+                 "test_the_network_plane_removal_is_live_in_the_contract"),
+    ),
+    Escalation(
+        id="ESC-GX-NETWORK-LAYER4-SPELLING",
+        clause=("then assert the CHANNEL and the PROPERTY — a re-open or "
+                "widening verdict naming the port and the priority of the "
+                "preempting deny — never a bare contradiction count"),
+        unsatisfiable=(
+            "THE PRIORITY HALF IS ASSERTED; THE PORT HALF CANNOT BE, for A02. "
+            "`hfw_claims._from_terraform` reads the repeated layer-4 block as "
+            "`match.layer4_config`, and the provider — with this repo's own real "
+            "captures, `tests/fixtures/gcp/tf/hcl/main.tf`, `estate_plan.json` "
+            "and `estate.tfstate` — spells it `layer4_configs`. An ABSENT key "
+            "legitimately declares NO layer-4 restriction "
+            "(`_unreadable_layer4` returns None for it), so A02's tcp/22 "
+            "proposal folds as matching EVERY port: MEASURED, the three "
+            "`hfw_reopen` verdicts it produces are against the estate's RDP "
+            "denies with witness `port=3389`, and asserting that port for an SSH "
+            "case would certify the gate with a finding about a rule the agent "
+            "did not write. Reading `layer4_configs` in "
+            "`gcp_grounding/hfw_claims.py` — or refusing a match block that "
+            "carries neither spelling — closes it; that module belongs to the "
+            "hierarchical-firewall tasks and not to this test-only repin. A02 "
+            "therefore asserts the channel and the PRIORITY of the deny it "
+            "preempts, A03 asserts port and priority both, and the port half is "
+            "landed under the strict xfail below rather than dropped."
+        ),
+        owner_task="gx-agentic-network-repin",
+        node_id=("tests/test_gcp_agentic_network.py::"
+                 "test_a_hierarchical_proposals_own_port_reaches_the_verdict"),
+    ),
 )
 
 
@@ -317,6 +462,90 @@ PRODUCT_ESCALATIONS: tuple[ProductEscalation, ...] = (
             "is a guardrail that gets switched off. Nothing downstream may "
             "claim unconditional byte-silence without naming the filtered line "
             "and why it is filtered."
+        ),
+    ),
+    ProductEscalation(
+        id="ESC-GX-HFW-EQUIVALENT-SITES",
+        clause="the twelve named survivors are dead",
+        why=(
+            "Nine are. THREE ARE MEASURED EQUIVALENT — each still green under "
+            "its own mutant applied ALONE in a detached `git worktree`, "
+            "validated by tests/test_gcp_hfw_checks.py, the run TABLED at the "
+            "top of that file — and each is unobservable by construction, the "
+            "proof house rule 7 demands beside the measurement. `402 <->=` is "
+            "reached only under `if a.level != b.level`, where the operators "
+            "agree on every input. `786 +->-` feeds a counter read ONLY "
+            "through `not sum(contributed.values())` and its KEYS; all terms "
+            "are non-negative, so negating them leaves the sum zero exactly "
+            "when it was zero. `885 False->True` defaults a `disabled` key "
+            "never absent where it is read: `_as_vpc_shape` always writes it, "
+            "so only a raw VPC record can omit one, and a VPC rule sits at "
+            "level `len(chain)`, inside every proposal, so `_wins_over(p, "
+            "mine)` is False for it whatever the default says."
+        ),
+        product_fix=(
+            "REMOVE the three sites — stronger than a kill, the route "
+            "AMENDMENT 3 took for EQ-O01/EQ-O02: compare `_wins_over`'s "
+            "operands as one `(level, rank)` tuple; make `contributed` a SET "
+            "of contributing policies, not a count; normalise VPC records "
+            "through `_as_vpc_shape` too, so `disabled` is always present. "
+            "All three sit in gcp_grounding/hfw_checks.py, which this "
+            "TEST-ONLY task may not edit."
+        ),
+        residual_risk=(
+            "Nothing is exposed by 402 or 786. 885 is the one to watch: it is "
+            "unreachable only because no VPC rule can preempt a hierarchical "
+            "proposal, so the day the VPC layer folds at a level a proposal "
+            "can reach, the default goes live and a rule whose `disabled` key "
+            "the capture dropped leaves the preemption set — the FALSE-CLEAN "
+            "direction. Whoever changes `_place`'s level arithmetic owns it."
+        ),
+    ),
+    ProductEscalation(
+        id="ESC-GX-HFW-NETWORK-DIMENSION",
+        clause=("Append an `Escalation` naming the axiom that would close it "
+                "properly."),
+        why=(
+            "MEASURED: an org-level deny scoped to vpc-dmz and a proposed allow "
+            "scoped to vpc-main were reported `contradicted hfw_reopen` with the "
+            "witness packet `src=35.0.0.0 dst=0.0.0.0 proto=6 port=3389` — a "
+            "packet that CANNOT EXIST, because network self-links were OR-ed "
+            "into the target-tag channel and nothing forbids the solver "
+            "satisfying two disjoint networks at once. There is no assertion to "
+            "xfail: `gcp_grounding/hfw_checks.py` now carries the conservative "
+            "local mitigation the design asks for — self-links out of the tag "
+            "channel, provably disjoint peers dropped before comparison, a LOUD "
+            "`unverified` when disjointness cannot be decided — and the honest "
+            "tests of it pass. It is the PACKET ALGEBRA that is wrong: "
+            "`packet.PacketVars` has no network dimension at all, so no term can "
+            "say two scopes exclude each other, and the design declares the full "
+            "fix OUT OF SCOPE for this task."
+        ),
+        product_fix=(
+            "THE AXIOM: give `packet.PacketVars` a network variable and "
+            "constrain it in `packet.universe_axioms` to EXACTLY ONE of the "
+            "captured networks — the same at-most-one shape that function "
+            "already applies to tags and service accounts — then have "
+            "`packet.rule_match` conjoin `network == <self-link>` for a scoped "
+            "rule. Two disjoint scopes become unsat by construction, both "
+            "pairwise findings and the whole-order fold get it for free, and the "
+            "mitigation in `hfw_checks._network_scoped` / `_rule_networks` is "
+            "DELETED rather than kept beside it."
+        ),
+        residual_risk=(
+            "THE PRICE, recorded here as well as in the code comment on "
+            "`_rule_networks` because `report.ok` treats `unverified` as a PASS: "
+            "an undecidable-overlap abstention converts a would-be BLOCK into a "
+            "pass, so this mitigation trades a false contradiction for a "
+            "possible missed one. It is acceptable only because the abstention "
+            "is LOUD — one `unverified` on the hierarchical channel naming both "
+            "networks and every rule it declined to compare — and because it is "
+            "bounded by the axiom above. It is never spelled as silence and "
+            "never widened to the decidable case: two scopes that provably "
+            "intersect, and a rule scoped to no network at all, are compared "
+            "exactly as before. Separately, the FOLD is a whole-order statement "
+            "rather than a pairwise one, so it keeps the undecidable rules and "
+            "over-approximates rather than losing a level."
         ),
     ),
 )
