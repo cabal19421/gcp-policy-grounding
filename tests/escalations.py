@@ -421,6 +421,104 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_agentic_network.py::"
                  "test_a_hierarchical_proposals_own_port_reaches_the_verdict"),
     ),
+    Escalation(
+        id="ESC-GX-VPCSC-DRY-RUN-TRACE",
+        clause=("require a TRACE for the cleared enforced block — a verdict "
+                "naming the projects that stop being enforced"),
+        unsatisfiable=(
+            "THE TRACE IS A PRODUCT CHANGE THIS TEST-ONLY TASK MAY NOT MAKE, "
+            "and the task body assigns it elsewhere: \"The domain-side fix "
+            "lands in the enforcement-surface task; this task asserts it.\" "
+            "That fix is NOT in this checkout — `vpcsc_checks.PAIR_CHECKS` "
+            "holds only `vpc_sc_perimeter` and `check_perimeter_estate` still "
+            "opens with the unconditional `if ctx.baseline is not None: return "
+            "[]` — so there is nothing here to assert. MEASURED against A28, "
+            "the missing adversarial case this task ADDS (a removal written in "
+            "the dry-run spelling: the enforced `status` block cleared, and a "
+            "`spec` block that drops `projects/111111111111` and "
+            "`bigquery.googleapis.com`): ok TRUE, zero contradicted, a GROUNDED "
+            "`vpcsc_dry_run` verdict saying the change does not alter "
+            "enforcement, and ONE `vpcsc_protection` abstention that names only "
+            "the perimeter. Neither the project nor the service that leaves "
+            "enforcement appears in ANY verdict's target or message, so the "
+            "minimum the clause allows — one abstention per project and service "
+            "that leaves enforcement — is as unreachable as the block. What IS "
+            "landed: A26 stops pinning the neutral \"does not alter "
+            "enforcement\" wording as its expected message (pinning that is "
+            "pinning the defect), both dry-run cases assert the abstention on "
+            "the vpcsc channel so the ignorance is on the record rather than "
+            "passed in silence, and the clause itself is the strict xfail below. "
+            "`_compare` differencing the RAW old `status` against a cleared new "
+            "one closes it."
+        ),
+        owner_task="gx-agentic-vpcsc-repin",
+        node_id=("tests/test_gcp_agentic_vpcsc.py::"
+                 "test_a_dry_run_removal_traces_the_projects_that_leave_"
+                 "enforcement"),
+    ),
+    Escalation(
+        id="ESC-GX-VPCSC-DELETION-BLINDNESS",
+        clause=("The clause names the not-silently-dropped assertion for the "
+                "removed project id; the module uses it only in the blocking "
+                "branch and puts the vacuous helper in the degraded one"),
+        unsatisfiable=(
+            "THE DESIGN SAYS SO ITSELF — \"the clause as literally written is "
+            "UNSATISFIABLE in the degraded world, where the only verdict is "
+            "about the resource type\" — and this checkout MEASURES exactly "
+            "that: with `gcp_grounding.vpcsc_checks` and "
+            "`gcp_grounding.vpcsc_claims` bound to None in `sys.modules`, A06's "
+            "document produces ONE verdict, `grounded resource_type`, so no "
+            "trace of `projects/111111111111` can exist for "
+            "`assert_not_silently_dropped` to find. Restoring it needs a claim "
+            "extractor that survives its own domain being unregistered, which "
+            "is a product change and not a test's. The DOWNGRADE the design "
+            "objects to is what is fixed here: the degraded branch no longer "
+            "falls back to \"the gate produced at least one verdict\" — an "
+            "always-true statement, since every terraform plan draws a grounded "
+            "`resource_type` for free — and "
+            "`test_the_domain_gone_world_says_nothing_about_the_deletion` pins "
+            "the honest floor instead, asserting EXACTLY ONE verdict, of an "
+            "INCIDENTAL kind, and that no verdict's target or message mentions "
+            "the removed project or the perimeter. The clause is landed "
+            "literally under the strict xfail below rather than softened."
+        ),
+        owner_task="gx-agentic-vpcsc-repin",
+        node_id=("tests/test_gcp_agentic_vpcsc.py::"
+                 "test_the_removed_project_is_not_silently_dropped_in_the_"
+                 "degraded_world"),
+    ),
+    Escalation(
+        id="ESC-GX-VPCSC-REMOVAL-CEILING",
+        clause=("after the repin BOTH removals must redden named cases, and "
+                "both go in the mutation contract"),
+        unsatisfiable=(
+            "THEY DO REDDEN THEM, MEASURED, AND THE CEILING STILL REFUSES THE "
+            "FLIP — the same arithmetic ESC-GX-NETWORK-REMOVAL-CEILING records, "
+            "one wave later and with no headroom recovered. All THREE removals "
+            "this task owns kill: under `GCP_TEST_REMOVAL=<id>` every named node "
+            "reports FAILED and every one reports PASSED on clean source, for "
+            "`RM-VPCSC-DOMAIN-UNREGISTERED` (2 nodes), "
+            "`RM-VPCSC-ABSENT-VERSUS-EMPTY` (2 parametrized nodes) and "
+            "`RM-VPCSC-DOCUMENT-AND-PAIR-CHECKS` (4 parametrized nodes). But "
+            "`contract_spawn_ceiling()` is `4*len(register()) + "
+            "len(removal_register()) + CONTRACT_CONTROL_SPAWNS` and a full run "
+            "in this checkout MEASURES 201 marked spawns against a ceiling of "
+            "exactly 201: the gap between the pinned "
+            "`CONTRACT_CONTROL_SPAWNS = 16` and the controls' real cost is "
+            "absorbed by the per-Removal term of the removals that are NOT "
+            "live, so flipping an already-counted one to live is +1 `-rA` child "
+            "and +0 slots and overflows by one apiece, whatever else the diff "
+            "does. Raising the ceiling is forbidden and `mutation_contract.py` "
+            "is frozen against it in any case, so the three stay `pending` with "
+            "their measurement recorded beside them. Rescaling "
+            "`CONTRACT_CONTROL_SPAWNS` to the controls it really has — the same "
+            "rescale ESC-GX-GATE-002 asks for — closes this and XPASSes the node "
+            "below."
+        ),
+        owner_task="gx-agentic-vpcsc-repin",
+        node_id=("tests/test_gcp_agentic_vpcsc.py::"
+                 "test_the_vpcsc_removals_are_live_in_the_contract"),
+    ),
 )
 
 

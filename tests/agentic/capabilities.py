@@ -471,8 +471,12 @@ VPCSC = Capability(
                      "vpcsc_protection", "vpcsc_dry_run", "vpcsc_ingress",
                      "vpcsc_egress"}),
     # Dropping storage.googleapis.com unprotects a service the captured
-    # perimeter restricts; the near-twin is the perimeter as captured.
-    bad=lambda: (_perimeter(["bigquery.googleapis.com"]), estate_snapshot()),
+    # perimeter restricts; the near-twin is the perimeter as captured. The
+    # previous state comes ENTIRELY from `vpc_sc_perimeters`, so the category is
+    # declared HERE — which is what lets the VPC-SC catalogue stop ANDing a
+    # foreign `HAVE_ESTATE_CATEGORY` flag onto its own domain gate.
+    bad=lambda: (_perimeter(["bigquery.googleapis.com"]),
+                 snapshot_requiring("vpc_sc_perimeters")),
     good=lambda: (_perimeter(["storage.googleapis.com",
                               "bigquery.googleapis.com"]), estate_snapshot()),
     guts=(("gcp_grounding.vpcsc_checks", "DOCUMENT_CHECKS"),

@@ -581,9 +581,18 @@ REMOVALS: tuple[SeededRemoval, ...] = (
         subject="vpcsc_checks.DOCUMENT_CHECKS and PAIR_CHECKS, unregistered",
         apply=lambda mp: _patch(mp, "gcp_grounding.vpcsc_checks",
                                 DOCUMENT_CHECKS=(), PAIR_CHECKS={}),
-        must_fail=(_AV + "test_A05_egress_punch_blocks",
-                   _AV + "test_A24_ingress_any_identity_blocks",
-                   _AV + "test_A25_restricted_service_removed_blocks"),
+        # RETARGETED ON MEASUREMENT, never widened: the seed named A05, A24 and
+        # A25, and all three drive the gate in a CHILD process, which an
+        # after-collection monkeypatch of the parent cannot reach -- measured,
+        # all three still PASSED with both tables emptied. The three nodes below
+        # ground IN PROCESS, one per half of what this removal takes: the pair
+        # check, the document check's estate arm, and its solver arm.
+        must_fail=(_AV + "test_the_pair_check_decides_a_removal_against_a_"
+                         "baseline",
+                   _AV + "test_an_uncaptured_perimeter_category_abstains_once_"
+                         "per_perimeter",
+                   _AV + "test_a_widening_against_a_narrow_previous_policy_is_"
+                         "decided"),
         owner="gx-agentic-vpcsc-repin", spelling=AFTER_COLLECTION),
     SeededRemoval(
         id="RM-VPCSC-DOMAIN-UNREGISTERED", family="vpcsc",
