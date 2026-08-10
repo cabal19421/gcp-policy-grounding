@@ -1152,12 +1152,16 @@ def register() -> None:
     # registered here is dispatch plus the terraform arm, so an IAM or
     # org-policy promise judges a terraform proposal the way a firewall promise
     # already does — from the tf claims, with the block address on every row.
-    sec_rules.register_extractor(
-        "iam_bindings",
-        _guarded("iam_bindings",
-                 _with_terraform_arm(_tf_iam_bindings, sec_rules.iam_bindings)))
-    sec_rules.register_extractor(
-        "org_policy_rules",
-        _guarded("org_policy_rules",
-                 _with_terraform_arm(_tf_org_policy_rules,
-                                     sec_rules.org_policy_rules)))
+    # Each override lands ONLY over the shipped built-in: register() runs as a
+    # lazy side effect of the first evaluate(), and stomping an extractor a
+    # test or an operator installed first — from inside their own call — is
+    # how the mutation contract's MK-I16 witness flipped on isolated runs.
+    _tf_arm = {"iam_bindings": (_tf_iam_bindings, sec_rules.iam_bindings),
+               "org_policy_rules": (_tf_org_policy_rules,
+                                    sec_rules.org_policy_rules)}
+    for name in BASE_COLLECTION_OVERRIDES:
+        tf_extract, builtin = _tf_arm[name]
+        if sec_rules.EXTRACTORS.get(name) is not builtin:
+            continue  # a prior registration outranks a side-effect import
+        sec_rules.register_extractor(
+            name, _guarded(name, _with_terraform_arm(tf_extract, builtin)))

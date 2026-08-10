@@ -670,6 +670,26 @@ def test_the_base_overrides_delegate_every_rest_kind_to_the_untouched_builtin():
     assert missing == "the document under review is not an IAM allow policy"
 
 
+def test_register_never_stomps_an_extractor_someone_installed_first():
+    """The MK-I16 landmine, pinned: register() runs as a lazy side effect of
+    the first evaluate(), so a test- or operator-installed extractor must
+    survive it — clobbering the caller's registration from inside their own
+    call flipped the mutation contract's witness on isolated runs. The
+    override may land only over the shipped built-in."""
+    def mine(context):
+        return (), "mine"
+    for name in sec_domains.BASE_COLLECTION_OVERRIDES:
+        sec_rules.EXTRACTORS[name] = mine
+        sec_domains.reset()
+        sec_domains.register()
+        assert sec_rules.EXTRACTORS[name] is mine, name
+        # And the built-in still gains the terraform arm when it is in place.
+        sec_rules.EXTRACTORS[name] = getattr(sec_rules, name)
+        sec_domains.reset()
+        sec_domains.register()
+        assert sec_rules.EXTRACTORS[name] is not getattr(sec_rules, name), name
+
+
 def test_a_terraform_plan_reaches_the_iam_claims_through_the_tf_arm():
     """THE HONEST CONTROL: a plan that really carries bindings yields rows built
     from the claims — REST-shaped role/member, the block address threaded under
