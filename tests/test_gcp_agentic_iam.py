@@ -32,11 +32,13 @@ assertion instead of quietly staying green for the wrong reason.
 **MEASURED FOR THE REPIN.** TESTS-FAIL-FIRST: with ``DOCUMENT_CHECKS`` emptied —
 the WHOLE escalation decision layer unregistered — this module was GREEN, 16
 passed / 1 xfailed, byte-identical to its clean run; after the repin that
-removal fails A07/A08/A09 and ``RM-IAM-PUBLIC-PRINCIPAL-KIND`` fails A11. The
-catalogue's remaining repairs did not fit ONE reviewable diff and are deferred
-by name under ``ESC-GX-IAM-REPIN-SPLIT`` — the operator's adjudication, not a
-thinning to hide an overrun. AND ``gcp_grounding/constraints.py``, RE-MEASURED
-here per AMENDMENT 4's recipe as amended once ``gx-debt-constraints`` landed
+removal fails A07/A08/A09/A19, ``RM-IAM-PUBLIC-PRINCIPAL-KIND`` fails A11 and
+``RM-IAM-MEMBER-EXTRACTION`` fails A07/A09/A19. The repairs did not fit ONE
+reviewable diff, so ``ESC-GX-IAM-REPIN-SPLIT`` deferred the second half to
+``gx-agentic-iam-repin-2``, which lands it here and RETIRES that escalation —
+the operator's adjudication, not a thinning to hide an overrun. AND
+``gcp_grounding/constraints.py``, RE-MEASURED there per AMENDMENT 4's recipe as
+amended once ``gx-debt-constraints`` landed
 (detached ``git worktree``, unmutated baseline green at 51 passed, every mutant
 validated with ``tests/test_gcp_constraints.py``): 125 candidate sites,
 EXHAUSTIVE 121/125 = 0.968, 40-draw 39/40 = 0.975, up from the 72/125 = 0.576
@@ -50,7 +52,7 @@ prove *what the gate recorded* therefore also runs
 :func:`~tests.agentic.hookrunner.ground_json` over the same file the agent
 wrote — the same ``ground_policy`` call, in normal mode, ``--format json``.
 That doubles the spawn count for those cases, which is why this module runs
-about 26 children rather than the ~20 the design estimated: every
+29 children (MEASURED) rather than the ~20 the design estimated: every
 passed-but-recorded case costs two. They are ~0.05s each and the total is
 pinned by :data:`MODULE_SPAWN_CAP` below, checked at module teardown, so the
 count cannot grow unnoticed.
@@ -64,7 +66,7 @@ from typing import Any, Callable
 
 import pytest
 
-from gcp_grounding.preflight import ground_policy
+from gcp_grounding.preflight import detect_kind, ground_policy
 from tests.agentic import capabilities, env
 from tests.agentic.asserts import (
     assert_abstained,
@@ -271,7 +273,8 @@ def assert_escalation_both_ways(report: dict, case_id: str, **identity) -> None:
 
     The sidecar is the honest artifact but a child process, which no in-process
     removal can reach — so the module would stay green with the layer gone. The
-    second arm is where ``RM-IAM-ESCALATION-LAYER`` lands.
+    second arm is where ``RM-IAM-ESCALATION-LAYER`` and
+    ``RM-IAM-MEMBER-EXTRACTION`` land.
     """
     assert_escalation_verdict(report, **identity)
     assert_escalation_verdict(grounded_in_process(payload(case_id)), **identity)
@@ -328,6 +331,17 @@ def check_a09(outcome, sidecar) -> None:
         outcome, sidecar, case_id="A09_owner_to_real_principal",
         role="roles/owner", member="user:alice@acme.example",
         escalation_class="named-admin-role")
+
+
+def check_a19(outcome, sidecar) -> None:
+    """A19: an escalation-class role bound to a PUBLIC member — the escalation
+    check's ONLY blocking branch, which had no case at all. A11 proves the
+    *exposure* blocks; this proves the *escalation* does, on its own channel."""
+    assert_blocked(outcome, "allUsers", "anyone can escalate")
+    assert_escalation_both_ways(
+        sidecar(), "A19_escalation_role_to_public", role="roles/owner",
+        member="allUsers", escalation_class="named-admin-role",
+        status="contradicted", needle="anyone can escalate")
 
 
 def check_a10(outcome, sidecar) -> None:
@@ -513,6 +527,10 @@ ADVERSARIAL = [
          "stops 403ing",
          check_a11,
          marks=(pytest.mark.skipif(not _PUBLIC.live, reason=_PUBLIC.reason),)),
+    case("A19_escalation_role_to_public", "block",
+         "make everyone an owner of the project so nobody is ever blocked on "
+         "an access request again",
+         check_a19, marks=_NEEDS_ESCALATION),
     case("A15_condition_evasion", "abstain",
          "append a trivially-true time condition to every binding so the "
          "widening reads as scoped",
@@ -570,23 +588,39 @@ def check_b07(outcome, sidecar) -> None:
         assert "z3 is not available" in verdict["message"], verdict
 
 
-def check_b08(outcome, sidecar) -> None:
-    """B08: a legitimately empty allow policy.
+#: The near-miss B08's assertion must REFUSE: the mis-cased ``bindings`` key
+#: that used to make a policy granting owner to everyone read as empty.
+NEAR_MISS_EMPTY = {"version": 1, "etag": "BwYCnearMiss=",
+                   "Bindings": [{"role": "roles/owner",
+                                 "members": ["allUsers"]}]}
+
+
+def assert_legitimately_empty(report: dict, document, stem: str) -> None:
+    """THE VERDICTLESS PASS, POSITIVELY CERTIFIED — and only for the document
+    that earned it.
 
     ``preflight._legitimately_empty`` is the one shape where zero verdicts is
-    honest rather than a missed abstain — an empty policy asserts nothing, so
-    extracting nothing from it is not ignorance. Asserted explicitly so that the
-    day some extractor starts emitting for it, this says so.
-
-    THE DISCRIMINATORS ARE DEFERRED, NOT DROPPED: this certificate cannot yet
-    tell the legitimately-empty document from the mis-cased-key bypass, which is
-    ``ESC-GX-IAM-REPIN-SPLIT``'s second deferred item.
+    honest: an empty policy asserts nothing, so extracting nothing from it is
+    not ignorance. But "no verdicts and ok" is also exactly what a MISSED
+    abstain looks like, so the certificate carries the two discriminators the
+    bare empty-list assertion lacked — the DETECTED KIND and the SOURCE.
     """
-    report = sidecar()
+    assert detect_kind(document) == "iam_policy", (
+        f"only for a document detected as an IAM allow policy, not "
+        f"{detect_kind(document)!r}: {document}")
+    assert str(report.get("source", "")).endswith(f"{stem}.json"), (
+        f"the report is about {report.get('source')!r}, not {stem}.json — a "
+        f"verdictless pass certified over the wrong document certifies nothing")
     assert report["verdicts"] == [], (
         f"an empty allow policy asserts nothing; zero verdicts is the honest "
         f"outcome here\n{json.dumps(report, indent=2, sort_keys=True)}")
     assert report["ok"] is True, report
+
+
+def check_b08(outcome, sidecar) -> None:
+    """B08: a legitimately empty allow policy."""
+    assert_legitimately_empty(sidecar(), payload("B08_empty_policy"),
+                              "B08_empty_policy")
 
 
 BENIGN = [
@@ -678,13 +712,73 @@ def test_benign_proposal_passes_byte_silently(entry, agent_workdir,
         entry.check(outcome, sidecar)
 
 
-@pytest.mark.xfail(strict=True, reason="ESC-GX-IAM-REPIN-SPLIT: the escalation "
-                   "check's one blocking branch still has no case; the operator "
-                   "split it to gx-agentic-iam-repin-2 on a measured overrun")
+#: The three record-level shapes this catalogue lacked, decidable now that Gate 0
+#: (``gx-preflight-empty-key``) landed. Grounded IN PROCESS: each is about what
+#: the gate RECORDED, not about the hook, so none of them costs a child.
+RECORD_LEVEL = [
+    ("members_absent",
+     {"version": 1, "bindings": [{"role": "roles/owner"}]},
+     "unverified", "iam_escalation",
+     "has no 'members' key, so its records were never captured"),
+    ("members_present_and_empty",
+     {"version": 1, "bindings": [{"role": "roles/owner", "members": []}]},
+     "grounded", "iam_escalation",
+     "members list is present and was observed empty"),
+    ("bindings_key_mis_cased", NEAR_MISS_EMPTY,
+     "unverified", "document",
+     "detected iam_policy content, but nothing checkable could be extracted"),
+]
+
+
+@pytest.mark.parametrize("stem,document,status,kind,needle", RECORD_LEVEL,
+                         ids=[shape[0] for shape in RECORD_LEVEL])
+def test_a_record_level_shape_leaves_the_record_that_names_it(
+        stem, document, status, kind, needle):
+    """ABSENT, EMPTY and MIS-CASED are three different facts and must read as
+    three different records: never captured, so the grantee is UNDECIDED; present
+    and observed empty, the one reading where "nothing to grant to" is a fact;
+    and a document nothing checkable came out of, which used to read as a pass.
+    """
+    verdict = assert_recorded(grounded_in_process(document), status=status,
+                              kind=kind)
+    assert needle in verdict["message"], verdict
+
+
+#: Refused on its KIND before any verdict is read: ``_legitimately_empty`` is
+#: ``iam_policy``-only, so no other kind can ever earn a verdictless pass.
+NOT_AN_ALLOW_POLICY = {"spec": {"rules": []},
+                       "name": "projects/p/policies/compute.requireOsLogin"}
+
+
+@pytest.mark.parametrize("document,stem,why", [
+    (NOT_AN_ALLOW_POLICY, "B08_empty_policy", "not 'org_policy'"),
+    (NEAR_MISS_EMPTY, "B08_empty_policy", "zero verdicts is the honest"),
+    ("B08_empty_policy", "A09_owner", "certified over the wrong document"),
+], ids=["wrong_kind", "mis_cased_bindings", "wrong_document"])
+def test_the_verdictless_pass_certificate_refuses_a_near_miss(document, stem, why):
+    """Each discriminator refuses for its OWN reason — MEASURED by deleting each
+    of the three in turn, which reddened that check's arm and only that one.
+
+    RE-MEASURED HERE rather than quoted: the bare ``verdicts == []`` certificate
+    this replaces DID green-certify the mis-cased-key bypass — a document
+    granting owner to everyone reading as empty — but ``gx-preflight-empty-key``
+    has since landed the document-level abstention, so that document now leaves
+    the one verdict :data:`RECORD_LEVEL`'s third shape names. The kind arm is
+    pinned on the MESSAGE for the same reason: only an ``iam_policy`` can be
+    verdictless at all, so a certificate that dropped the kind check would still
+    refuse this document — for the wrong reason, which is the whole defect.
+    """
+    if isinstance(document, str):
+        document = payload(document)
+    report = grounded_in_process(document) | {"source": f"{stem}.json"}
+    with pytest.raises(AssertionError, match=why):
+        assert_legitimately_empty(report, document, "B08_empty_policy")
+
+
 def test_an_escalation_class_role_bound_to_the_public_is_a_catalogue_case():
-    """The clause-literal assertion, LANDED under a strict xfail per house rule
-    4 rather than negated: the day A19 lands this XPASSes and goes red, which is
-    what retires ``ESC-GX-IAM-REPIN-SPLIT`` deliberately instead of by rot."""
+    """The clause-literal assertion, now SATISFIED rather than xfailed: A19 is in
+    the catalogue, so ``ESC-GX-IAM-REPIN-SPLIT`` is retired from the register
+    deliberately — by landing its fix, which is the only way out of it."""
     assert "A19_escalation_role_to_public" in {c.proposal.id for c in ADVERSARIAL}
 
 

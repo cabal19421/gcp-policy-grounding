@@ -304,32 +304,15 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_mutation_contract.py::"
                  "test_this_gate_can_afford_to_execute_every_active_mutation_itself"),
     ),
-    Escalation(
-        id="ESC-GX-IAM-REPIN-SPLIT",
-        clause=("add the missing adversarial case binding an escalation-class "
-                "role to a public member"),
-        unsatisfiable=(
-            "A BUDGET SPLIT ADJUDICATED BY THE OPERATOR, not a finding about the "
-            "code. The whole repin MEASURED 30,422 diff characters against the "
-            "18,000 the prose binds and the 20,000 gitutil.diff_text clips at, "
-            "and the verifier's round-1 ruling was to land the spec-restoration "
-            "core here and hand the rest to `gx-agentic-iam-repin-2` by name. "
-            "DEFERRED, EACH ITEM NAMED: (1) this clause's A19 case and its "
-            "payload fixture; (2) B08's discriminating verdictless-pass "
-            "certificate — the detected kind and source, plus the near-miss "
-            "document the same assertion must REFUSE; (3) the three record-level "
-            "fixtures the catalogue lacks, members absent, members empty and a "
-            "mis-cased bindings key; (4) `RM-IAM-MEMBER-EXTRACTION`, whose "
-            "must_fail names A19. NOTHING WAS WEAKENED TO FIT: the escalation "
-            "channel is asserted by identity, A11's public channel by target, "
-            "A15b's REGISTERED predicate is unconditional, and the two removals "
-            "this task owns are LIVE. Landing A19 XPASSes the node below."
-        ),
-        owner_task="gx-agentic-iam-repin",
-        node_id=("tests/test_gcp_agentic_iam.py::"
-                 "test_an_escalation_class_role_bound_to_the_public_is_a_"
-                 "catalogue_case"),
-    ),
+    # RETIRED — `ESC-GX-IAM-REPIN-SPLIT`, the operator-adjudicated budget split
+    # of `gx-agentic-iam-repin`. Its id is left named here rather than erased,
+    # because retiring one means LANDING ITS FIX and this register carries no
+    # `closed_by` for a node-bearing entry: keeping it would demand the strict
+    # xfail its frozen self-test walks for, and `gx-agentic-iam-repin-2` landed
+    # every deferred item — A19 and its payload fixture, B08's discriminating
+    # verdictless-pass certificate with the near-miss it REFUSES, the three
+    # record-level shapes, and `RM-IAM-MEMBER-EXTRACTION` live — so that xfail
+    # would XPASS. Nothing was weakened to close it.
     Escalation(
         id="ESC-GX-NETWORK-PAIR-BASELINE",
         clause=("add one case that ONLY the pair check could catch and assert "
