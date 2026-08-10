@@ -79,10 +79,27 @@ def test_summary_always_carries_all_four_buckets():
     combo for r in range(len(STATUSES) + 1)
     for combo in itertools.combinations(STATUSES, r)])
 def test_ok_iff_nothing_ungrounded_or_contradicted(statuses):
+    """The gate, and the EXACT headline it renders per four-bucket shape.
+
+    The word is qualified by what was actually checked: ``FAILED`` whenever
+    anything is ungrounded or contradicted, bare ``PASSED`` only when every
+    verdict was decided, ``PASSED (<N> unchecked)`` when something grounded
+    beside the abstentions, and ``PASSED — NOTHING VERIFIED (<N> unchecked)``
+    when nothing grounded at all. Asserted against the ``[backend]`` bracket
+    that follows, so an extra qualifier cannot ride along unpinned."""
     pol = adapted(*statuses)
     expected = not ({"ungrounded", "contradicted"} & set(statuses))
     assert pol.ok is expected
-    assert ("PASSED" if expected else "FAILED") in pol.render()
+    if not expected:
+        headline = "FAILED"
+    elif "unverified" not in statuses:
+        headline = "PASSED"
+    elif "grounded" in statuses:
+        headline = "PASSED (1 unchecked)"
+    else:
+        headline = "PASSED — NOTHING VERIFIED (1 unchecked)"
+    head = pol.render().splitlines()[0]
+    assert f"GCP policy grounding {headline} [builtin] " in head, head
     assert json.loads(pol.render(format="json"))["ok"] is expected
 
 
@@ -108,7 +125,9 @@ def test_every_grounded_line_of_a_clean_policy_is_stamped(snap):
     report = ground_existence(iam_policy_claims(policy("iam_policy_good.json")), snap)
     pol = PolicyReport(report, snap.captured_at)
     head, *lines = pol.render().splitlines()
-    assert "PASSED" in head
+    # The BARE word: a fully decided report carries no unchecked qualifier.
+    assert "PASSED [" in head, head
+    assert "unchecked" not in head, head
     assert len(lines) == 7  # 3 roles + 4 principals, all grounded
     assert all(f"[snapshot {snap.captured_at}]" in line for line in lines)
 
@@ -121,8 +140,10 @@ def test_findings_keep_location_and_suggestions(bad):
 
 
 def test_render_of_an_empty_report_says_so():
+    # Zero verdicts is zero unverified too: the bare word, no qualifier.
     text = adapted().render()
-    assert "PASSED" in text
+    assert "PASSED [" in text
+    assert "unchecked" not in text
     assert "(no claims to ground)" in text
 
 

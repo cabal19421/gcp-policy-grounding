@@ -408,12 +408,25 @@ def test_scan_command_json_records_the_bypass_attempt():
 
 
 def test_scan_command_text_renders_the_human_report():
+    """The human render opens with the banner naming what this subcommand IS
+    (an audit surface that verifies nothing), and the report headline says the
+    same thing in the shared renderer's own words: nothing grounded, one
+    unchecked — never the bare word a verified document earns."""
     outcome = run_scan_command(OWNER_GRANT, format="text")
     assert outcome.exit_code == 0, str(outcome)
-    for expected in ("GCP policy grounding", "[bash-mutation]",
-                     "add-iam-policy-binding", "roles/owner"):
+    first = outcome.stdout.splitlines()[0]
+    assert "scan-command classifies shell commands" in first, str(outcome)
+    assert "VERIFIES NOTHING" in first, str(outcome)
+    assert "--bash-policy" in first, str(outcome)
+    for expected in ("GCP policy grounding",
+                     "PASSED — NOTHING VERIFIED (1 unchecked) [none]",
+                     "[bash-mutation]", "add-iam-policy-binding",
+                     "roles/owner"):
         assert expected in outcome.stdout, (
             f"expected {expected!r} on stdout\n{outcome}")
+    assert "PASSED [" not in outcome.stdout, (
+        f"a scan that grounds nothing must never headline as a verified "
+        f"pass\n{outcome}")
 
 
 def test_scan_command_reads_the_command_from_stdin():

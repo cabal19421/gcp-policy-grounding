@@ -299,7 +299,8 @@ def assert_blocked(outcome, *substrings: str, expect_render: bool = True) -> Non
     one substring is required in every form.
 
     *expect_render* additionally requires the report's own ``FAILED`` header
-    (``report.py:121``), which is how a *grounding* block is distinguished
+    (``report.py:132-133`` — the one unconditional, unqualified headline the
+    renderer still has), which is how a *grounding* block is distinguished
     from a block emitted by some other path; the bash-mutation block, which
     never renders a grounding report, passes ``expect_render=False``. That form
     has no header to key off, so it rejects the three shapes a header would

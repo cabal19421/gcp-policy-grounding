@@ -399,7 +399,7 @@ class _Outcome:
     stdout: str = ""
 
 
-#: The human renderer's exact output shape (report.py:129 appends the
+#: The human renderer's exact output shape (report.py:153 appends the
 #: parenthesised list; reasoner.py:159-162 mints the message it hangs off).
 _BLOCKED_STDERR = (
     "GCP policy grounding /w/policies/iam.policy.json FAILED [z3]  "

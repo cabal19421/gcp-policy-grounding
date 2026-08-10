@@ -90,7 +90,10 @@ def test_good_iam_policy_exits_zero(capsys):
     code, out, _ = invoke(capsys, "verify-policy", str(GOOD),
                           "--snapshot", str(SNAPSHOT))
     assert code == 0
-    assert "PASSED" in out and str(GOOD) in out
+    # The BARE headline: a fully decided report carries no unchecked
+    # qualifier, so a clean pass reads exactly as it always did.
+    assert "PASSED [" in out and str(GOOD) in out
+    assert "unchecked" not in out
 
 
 def test_bad_iam_policy_exits_one_with_findings(capsys):
@@ -110,6 +113,9 @@ def test_unrecognized_document_fails_open_to_exit_zero(capsys, tmp_path):
                           "--snapshot", str(SNAPSHOT))
     assert code == 0  # unverified is honest ignorance, not a gate failure
     assert "unverified=1" in out
+    # ...and the headline SAYS it is ignorance: nothing grounded, one
+    # unchecked — never the bare word a verified document earns.
+    assert "PASSED — NOTHING VERIFIED (1 unchecked)" in out
 
 
 def test_unparsable_files_fail_open_to_exit_zero(capsys, tmp_path):

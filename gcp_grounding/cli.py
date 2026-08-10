@@ -2040,8 +2040,8 @@ def _bash_hook_lines(verdicts: list[Verdict], *, event: Mapping[str, Any],
     rendered = _bash_report(verdicts, source=source).render("human")
     # The per-verdict lines come from the shared renderer so the hook and
     # `scan-command` cannot drift; its summary header is dropped because it
-    # reads "PASSED … ungrounded=0 contradicted=0" — true of the *report*, and
-    # actively misleading directly under a BLOCKED headline.
+    # reads "PASSED — NOTHING VERIFIED … ungrounded=0 contradicted=0" — true
+    # of the *report*, and still misleading directly under a BLOCKED headline.
     lines.extend(rendered.splitlines()[1:])
     lines.append(_bash_timing_line(event, blocking))
     lines.append("  Express this change as a policy document or `terraform "
@@ -2085,6 +2085,17 @@ def _bash_report(verdicts: list[Verdict], *, source: str) -> PolicyReport:
 
 # -- scan-command --------------------------------------------------------------
 
+#: The one banner line ``scan-command``'s human output opens with. The report
+#: under it is honest already — every verdict ``unverified``, backend "none",
+#: the snapshot "not consulted" — but the report says what the CLASSIFIER
+#: found, and only this line says what the SUBCOMMAND is: an audit surface, not
+#: an enforcement point. Without it, a reader who pipes one command through and
+#: sees a PASSED-shaped headline has been told nothing false and still misled.
+_SCAN_BANNER = (
+    "scan-command classifies shell commands against curated mutation tables; "
+    "it VERIFIES NOTHING and approves nothing — enforcement is verify-policy "
+    "--hook's --bash-policy (default: block).")
+
 
 def _cmd_scan_command(args: argparse.Namespace) -> int:
     """Classify one command and print the report. Exit 0, always.
@@ -2107,6 +2118,12 @@ def _cmd_scan_command(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return EXIT_OK
     verdicts = bash_mutation_verdicts(command, source="scan-command")
+    # The banner rides with the HUMAN render only: ``--format json`` is the
+    # stable machine document (``report.SCHEMA``) and CI parses that stream
+    # whole, so prose in front of it would break every consumer — and the JSON
+    # document already declares itself, field by field.
+    if _FORMATS[args.format] == "human":
+        print(_SCAN_BANNER)
     print(_bash_report(verdicts, source=command.strip()).render(
         _FORMATS[args.format]))
     return EXIT_OK

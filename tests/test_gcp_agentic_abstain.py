@@ -889,7 +889,7 @@ def test_c11_unreadable_snapshot_fails_open_loudly_enough(
     assert_blocked(seeing, "roles/bigquery.reader")
 
 
-# -- THE RENDER: an abstain is headlined as approval --------------------------
+# -- THE RENDER: an abstain-only pass says NOTHING VERIFIED -------------------
 
 
 def _abstain_only_render(document, snapshot) -> tuple[str, dict]:
@@ -908,55 +908,60 @@ def _abstain_only_render(document, snapshot) -> tuple[str, dict]:
     return header, report.counts()
 
 
-def test_an_abstain_only_report_is_headlined_passed(tmp_path, estate_snapshot):
-    """AN ABSTAIN IS RENDERED AS APPROVAL, and this pins the wording.
+def test_an_abstain_only_report_is_headlined_nothing_verified(
+        tmp_path, estate_snapshot):
+    """THE QUALIFIER, landed, and this pins the wording — the INVERSE of the
+    pin that used to sit here.
 
-    MEASURED: a document nothing was checked in is headlined ``PASSED`` with
-    one unverified, because ``PolicyReport._render_human`` chooses the header
-    word from ``self.ok`` and ``report.ok`` is ``not ungrounded and not
-    contradicted`` — an abstention never touches it. The counts ARE on the
-    header line, so the information is not hidden; what is missing is any word
-    that stops an agent reading the first line and moving on.
+    Until ``ESC-GX-ABSTAIN-PASSED-HEADER`` was retired, this test (then named
+    ``test_an_abstain_only_report_is_headlined_passed``) pinned the DEFECT: a
+    document nothing was checked in was headlined with the same bare ``PASSED``
+    a fully grounded one gets, and every qualifier spelling was refused so the
+    day one landed it said so. That day came: ``PolicyReport._render_human``
+    now qualifies an ok headline by what was actually checked, so an
+    abstain-only report reads ``PASSED — NOTHING VERIFIED (<N> unchecked)``
+    and only a fully decided report gets the bare word.
 
-    This test pins the current wording and names the hole, in the same style
-    ``test_c09_stale_snapshot_is_stamped_but_never_gated`` pins its missing
-    max-age rule. The qualifier itself is a change to
-    ``gcp_grounding/report.py`` that this test-only repin may not make, so the
-    spec literal is landed under a strict xfail below rather than dropped —
-    see ``ESC-GX-ABSTAIN-PASSED-HEADER``.
+    This test now REFUSES the unqualified form: ``PASSED [`` — the exact
+    header shape a fully grounded report renders, word then backend — must not
+    appear, and the counts stay on the line exactly as before.
     """
     document = write_json(tmp_path / "configmap.json", _CONFIGMAP)
     header, counts = _abstain_only_render(document, estate_snapshot)
 
     assert counts == {"grounded": 0, "ungrounded": 0, "contradicted": 0,
                       "unverified": 1}, counts
-    assert "PASSED" in header, header
+    assert "PASSED — NOTHING VERIFIED (1 unchecked)" in header, header
     assert "unverified=1" in header, header
     assert "grounded=0" in header, header
-    for qualifier in ("NOT DECIDED", "ABSTAIN", "ABSTENTION", "PASSED (",
-                      "PASSED WITH", "INCONCLUSIVE"):
-        assert qualifier not in header.upper(), (
-            f"{qualifier!r} is in the header — a qualifier has landed, "
-            f"ESC-GX-ABSTAIN-PASSED-HEADER is closed and this test is the one "
-            f"that has to be rewritten\n{header}")
+    assert "PASSED [" not in header, (
+        f"the bare unqualified headline is back — an abstain-only report is "
+        f"rendering exactly like a fully grounded one, which is the approval-"
+        f"from-ignorance defect ESC-GX-ABSTAIN-PASSED-HEADER was retired by "
+        f"fixing\n{header}")
+    assert "FAILED" not in header, header
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "ESC-GX-ABSTAIN-PASSED-HEADER: the header word is chosen from report.ok, "
-    "so a report in which nothing was checked is headlined PASSED; adding the "
-    "qualifier is a change to gcp_grounding/report.py this test-only repin may "
-    "not make"))
 def test_the_headline_of_a_report_that_checked_nothing_carries_a_qualifier(
         tmp_path, estate_snapshot):
-    """THE SPEC LITERAL, landed and strict-xfailed: a document nothing was
-    checked in must not be headlined with the bare word a fully grounded one
-    gets."""
+    """THE SPEC LITERAL, now LIVE: a document nothing was checked in must not
+    be headlined with the bare word a fully grounded one gets.
+
+    This assertion was landed strict-xfailed under
+    ``ESC-GX-ABSTAIN-PASSED-HEADER`` while the qualifier was a product change
+    no test task could make; the qualifier landed (``NOTHING VERIFIED``, in
+    ``PolicyReport._render_human``) and the xfail was deleted with the
+    escalation's retirement — see the RETIRED comment in
+    ``tests/escalations.py``. The word list stays a LIST: the property is that
+    SOME qualifying word interrupts the header, and the exact spelling is
+    pinned by the positive test above."""
     document = write_json(tmp_path / "configmap.json", _CONFIGMAP)
     header, _ = _abstain_only_render(document, estate_snapshot)
 
     assert any(word in header.upper()
                for word in ("NOT DECIDED", "ABSTAIN", "ABSTENTION",
-                            "INCONCLUSIVE", "PASSED (")), header
+                            "INCONCLUSIVE", "NOTHING VERIFIED",
+                            "PASSED (")), header
 
 
 # -- THE MUTATION CONTRACT: both removals, and the one the ceiling refuses ----

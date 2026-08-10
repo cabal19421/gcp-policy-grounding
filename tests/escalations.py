@@ -535,35 +535,22 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_agentic_abstain.py::"
                  "test_the_hook_success_removal_is_live_in_the_contract"),
     ),
-    Escalation(
-        id="ESC-GX-ABSTAIN-PASSED-HEADER",
-        clause=("either require a qualifier, or pin the current wording and "
-                "mark it an open hole in the same style the stale-capture case "
-                "pins its missing rule"),
-        unsatisfiable=(
-            "THE QUALIFIER IS A PRODUCT CHANGE, so the strictest option the "
-            "product supports today is the pin. MEASURED: "
-            "`PolicyReport._render_human` builds its header word as "
-            "`'PASSED' if self.ok else 'FAILED'` and `report.ok` is `not "
-            "ungrounded and not contradicted`, so a document nothing was checked "
-            "in renders `GCP policy grounding <source> PASSED [<backend>]  "
-            "grounded=0 ungrounded=0 contradicted=0 unverified=1` — approval, "
-            "with the counts beside it and no word that stops an agent reading "
-            "the first line and moving on. Adding one means editing "
-            "`gcp_grounding/report.py`, which is the renderer every module in "
-            "the suite reads through: `assert_blocked` keys off the FAILED "
-            "header, the abstain-notes channel deliberately mirrors these "
-            "lines, and this task is a test-only repin of the abstention "
-            "catalogue. The wording is therefore PINNED by "
-            "`test_an_abstain_only_report_is_headlined_passed`, which also "
-            "refuses every qualifier spelling so the day one lands it says so, "
-            "and the spec literal is landed strict-xfailed below."
-        ),
-        owner_task="gx-agentic-abstain-repin",
-        node_id=("tests/test_gcp_agentic_abstain.py::"
-                 "test_the_headline_of_a_report_that_checked_nothing_carries_a_"
-                 "qualifier"),
-    ),
+    # RETIRED — `ESC-GX-ABSTAIN-PASSED-HEADER`, the qualifier the abstain-only
+    # header could not carry while it was a product change no test task could
+    # make. Its id is left named here rather than erased, because retiring one
+    # means LANDING ITS FIX and this register carries no `closed_by` for a
+    # node-bearing entry: keeping it would demand the strict xfail its frozen
+    # self-test walks for, and the operator-authorized product change to
+    # `PolicyReport._render_human` (gcp_grounding/report.py) landed exactly the
+    # qualifier the clause asked for — an ok report with unverified verdicts is
+    # headlined `PASSED (<N> unchecked)`, and one in which NOTHING grounded is
+    # headlined `PASSED — NOTHING VERIFIED (<N> unchecked)`, while a fully
+    # decided report keeps the bare `PASSED` and `FAILED` stays byte-identical
+    # (`assert_blocked` keys off it) — so that xfail would XPASS. The spec
+    # literal, `tests/test_gcp_agentic_abstain.py::test_the_headline_of_a_
+    # report_that_checked_nothing_carries_a_qualifier`, now runs LIVE, and the
+    # old pin-the-defect test was inverted into the positive pin of the new
+    # wording rather than deleted. Nothing was weakened to close it.
     Escalation(
         id="ESC-GX-BENIGN-GROUNDED-FLOOR",
         clause=("the assertion is a grounded-count floor with no claim identity, "

@@ -19,7 +19,12 @@ policy domain's presentation:
   versioned by :data:`SCHEMA`.
 
 A PASSED render means "these claims grounded against the snapshot", never
-"the policy is safe" — intent is out of scope by design.
+"the policy is safe" — intent is out of scope by design. And it says so on the
+header line: an ok report with unverified verdicts is headlined ``PASSED
+(<N> unchecked)``, and one in which NOTHING grounded at all is headlined
+``PASSED — NOTHING VERIFIED (<N> unchecked)`` — approval from a report that
+checked nothing must never read like approval from one that checked
+everything. Only a fully decided report gets the bare word.
 """
 
 from __future__ import annotations
@@ -114,11 +119,30 @@ class PolicyReport:
     def _render_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2, ensure_ascii=False)
 
+    def _headline(self, counts: dict[str, int]) -> str:
+        """The header word, qualified by what was actually checked.
+
+        ``FAILED`` is exact and unconditional — the hook's blocking path and
+        its assertions key off that word. ``PASSED`` is exact only when every
+        verdict was decided; an ok report carrying unverified verdicts says how
+        many were not, and one in which nothing grounded at all says so in so
+        many words: a document the gate could not judge a single claim of must
+        not headline identically to one it verified in full.
+        """
+        if not self.ok:
+            return "FAILED"
+        unchecked = counts["unverified"]
+        if not unchecked:
+            return "PASSED"
+        if counts["grounded"]:
+            return f"PASSED ({unchecked} unchecked)"
+        return f"PASSED — NOTHING VERIFIED ({unchecked} unchecked)"
+
     def _render_human(self) -> str:
         c = self.summary()
         subject = f" {self.source}" if self.source else ""
         lines = [
-            f"GCP policy grounding{subject} {'PASSED' if self.ok else 'FAILED'} "
+            f"GCP policy grounding{subject} {self._headline(c)} "
             f"[{self.report.backend}]  "
             f"grounded={c['grounded']} ungrounded={c['ungrounded']} "
             f"contradicted={c['contradicted']} unverified={c['unverified']}"

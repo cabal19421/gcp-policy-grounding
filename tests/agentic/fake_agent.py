@@ -110,7 +110,7 @@ PERMISSION_MODE = "default"
 BASH_TIMEOUT_MS = 120000
 
 #: The parenthesised did-you-mean list the human renderer appends at
-#: ``gcp_grounding/report.py:129`` — ``  (did you mean: a, b, c?)``.
+#: ``gcp_grounding/report.py:153`` — ``  (did you mean: a, b, c?)``.
 SUGGESTION_RE = re.compile(r"\(did you mean: (?P<suggestions>[^)]*)\?\)")
 
 #: The ungrounded message minted at ``gcp_grounding/reasoner.py:159-162``,
