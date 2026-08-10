@@ -374,3 +374,72 @@ python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 .venv/bin/python -m pytest -q tests/ -k gcp
 ```
+
+## Running the demo
+
+Everything below is fully offline — frozen fixture snapshots, no credentials,
+no network. Run from the repo root after the Development setup above.
+
+```bash
+# 0. The acceptance proof: the entire suite, including the agentic sessions
+#    driven through the real hook and the armed mutation contract (~100s).
+.venv/bin/python -m pytest -q tests/
+
+# 1. Compile the demo security requirements — six plain-English promises —
+#    into enforced rules. Vocabulary is grounded against the estate snapshot,
+#    each formula is proven satisfiable AND non-tautological with z3, and a
+#    compliant + violating witness pair is minted and pinned per promise.
+#    EXPECTED TO EXIT 1: the corpus deliberately includes a booby-trapped
+#    document naming the hallucinated roles/bigquery.reader, and a rejected
+#    promise fails the compile loudly — that is the CI contract working.
+#    The artifacts (including the rejection record) are still written.
+.venv/bin/gcp-ground compile-requirements tests/fixtures/gcp/sec_requirements \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json --out demo/compiled
+
+# 2. Read the promises back: English sentence -> enforcement status ->
+#    compiled SMT rule -> pinned witnesses. Note the honest negatives: the
+#    untranslated prose sentence stays NOT ENFORCED, and the corpus naming
+#    the hallucinated roles/bigquery.reader is REJECTED with a did-you-mean.
+python3 show_promises.py demo/compiled
+
+# 3. Block an attack: roles/owner granted to an external attacker. Exits 1
+#    with the evidence — the principal provably absent from the snapshot,
+#    the violated domain promise, and the escalation warning.
+.venv/bin/gcp-ground verify-policy \
+    tests/fixtures/gcp/agentic/iam/A10_owner_to_external.policy.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --requirements demo/compiled --explain
+
+# 4. Hallucination with remediation: a made-up role fails existence
+#    grounding and the report suggests the real name.
+.venv/bin/gcp-ground verify-policy tests/fixtures/gcp/policies/iam_policy_bad.json \
+    --snapshot tests/fixtures/gcp/snapshot.json
+
+# 5. Shell-command classification: a state-mutating gcloud invocation is
+#    named as bypassing the document gate.
+.venv/bin/gcp-ground scan-command --command \
+    'gcloud projects add-iam-policy-binding acme-prod --member=user:x@evil.example --role=roles/owner'
+
+# 6. Hook mode — the exact PostToolUse event Claude Code sends on a file
+#    edit. The attack exits 2 (the blocking code) with findings on stderr;
+#    a benign edit exits 0 in byte-for-byte silence.
+printf '{"hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"%s"}}' \
+    "$PWD/tests/fixtures/gcp/agentic/iam/A10_owner_to_external.policy.json" \
+  | GCP_GROUNDING_SNAPSHOT=tests/fixtures/gcp/agentic_snapshot.json \
+    GCP_GROUNDING_REQUIREMENTS=demo/compiled \
+    .venv/bin/gcp-ground verify-policy --hook; echo "exit=$?"
+
+printf '{"hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"%s"}}' \
+    "$PWD/tests/fixtures/gcp/agentic/benign/iam_policy_conditional.json" \
+  | GCP_GROUNDING_SNAPSHOT=tests/fixtures/gcp/agentic_snapshot.json \
+    .venv/bin/gcp-ground verify-policy --hook; echo "exit=$?"
+```
+
+Useful flags on `verify-policy`: `--explain` (dump the z3 constraints built
+this run), `--format json` (the stable machine report), `--abstain-notes`
+(surface what the gate could NOT decide on an otherwise-passing run). To
+author real requirements, copy `sec_requirements/TEMPLATE.md`, write one
+sentence plus one fenced `promise` block per requirement, compile with
+`gcp-ground compile-requirements --snapshot <your-estate-snapshot>`, and
+commit the artifacts it writes to `sec_requirements/compiled/` — the pinned
+sentence in the artifact is exactly what the gate enforces.
