@@ -24,6 +24,7 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from importlib import import_module
+from pathlib import Path
 
 from tests.mutation_contract import Mutation, Removal
 
@@ -512,6 +513,13 @@ _AI = ("tests/test_gcp_agentic_iam.py::"
 _AN, _AV = "tests/test_gcp_agentic_network.py::", "tests/test_gcp_agentic_vpcsc.py::"
 _AB = "tests/test_gcp_agentic_abstain.py::"
 
+#: The path ``RM-HOOK-WRONG-FILE``'s mutant grounds instead of the event's. A
+#: repo-relative path that DOES NOT EXIST, so the hook reaches the gate, the
+#: gate opens nothing, and the abstention it prints names this file and not the
+#: one the agent edited -- the same answer on every backend.
+_HARDCODED = str(Path(__file__).resolve().parents[1]
+                 / "hardcoded_by_the_mutant.policy.json")
+
 #: The RC2-measured removals: the review EXECUTED each -- 19 of 19, 27 of 27,
 #: 22 of 27, 10 of 14 green with the subject GONE -- so each is a must-kill and
 #: not a hypothesis. Each names the task that must make it live and whose body
@@ -616,8 +624,47 @@ REMOVALS: tuple[SeededRemoval, ...] = (
         subject="cli._run_hook: the hook returns success as its FIRST "
                 "statement, never reading the event",
         apply=lambda mp: _patch(mp, "gcp_grounding.cli", _run_hook=lambda args: 0),
+        # MEASURED BOTH WAYS in this checkout. Before `gx-agentic-abstain-repin`
+        # this removal killed NOTHING: every one of the module's 14 cases drove
+        # the hook in a CHILD process, which an after-collection monkeypatch of
+        # the PARENT cannot reach, so all 14 PASSED with the subject gone. The
+        # repin gives every case an IN-PROCESS mirror of the same
+        # `cli._run_hook`, and under the mutant all three nodes below now report
+        # FAILED and all three PASS on clean source.
+        #
+        # STILL `pending`, and NOT because it does not kill:
+        # `contract_spawn_ceiling()` is `4*len(register()) +
+        # len(removal_register()) + CONTRACT_CONTROL_SPAWNS`, and a full run
+        # measures the marked total at exactly the ceiling. A NEW live removal
+        # is net zero (one slot, one `-rA` child); flipping an ALREADY-COUNTED
+        # one from pending to live is +1 spawn and +0 slots, so it overflows by
+        # exactly one whatever else the diff does. This task's NEW removal below
+        # is therefore the live one -- ESC-GX-ABSTAIN-REMOVAL-CEILING carries
+        # the arithmetic, exactly as ESC-GX-NETWORK-REMOVAL-CEILING does.
         must_fail=(_AB + "test_c01_raw_hcl_abstains_and_never_blocks",
                    _AB + "test_c04_unrecognized_kind_abstains_naming_the_keys",
                    _AB + "test_c08_uncaptured_category_is_unverified_never_ungrounded"),
         owner="gx-agentic-abstain-repin", spelling=AFTER_COLLECTION),
+    SeededRemoval(
+        id="RM-HOOK-WRONG-FILE", family="abstain",
+        subject="cli._hook_file_path: the hook ignores the event's path and "
+                "grounds a hardcoded one instead",
+        # The second mutant `gx-agentic-abstain-repin` records: a hook that
+        # never reads the event's `file_path` still exits 0 with byte-empty
+        # stdout and still abstains -- about a document nobody edited -- which
+        # left 11 of that module's 14 cases green before the repin. The
+        # hardcoded path is deliberately one that does not exist, so the mutant
+        # is world-independent: the gate opens it, fails to READ it, and prints
+        # a reason no case here asks for, whatever the solver backend is.
+        apply=lambda mp: _patch(mp, "gcp_grounding.cli",
+                                _hook_file_path=lambda event: _HARDCODED),
+        must_fail=(_AB + "test_c01_raw_hcl_abstains_and_never_blocks",
+                   _AB + "test_c04_unrecognized_kind_abstains_naming_the_keys",
+                   _AB + "test_c08_uncaptured_category_is_unverified_never_ungrounded",
+                   _AB + "test_a_document_whose_grants_were_never_read_is_not_a_"
+                         "verdictless_pass[bindings_key_mis_cased]",
+                   _AB + "test_c10_bad_baseline_abstains_on_the_subset"
+                         "[nonexistent_path]"),
+        owner="gx-agentic-abstain-repin", pending=False,
+        spelling=AFTER_COLLECTION),
 )

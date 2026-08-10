@@ -519,6 +519,68 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_agentic_vpcsc.py::"
                  "test_the_vpcsc_removals_are_live_in_the_contract"),
     ),
+    Escalation(
+        id="ESC-GX-ABSTAIN-REMOVAL-CEILING",
+        clause=("after the repin BOTH removals must redden named cases, and "
+                "both go in the mutation contract"),
+        unsatisfiable=(
+            "BOTH ARE IN THE CONTRACT AND BOTH REDDEN, MEASURED; ONE OF THE TWO "
+            "CANNOT BE EXECUTED BY THE GATE, on the same arithmetic "
+            "ESC-GX-NETWORK-REMOVAL-CEILING and ESC-GX-VPCSC-REMOVAL-CEILING "
+            "record. `RM-HOOK-SUCCESS-BEFORE-THE-EVENT` killed NOTHING before "
+            "this repin — all 14 cases of tests/test_gcp_agentic_abstain.py "
+            "PASSED with `cli._run_hook` stubbed, because every case drove the "
+            "hook in a CHILD process and an after-collection monkeypatch of the "
+            "PARENT cannot reach one — and the repin's in-process mirror closes "
+            "that: under `GCP_TEST_REMOVAL=RM-HOOK-SUCCESS-BEFORE-THE-EVENT` "
+            "all three named nodes report FAILED and all three report PASSED on "
+            "clean source. But `contract_spawn_ceiling()` is `4*len(register()) "
+            "+ len(removal_register()) + CONTRACT_CONTROL_SPAWNS` and a full run "
+            "MEASURES the marked total at exactly the ceiling, so a NEW live "
+            "removal is net zero (one slot, one `-rA` child) while flipping an "
+            "ALREADY-COUNTED one from pending to live is +1 spawn and +0 slots "
+            "and overflows by exactly one. This task therefore lands its NEW "
+            "removal `RM-HOOK-WRONG-FILE` LIVE and executed, and leaves the "
+            "seeded one `pending` with its measurement recorded beside it, "
+            "rather than raising a ceiling this document forbids raising and "
+            "`mutation_contract.py` is frozen against. Rescaling "
+            "`CONTRACT_CONTROL_SPAWNS` to the controls it really has — the same "
+            "rescale ESC-GX-GATE-002 asks for — closes this and XPASSes the node "
+            "below."
+        ),
+        owner_task="gx-agentic-abstain-repin",
+        node_id=("tests/test_gcp_agentic_abstain.py::"
+                 "test_the_hook_success_removal_is_live_in_the_contract"),
+    ),
+    Escalation(
+        id="ESC-GX-ABSTAIN-PASSED-HEADER",
+        clause=("either require a qualifier, or pin the current wording and "
+                "mark it an open hole in the same style the stale-capture case "
+                "pins its missing rule"),
+        unsatisfiable=(
+            "THE QUALIFIER IS A PRODUCT CHANGE, so the strictest option the "
+            "product supports today is the pin. MEASURED: "
+            "`PolicyReport._render_human` builds its header word as "
+            "`'PASSED' if self.ok else 'FAILED'` and `report.ok` is `not "
+            "ungrounded and not contradicted`, so a document nothing was checked "
+            "in renders `GCP policy grounding <source> PASSED [<backend>]  "
+            "grounded=0 ungrounded=0 contradicted=0 unverified=1` — approval, "
+            "with the counts beside it and no word that stops an agent reading "
+            "the first line and moving on. Adding one means editing "
+            "`gcp_grounding/report.py`, which is the renderer every module in "
+            "the suite reads through: `assert_blocked` keys off the FAILED "
+            "header, the abstain-notes channel deliberately mirrors these "
+            "lines, and this task is a test-only repin of the abstention "
+            "catalogue. The wording is therefore PINNED by "
+            "`test_an_abstain_only_report_is_headlined_passed`, which also "
+            "refuses every qualifier spelling so the day one lands it says so, "
+            "and the spec literal is landed strict-xfailed below."
+        ),
+        owner_task="gx-agentic-abstain-repin",
+        node_id=("tests/test_gcp_agentic_abstain.py::"
+                 "test_the_headline_of_a_report_that_checked_nothing_carries_a_"
+                 "qualifier"),
+    ),
 )
 
 
