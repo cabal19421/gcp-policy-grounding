@@ -587,6 +587,72 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_agentic_benign.py::"
                  "test_the_clauses_grounded_floor_tells_checked_from_never_looked"),
     ),
+    Escalation(
+        id="ESC-TX-TFDRIFT-001",
+        clause=("a not-ok report and a hook exit of 2, meaning the dangerous "
+                "reading wins the GATE decision while both readings win the "
+                "REPORT"),
+        unsatisfiable=(
+            "NO CONFIGURED SOURCE CAN BE 'complete' WHERE THE PAIR TIER READS "
+            "COMPLETENESS, so the API view's `contradicted` is rewritten to "
+            "`unverified` on both of the two routes that could carry it and the "
+            "run reaches exit 0. MEASURED end to end over the built repo. Route "
+            "one, engine stage 3: the winning entry's scope is the MERGED "
+            "category scope, and `provenance.CategoryScope.__post_init__` coerces "
+            "any category a terraform source contributed a fact to down to "
+            "'partial' — the same adjudicated cap ESC-GX-TFPROMISE-001 records — "
+            "so `_apply_baseline_soundness` rewrites a `requires_complete` check's "
+            "`contradicted`. `--completeness complete` does not lift it and must "
+            "not. Route two, engine stage 6: `_source_scope` reads the SOURCE "
+            "record's own scope, and `sources.LoadedSource.record()` hardcodes "
+            "`scope='undeclared'` for every source `load_current` builds — "
+            "deliberately, since the real coverage travels per category in "
+            "`category_scopes` — so neither `--completeness` nor a "
+            "`gcp-source-ledger/1` sidecar declaring the source complete ever "
+            "reaches it, and `discovery.CONFIG_KEYS` has no completeness key at "
+            "all. Both routes measured 'undeclared'/'partial' with every "
+            "combination of the two surfaces. What would CLOSE it sits outside "
+            "any test module and is the provenance owner's decision: a source "
+            "whose DECLARED coverage survives into the ledger record the engine "
+            "reads. Everything else case one asks for is asserted live — one "
+            "`drift:material` naming both labels, both values and the field, two "
+            "per-source pair verdicts with different statuses each naming its own "
+            "source, one `drift:verdict`, and both readings on the agent-visible "
+            "stream."
+        ),
+        owner_task="tx-agentic-tf-drift",
+        node_id=("tests/test_gcp_agentic_tf_drift.py::"
+                 "test_case_one_blocks_on_its_complete_source_finding"),
+    ),
+    Escalation(
+        id="ESC-TX-TFDRIFT-002",
+        clause=("configure an API source that also covers the firewall domain "
+                "COMPLETELY and holds the restricted rule, and assert the same "
+                "disagreement now produces a surviving `contradicted` and exit 2"),
+        unsatisfiable=(
+            "THE SAME MEASURED GAP AS ESC-TX-TFDRIFT-001, reached from the other "
+            "side and registered separately because it is a different arm with a "
+            "different node. The third arm's API source IS declared complete, in "
+            "the only way this codebase offers — a real `gcp-source-ledger/1` "
+            "sidecar written by `provenance.LedgerBuilder` with "
+            "`source(..., scope='complete')` and `declare('firewall_rules', "
+            "scope='complete')` — and it still cannot block: `load_current` "
+            "rebuilds every source record through `sources.LoadedSource.record()`, "
+            "which hardcodes `scope='undeclared'`, and `estate.build` puts THAT "
+            "record in the merged ledger, so `engine._source_scope` reads "
+            "'undeclared' and stage 6 rewrites the per-source `contradicted`. "
+            "Measured with the sidecar declaring the source complete, with the "
+            "sidecar plus `--completeness complete`, and with the mirror carrying "
+            "the whole firewall table: the merged category scope stays 'partial' "
+            "and the source scope stays 'undeclared' in all three. The arm's OTHER "
+            "half — that all three views' answers reach the report, which is the "
+            "invariant the pair really proves — is asserted live in "
+            "`test_the_third_arm_adds_a_complete_source_and_still_reports_every_side`."
+        ),
+        owner_task="tx-agentic-tf-drift",
+        node_id=("tests/test_gcp_agentic_tf_drift.py::"
+                 "test_the_complete_api_source_arm_blocks"),
+    ),
 )
 
 
@@ -749,6 +815,11 @@ PRODUCT_ESCALATIONS: tuple[ProductEscalation, ...] = (
 # `tx-agentic-tf-benign` is declared in designs/gcp-tf-source.md, the predecessor
 # document that owns tests/test_gcp_agentic_tf_benign.py; ESC-GX-TFPROMISE-001 is
 # raised against its promise pair and no task of gcp-gx-fixes.md owns that module.
+#
+# `tx-agentic-tf-drift` is declared in the same predecessor document and owns
+# tests/test_gcp_agentic_tf_drift.py; ESC-TX-TFDRIFT-001 and -002 are raised
+# against its two block arms and no task of gcp-gx-fixes.md owns that module.
 OUT_OF_DOCUMENT_OWNER_TASKS: frozenset[str] = frozenset({
     "tx-agentic-tf-benign",
+    "tx-agentic-tf-drift",
 })
