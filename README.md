@@ -647,10 +647,13 @@ names the same block as reachable on tcp/22 from a public source. The owner
 grant violates `no-primitive-roles-outside-domain` the same way: its refutation
 reads `refuted by iam_bindings[1] (google_project_iam_binding.contractor_owner)
 member='user:mallory@outsider.example' role='roles/owner'` — the block, the
-member and the role, rebuilt from the proposal's own terraform claims. All six
-promise domains now evaluate a terraform proposal: the perimeter promise
-reports that it *holds*, and so does `sa-key-creation-disabled`, because the
-proposal's `no_sa_keys` block enforces the constraint. The owner grant still
+member and the role, rebuilt from the proposal's own terraform claims. Four of
+the six promise domains are exercised by this run — the firewall and iam
+promises refute, the perimeter promise reports that it *holds*, and so does
+`sa-key-creation-disabled`, because the proposal's `no_sa_keys` block enforces
+the constraint. (The remaining two domains, `cloud_armor` and `hier_firewall`,
+have no promise in the demo corpus and nothing in this proposal exercises
+them.) The owner grant still
 draws the `[iam_escalation]` warning on `contractor_owner` (roles/owner to
 `user:mallory@outsider.example`), and the `[subset]` widening note stays
 honestly unverified: the baseline came from terraform state, terraform

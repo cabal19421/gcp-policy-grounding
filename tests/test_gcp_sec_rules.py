@@ -323,6 +323,12 @@ def test_org_policy_rules_requires_the_org_policy_kind_in_both_directions():
     non-org_policy contexts here deliberately carry a NON-``None`` document,
     because ``ctx.document is None`` refuses on its own and would answer the
     guard and its inverse alike — a refusal obtained that way pins nothing.
+
+    ``tf_plan`` stays in the refusal loop ON PURPOSE: this pins the RAW
+    built-in, which must never grow a terraform branch of its own — terraform
+    dispatch belongs to the ``sec_domains``-registered override (pinned in
+    ``test_gcp_sec_domains``), and keeping the built-in REST-only is what keeps
+    every non-terraform document's behaviour byte-identical.
     """
     records, reason = sec_rules.org_policy_rules(ctx(ORG_GOOD, "org_policy"))
     assert reason is None

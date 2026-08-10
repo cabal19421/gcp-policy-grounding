@@ -228,10 +228,15 @@ def test_register_is_idempotent(monkeypatch):
     first = dict(calls)
     assert first["collections"] == len(sec_domains.COLLECTION_SPECS)
     # the EXACT knowable count, not a floor: every collection whose claims
-    # module this checkout carries, plus the two that always register
-    assert first["extractors"] == len(expected_extractors())
+    # module this checkout carries, plus the two that always register, plus the
+    # two base-collection overrides (unconditional — everything their terraform
+    # arm needs is a hard import of sec_domains itself)
+    assert first["extractors"] == (len(expected_extractors())
+                                   + len(sec_domains.BASE_COLLECTION_OVERRIDES))
     assert {name for name in EXTRACTOR_DEPENDENCIES
             if name in sec_rules.EXTRACTORS} == expected_extractors()
+    for name in sec_domains.BASE_COLLECTION_OVERRIDES:
+        assert name in sec_rules.EXTRACTORS, name
     assert sec_domains.registered() is True
 
     sec_domains.register()
@@ -286,6 +291,12 @@ def test_every_registered_collection_has_a_known_extractor_dependency():
                                            for spec in sec_domains.COLLECTION_SPECS}
     for module in set(EXTRACTOR_DEPENDENCIES.values()) - {None}:
         assert module in sec_domains.DOMAIN_MODULES.values(), module
+    # The base-collection overrides are sec_ast's own four-field collections,
+    # not specs this module registers, so they stay OUT of both tables above —
+    # their registration is counted separately in test_register_is_idempotent.
+    assert not set(sec_domains.BASE_COLLECTION_OVERRIDES) & set(EXTRACTOR_DEPENDENCIES)
+    for name in sec_domains.BASE_COLLECTION_OVERRIDES:
+        assert name in sec_ast.COLLECTIONS, name
 
 
 def test_absent_domain_module_still_registers_the_others(monkeypatch):
@@ -590,6 +601,258 @@ def test_the_plan_envelope_is_read_through_the_evidence_ledger():
         extract("proposed_firewall_rules", ctx(GARBAGE_PLAN, "tf_plan"))
     assert unreadable.collections_read == 1
     assert unreadable.empty_observed == ()
+
+
+# =============================================================================
+# the sec_rules base collections' terraform arm (iam_bindings / org_policy_rules)
+# =============================================================================
+#
+# ``register`` overrides the two base collections' EXTRACTORS entries with a
+# dispatch: a ``tf_plan`` document takes the claim-built arm, every other kind
+# reaches sec_rules' untouched built-in — byte-identical REST behaviour, only
+# terraform documents gain evaluation. The REST-mismatch carve-out (an
+# org-policy promise over a plain IAM policy document) is re-pinned HERE, at the
+# registered-extractor level, beside the terraform cases that must differ.
+
+
+def iam_plan(*bindings, rtype="google_project_iam_binding", extra=()):
+    """A plan whose root module holds one *rtype* resource per (name, values)."""
+    resources = [{"address": f"{rtype}.{name}", "mode": "managed", "type": rtype,
+                  "name": name,
+                  "provider_name": "registry.terraform.io/hashicorp/google",
+                  "values": values} for name, values in bindings]
+    resources.extend(extra)
+    return {"format_version": "1.2",
+            "planned_values": {"root_module": {"resources": resources}}}
+
+
+ORG_TF_VALUES = {
+    "name": "projects/p/policies/iam.disableServiceAccountKeyCreation",
+    "parent": "projects/p",
+    "spec": [{"rules": [{"enforce": "TRUE"}]}],
+}
+
+OWNER_TO_OUTSIDER = {"role": "roles/owner", "project": "p",
+                     "members": ["user:mallory@outsider.example"]}
+
+#: "no binding may grant roles/owner" — the iam analog of OPEN_SSH.
+OWNER_GRANTED = exists(cmp("eq", fld("role", var="b"), lit("Str", "roles/owner")),
+                       var="b", coll="iam_bindings")
+
+#: "some rule for the constraint sets enforce false" — refute-mode reads its
+#: absence as the promise holding.
+SA_KEYS_UNENFORCED = exists({"node": "and", "args": [
+    cmp("eq", fld("constraint", var="r"),
+        lit("Str", "iam.disableServiceAccountKeyCreation")),
+    cmp("eq", fld("enforce", var="r"), lit("Bool", False)),
+]}, var="r", coll="org_policy_rules")
+
+
+def test_the_base_overrides_delegate_every_rest_kind_to_the_untouched_builtin():
+    """REST behaviour is byte-identical: the registered extractor and the raw
+    sec_rules built-in return the SAME pair for an IAM document, and the
+    REST-mismatch carve-out still answers not-evaluated — an org-policy promise
+    handed a plain IAM policy document abstains exactly as it always did."""
+    iam_doc = {"bindings": [{"role": "roles/owner",
+                             "members": ["user:eve@acme.example"]}]}
+    registered = extract("iam_bindings", ctx(iam_doc, "iam_policy"))
+    assert registered == sec_rules.iam_bindings(ctx(iam_doc, "iam_policy"))
+    assert registered[1] is None and registered[0]
+
+    # the carve-out, at the registered level: a plain IAM policy document is
+    # not an Org Policy, and only TERRAFORM documents gained evaluation
+    records, missing = extract("org_policy_rules", ctx(iam_doc, "iam_policy"))
+    assert records == ()
+    assert missing == "the document under review is not an Org Policy"
+    records, missing = extract("iam_bindings", ctx({"spec": {"rules": []}},
+                                                   "org_policy"))
+    assert records == ()
+    assert missing == "the document under review is not an IAM allow policy"
+
+
+def test_a_terraform_plan_reaches_the_iam_claims_through_the_tf_arm():
+    """THE HONEST CONTROL: a plan that really carries bindings yields rows built
+    from the claims — REST-shaped role/member, the block address threaded under
+    WITNESS_ADDRESS_FIELD, sorted by (role, member) like the REST extractor."""
+    plan = iam_plan(
+        ("viewer", {"role": "roles/viewer", "project": "p",
+                    "members": ["group:eng@acme.example"]}),
+        ("contractor_owner", OWNER_TO_OUTSIDER))
+    records, missing = extract("iam_bindings", ctx(plan, "tf_plan"))
+    assert missing is None
+    assert [r["role"] for r in records] == ["roles/owner", "roles/viewer"]
+    assert records[0]["member"] == "user:mallory@outsider.example"
+    assert records[0][sec_rules.WITNESS_ADDRESS_FIELD] == \
+        "google_project_iam_binding.contractor_owner"
+    # no cel claim pinned a condition, so the keys are OMITTED — not spelled
+    # False, which could fabricate a refutation of a condition-mentioning
+    # promise over a request-time condition the claims conservatively skip
+    assert all("condition" not in r and "has_condition" not in r
+               for r in records)
+
+    rule = sec_rules.CompiledRule(
+        promise=promise("no-owner-tf", "refute", OWNER_GRANTED, domain="iam"))
+    verdict = rule.evaluate(ctx(plan, "tf_plan"))
+    if not HAVE_Z3:
+        assert verdict.status == "unverified" and "z3" in verdict.message
+        return
+    assert verdict.status == "contradicted"
+    assert "(google_project_iam_binding.contractor_owner)" in verdict.message
+    assert "member='user:mallory@outsider.example'" in verdict.message
+    assert "role='roles/owner'" in verdict.message
+
+
+def test_an_offline_decidable_condition_rides_along_when_its_claim_exists():
+    values = dict(OWNER_TO_OUTSIDER,
+                  condition=[{"title": "t",
+                              "expression": 'request.time < timestamp("2027-01-01T00:00:00Z")'}])
+    records, missing = extract("iam_bindings",
+                               ctx(iam_plan(("timed", values)), "tf_plan"))
+    assert missing is None
+    assert records[0]["has_condition"] is True
+    assert records[0]["condition"].startswith("request.time <")
+
+
+def test_a_counted_binding_yields_no_row_and_abstains_naming_the_block():
+    """A literal ``count`` (a ``.tf.json`` keeps it as a plain attribute) means
+    the block may expand zero times — a row could fabricate a refutation."""
+    for meta in ("count", "for_each"):
+        plan = iam_plan(("counted", dict(OWNER_TO_OUTSIDER, **{meta: 0})))
+        records, missing = extract("iam_bindings", ctx(plan, "tf_plan"))
+        assert records == (), meta
+        assert f"'{meta}'" in missing and "counted" in missing, missing
+        assert "no row was minted" in missing
+
+
+def test_a_binding_with_members_but_no_role_abstains_instead_of_guessing():
+    plan = iam_plan(("mystery", {"project": "p", "role": 7,
+                                 "members": ["user:eve@acme.example"]}))
+    records, missing = extract("iam_bindings", ctx(plan, "tf_plan"))
+    assert records == ()
+    assert "mystery" in missing and "no role claim" in missing
+
+
+def test_a_members_value_that_is_not_a_list_abstains_beside_a_healthy_sibling():
+    """The adversarial-review probe, pinned: ``members: "user:x"`` (a bare
+    string — the classic typo) yields no member claims, and before the guard
+    the binding vanished whenever any sibling supplied rows — a forall promise
+    passed over a grant nobody read."""
+    plan = iam_plan(("healthy", dict(OWNER_TO_OUTSIDER)),
+                    ("typo", {"role": "roles/owner", "project": "p",
+                              "members": "user:mallory@outsider.example"}))
+    records, missing = extract("iam_bindings", ctx(plan, "tf_plan"))
+    assert records == ()
+    assert "typo" in missing and "no member claims" in missing
+
+
+def test_non_string_member_entries_abstain_instead_of_coercing_a_spelling():
+    """``members: [null]`` used to reach the rows as the str() coercion
+    ``member='None'`` and refute the domain promise — a fabricated spelling.
+    The REST extractor refuses these shapes; the tf arm now matches it."""
+    plan = iam_plan(("coerced", {"role": "roles/owner", "project": "p",
+                                 "members": [None]}))
+    records, missing = extract("iam_bindings", ctx(plan, "tf_plan"))
+    assert records == ()
+    assert "coerced" in missing and "non-string member" in missing
+
+
+def test_a_binding_that_yielded_no_claims_at_all_abstains_by_census():
+    """Role stripped AND members malformed leaves zero claims, so the
+    claims-side grouping never sees the block; the plan-side census must."""
+    plan = iam_plan(("healthy", dict(OWNER_TO_OUTSIDER)),
+                    ("ghost", {"project": "p", "members": "user:x"}))
+    records, missing = extract("iam_bindings", ctx(plan, "tf_plan"))
+    assert records == ()
+    assert "ghost" in missing and "no readable claims" in missing
+
+
+def test_an_org_policy_whose_name_yields_no_constraint_abstains_by_census():
+    """The org-side probe, pinned: a garbled policy name emits no constraint
+    claim, and before the census the policy was invisible next to a healthy
+    sibling — its enforce FALSE never read, the promise still holding."""
+    garbled = {"name": "not-a-policy-name", "parent": "projects/p",
+               "spec": [{"rules": [{"enforce": "FALSE"}]}]}
+    plan = iam_plan(("no_sa_keys", ORG_TF_VALUES), ("garbled", garbled),
+                    rtype="google_org_policy_policy")
+    records, missing = extract("org_policy_rules", ctx(plan, "tf_plan"))
+    assert records == ()
+    assert "garbled" in missing and "no constraint claim" in missing
+
+
+def test_a_plan_with_no_binding_resources_abstains_not_grounds():
+    records, missing = extract("iam_bindings", ctx(NO_FIREWALL_PLAN, "tf_plan"))
+    assert records == ()
+    assert missing == ("the terraform plan under review carries no IAM binding "
+                       "resources — the rule was not evaluated over any record")
+    records, missing = extract("org_policy_rules",
+                               ctx(NO_FIREWALL_PLAN, "tf_plan"))
+    assert records == ()
+    assert missing == ("the terraform plan under review carries no Org Policy "
+                       "resources — the rule was not evaluated over any record")
+
+
+def test_the_tf_arm_validates_the_plan_envelope_like_the_firewall_arm():
+    records, missing = extract("iam_bindings", ctx(GARBAGE_PLAN, "tf_plan"))
+    assert records == ()
+    assert "'planned_values' that is not a Mapping, got int" in missing
+    assert "no readable 'resource_changes' list, got str" in missing
+
+
+def test_org_policy_rows_from_a_terraform_plan_carry_the_fetched_enforce():
+    """The claims attest WHICH key the rule sets; the boolean itself is fetched
+    at the claim's own anchor — and the row is REST-shaped, constraint prefix
+    stripped, with the block address riding along."""
+    plan = iam_plan(("no_sa_keys", ORG_TF_VALUES), rtype="google_org_policy_policy")
+    records, missing = extract("org_policy_rules", ctx(plan, "tf_plan"))
+    assert missing is None
+    assert records == ({"constraint": "iam.disableServiceAccountKeyCreation",
+                        "is_list": False, "enforce": True, "value": "",
+                        sec_rules.WITNESS_ADDRESS_FIELD:
+                            "google_org_policy_policy.no_sa_keys"},)
+
+    rule = sec_rules.CompiledRule(promise=promise(
+        "sa-keys-tf", "refute", SA_KEYS_UNENFORCED, domain="org_policy"))
+    verdict = rule.evaluate(ctx(plan, "tf_plan"))
+    if not HAVE_Z3:
+        assert verdict.status == "unverified" and "z3" in verdict.message
+        return
+    assert verdict.status == "grounded"
+    assert "holds over the document" in verdict.message
+
+
+def test_a_list_typed_org_rule_yields_one_row_per_value_with_rest_semantics():
+    values = {"name": "projects/p/policies/gcp.resourceLocations",
+              "spec": [{"rules": [{"values": [{"allowed_values":
+                                               ["in:us-locations",
+                                                "in:eu-locations"]}]}]}]}
+    plan = iam_plan(("locations", values), rtype="google_org_policy_policy")
+    records, missing = extract("org_policy_rules", ctx(plan, "tf_plan"))
+    assert missing is None
+    assert [r["value"] for r in records] == ["in:eu-locations", "in:us-locations"]
+    # the REST extractor's own reading of a rule that does not state enforce
+    assert all(r["is_list"] is True and r["enforce"] is False for r in records)
+
+
+def test_an_allow_all_org_rule_is_a_shape_the_conservative_extraction_refuses():
+    values = {"name": "projects/p/policies/gcp.resourceLocations",
+              "spec": [{"rules": [{"allow_all": "TRUE"}]}]}
+    plan = iam_plan(("open", values), rtype="google_org_policy_policy")
+    records, missing = extract("org_policy_rules", ctx(plan, "tf_plan"))
+    assert records == ()
+    assert "'allow_all'" in missing and "does not evaluate" in missing
+
+
+def test_an_org_policy_whose_rules_yield_no_claim_abstains_by_address():
+    """tf_claims skips an ambiguous rule (two value-type keys at once) silently;
+    dropping the policy would let a forall pass over rules nobody read."""
+    values = {"name": "projects/p/policies/iam.disableServiceAccountKeyCreation",
+              "spec": [{"rules": [{"enforce": "TRUE",
+                                   "deny_all": "TRUE"}]}]}
+    plan = iam_plan(("ambiguous", values), rtype="google_org_policy_policy")
+    records, missing = extract("org_policy_rules", ctx(plan, "tf_plan"))
+    assert records == ()
+    assert "google_org_policy_policy.ambiguous" in missing
+    assert "yielded no rule claim" in missing
 
 
 # =============================================================================

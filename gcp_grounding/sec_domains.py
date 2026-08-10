@@ -56,7 +56,26 @@ Proposal-tier extractors read the claims the domain claims modules already
 produce (``firewall_rule`` via ``fw_claims``, ``security_policy_rule`` via
 ``armor_claims``, ``perimeter_config`` via ``vpcsc_claims``), never by
 re-parsing the document: the payload is the normalized form and a second parser
-would let the two drift. The estate-tier extractors read
+would let the two drift.
+
+The same discipline gives the two sec_rules BASE collections their terraform
+arm. ``iam_bindings`` and ``org_policy_rules`` keep their untouched sec_rules
+built-ins for every REST kind; over a terraform plan, :func:`register` installs
+extractors that rebuild the rows from the claims ``tf_claims`` already emits —
+role/member/cel claims anchored at ``<block>.role`` / ``<block>.members[i]``,
+constraint/constraint_value claims anchored inside ``<block>.spec`` — with the
+terraform block address threaded onto every row under
+:data:`gcp_grounding.sec_rules.WITNESS_ADDRESS_FIELD`, exactly as
+``proposed_firewall_rules`` does. The one value the claims attest but do not
+carry (an org-policy rule's ``enforce`` boolean) is fetched from the plan at the
+claim's OWN anchor through ``tf_claims``' own walker and block helpers, so no
+second parser exists to drift. Extraction is conservative: a ``count`` /
+``for_each`` block, a binding whose role claim is missing, an ambiguous or
+unreadable rule, or any location outside the claim grammar yields NO row and one
+:class:`_Undecidable` abstention naming the block — never a fabricated row,
+because a fabricated row can fabricate a refutation.
+
+The estate-tier extractors read
 ``ctx.snapshot.firewall_rules`` / ``ctx.snapshot.hierarchical_firewall_policies``
 and honour the captured bit by comparing with ``is`` — never truth-testing,
 because :data:`gcp_grounding.knowledge.UNKNOWN` refuses ``bool``. Records are
@@ -67,9 +86,11 @@ convention of ``constraints.check_policy_subset`` (constraints.py:442-446).
 from __future__ import annotations
 
 import importlib
+import re
 from typing import Any, Callable, Iterable, Mapping
 
 from . import evidence, sec_ast, sec_encode, sec_rules, tf_claims
+from .claims import _values_shape
 from .core.log import get_logger
 from .knowledge import UNKNOWN
 from .sec_ast import CollectionSpec
@@ -79,6 +100,7 @@ logger = get_logger(__name__)
 __all__ = [
     "register", "reset", "registered",
     "COLLECTION_SPECS", "DOMAIN_COLLECTIONS", "DOMAIN_MODULES",
+    "BASE_COLLECTION_OVERRIDES",
     "PROTOCOL_NUMBERS", "MAX_PORT_SPAN",
 ]
 
@@ -153,6 +175,15 @@ DOMAIN_MODULES: dict[str, str] = {
     "cloud_armor": "armor_claims",
     "vpc_sc": "vpcsc_claims",
 }
+
+#: The two sec_rules base collections whose registered extractors
+#: :func:`register` OVERRIDES with a terraform arm. Their specs stay
+#: ``sec_ast``'s own four-field originals and every non-terraform document kind
+#: still reaches the untouched sec_rules built-in, so REST behaviour is
+#: byte-identical; only a ``tf_plan`` document gains evaluation. Registered
+#: unconditionally: everything the arm needs (``sec_rules``, ``tf_claims``,
+#: ``claims``) is a hard import of this module already.
+BASE_COLLECTION_OVERRIDES: tuple[str, ...] = ("iam_bindings", "org_policy_rules")
 
 #: Every spec :func:`register` installs, in :data:`DOMAIN_COLLECTIONS` order.
 COLLECTION_SPECS: tuple[CollectionSpec, ...] = (
@@ -389,6 +420,35 @@ def _plan_envelope(plan) -> None:
             "was not evaluated")
 
 
+def _no_tf_records(label: str) -> _Undecidable:
+    """The one abstention for a READABLE plan that carries nothing of *label*'s
+    kind: "the plan was understood and mentions no <label>" and "the obligation
+    holds over every <label> in the plan" are different facts, and only the
+    second one is a pass."""
+    return _Undecidable(f"{_PLAN_WHAT} carries no {label} resources — the rule "
+                        "was not evaluated over any record")
+
+
+def _plan_claims(document, kinds: frozenset, label: str) -> tuple:
+    """The claims of *kinds* a terraform plan document makes — the ONE tf-plan
+    funnel, shared by every proposal-tier extractor with a terraform arm.
+
+    Validates the envelope first (:func:`_plan_envelope`), then filters
+    :func:`gcp_grounding.tf_claims.terraform_plan_claims` down to *kinds*. A
+    missing document, an unreadable envelope and a readable plan with no
+    matching resource each raise :class:`_Undecidable`, which :func:`_guarded`
+    turns into the rule's missing_reason."""
+    if document is None:
+        raise _Undecidable(f"no document under review — the {label} rule was "
+                           "not evaluated")
+    _plan_envelope(document)
+    claims = tuple(c for c in tf_claims.terraform_plan_claims(document)
+                   if c.kind in kinds)
+    if not claims:
+        raise _no_tf_records(label)
+    return claims
+
+
 def _document_claims(ctx, module, claim_kind: str, label: str):
     """The claims of *claim_kind* the domain module makes about ``ctx.document``.
 
@@ -408,13 +468,7 @@ def _document_claims(ctx, module, claim_kind: str, label: str):
         return (), f"no document under review — the {label} rule was not evaluated"
     kind = ctx.document_kind
     if kind == _TF_PLAN:
-        _plan_envelope(ctx.document)
-        claims = tuple(c for c in tf_claims.terraform_plan_claims(ctx.document)
-                       if c.kind == claim_kind)
-        if not claims:
-            return (), (f"{_PLAN_WHAT} carries no {label} resources — the rule "
-                        "was not evaluated over any record")
-        return claims, None
+        return _plan_claims(ctx.document, frozenset({claim_kind}), label), None
     extractor = getattr(module, "DOCUMENT_EXTRACTORS", {}).get(kind)
     if extractor is None:
         return (), f"the document under review is not a {label}"
@@ -654,6 +708,324 @@ def _perimeter_entries(module, collection: str, field: str, source: str,
     return extract
 
 
+# -- the sec_rules base collections' terraform arm ----------------------------
+#
+# ``iam_bindings`` and ``org_policy_rules`` are sec_ast base collections whose
+# REST extractors are sec_rules built-ins this module never edits. What
+# :func:`register` overrides is dispatch only: a ``tf_plan`` document takes the
+# claim-built arm below, every other kind reaches the untouched built-in — so an
+# IAM or org-policy promise judges a terraform proposal exactly the way a
+# firewall promise already does, and a refutation names the block to edit.
+
+#: The member claim kinds of one binding. ``claims.iam_policy_claims`` drops NO
+#: member — estate principals, the two public principals and everything else
+#: (``deleted:…``, federated ids) each yield exactly one claim — so together
+#: these are the binding's complete member list.
+_MEMBER_KINDS = frozenset({"principal", "public_principal", "unmodelled_principal"})
+_IAM_KINDS = _MEMBER_KINDS | {"role", "cel"}
+_ORG_KINDS = frozenset({"constraint", "constraint_value"})
+
+#: The claim-location grammar of a terraform IAM binding / org policy, exactly
+#: as ``tf_claims`` anchors them: ``<binding>.role``, ``<binding>.members[i]``
+#: (or ``.member`` for a *_iam_member), ``<binding>.condition[0].expression``,
+#: ``<resource>.name`` / ``<resource>.constraint`` and
+#: ``<resource>.spec[0].rules[i].<key>``. A role/member claim OUTSIDE this
+#: grammar is not a binding field (a perimeter identity, a provider module's
+#: reference) and builds no row; an org-policy claim outside it abstains,
+#: because an org-policy claim IS this collection's subject.
+_ROLE_AT = re.compile(r"^(?P<binding>.+)\.role$")
+_MEMBER_AT = re.compile(r"^(?P<binding>.+)\.(?:members\[\d+\]|member)$")
+_CONDITION_AT = re.compile(r"^(?P<binding>.+)\.condition(?:\[\d+\])?\.expression$")
+_CONSTRAINT_AT = re.compile(r"^(?P<address>.+)\.(?:name|constraint)$")
+_ORG_RULE_AT = re.compile(r"^(?P<address>.+)\.spec(?:\[\d+\])?"
+                          r"\.rules\[(?P<index>\d+)\]"
+                          r"\.(?P<key>enforce|allow_all|deny_all|values)$")
+#: The plan-side census: binding-shaped resource addresses this extraction is
+#: responsible for. A plan block of one of these types that yielded NO claim
+#: (role and members both stripped or malformed) must abstain by name — the
+#: claims-side grouping alone cannot see a block the walker read nothing from.
+_IAM_BINDING_ADDRESS = re.compile(r"^google_\w+_iam_(?:binding|member)\.[^.]+$")
+_ORG_POLICY_ADDRESS = re.compile(r"^google_org_policy_policy\.[^.]+$")
+
+
+def _plan_values(document) -> dict:
+    """Resource address → planned values, through ``tf_claims``' OWN plan walker
+    (``_google_resources``) so the claims and this lookup cannot drift."""
+    return {address: values
+            for address, _rtype, values in tf_claims._google_resources(document)}
+
+
+def _resource_values(prefix: str, by_address: Mapping[str, Any],
+                     label: str) -> Mapping[str, Any]:
+    """The planned values of the resource owning *prefix* — refusing unknown
+    multiplicity.
+
+    A ``.tf.json`` configuration keeps a literal ``count`` / ``for_each`` as a
+    plain attribute (a real ``terraform show -json`` plan expands instances and
+    carries neither), and a block that may expand zero times must not mint a row
+    a promise could be refuted by. An unresolved ``count``/``for_each`` never
+    reaches here at all — ``facts.strip_unresolved`` removed it and put the path
+    on the proposal's unresolved record, the existing bookkeeping that already
+    downgrades every ``grounded`` on the file."""
+    if prefix in by_address:
+        address = prefix
+    else:
+        owners = [a for a in by_address if prefix.startswith(f"{a}.")]
+        if not owners:
+            raise _Undecidable(f"{label} {prefix!r} sits under no resource the "
+                               "plan walker saw — the rule was not evaluated")
+        address = max(owners, key=len)
+    values = by_address[address]
+    if not isinstance(values, Mapping):
+        raise _Undecidable(f"{label} {prefix!r} has no planned values — the "
+                           "rule was not evaluated")
+    for meta in ("count", "for_each"):
+        if meta in values:
+            raise _Undecidable(
+                f"{label} {prefix!r} carries {meta!r}, so how many instances "
+                "the block creates is not decided from the configuration — no "
+                "row was minted for it and the rule was not evaluated")
+    return values
+
+
+def _tf_iam_bindings(ctx):
+    """``iam_bindings`` rows from a terraform document's role / member / cel
+    claims, grouped by the binding each claim is anchored to.
+
+    One row per (binding, member), REST-shaped: ``role`` and ``member`` from the
+    claims' own values, the binding's location under
+    :data:`sec_rules.WITNESS_ADDRESS_FIELD` so a refutation names the block to
+    edit. ``condition`` / ``has_condition`` ride along ONLY when a ``cel`` claim
+    pinned the expression: the claims cannot tell "no condition" from "a
+    request-time condition the extractor conservatively skipped", and spelling
+    either as ``has_condition=False`` could fabricate a refutation — so the keys
+    are omitted and a promise that mentions them abstains loudly through
+    sec_encode's missing-from-the-record :class:`UnsupportedTerm`. A binding
+    whose member claims arrive without a role claim (a stripped interpolation,
+    a malformed role) abstains naming the binding: dropping it would let a
+    ``forall`` promise pass over a grant nobody read. A binding with a role and
+    no members grants nothing and contributes nothing, exactly as the REST
+    extractor reads an empty ``members`` array."""
+    label = "IAM binding"
+    claims = _plan_claims(ctx.document, _IAM_KINDS, label)
+    by_address = _plan_values(ctx.document)
+    groups: dict[str, dict[str, list]] = {}
+    for claim in claims:
+        if claim.kind == "cel":
+            continue
+        slot = "role" if claim.kind == "role" else "member"
+        matched = (_ROLE_AT if slot == "role" else _MEMBER_AT).match(claim.location)
+        if matched is None:
+            continue  # a role/principal reference that is not a binding field
+        group = groups.setdefault(matched.group("binding"),
+                                  {"role": [], "member": []})
+        group[slot].append(claim)
+    if not groups:
+        raise _no_tf_records(label)
+    conditions: dict[str, str] = {}
+    for claim in claims:
+        if claim.kind != "cel":
+            continue
+        matched = _CONDITION_AT.match(claim.location)
+        if matched is not None and matched.group("binding") in groups:
+            conditions.setdefault(matched.group("binding"), claim.value)
+    records: list[dict] = []
+    for binding in sorted(groups):
+        group = groups[binding]
+        values = _resource_values(binding, by_address, label)
+        if not group["role"]:
+            raise _Undecidable(
+                f"{label} {binding!r} carries member claims but no role claim — "
+                "the role it grants was not read, and a record without it would "
+                "be a guess — the rule was not evaluated")
+        if len(group["role"]) > 1:
+            raise _Undecidable(
+                f"{label} {binding!r} carries {len(group['role'])} role claims — "
+                "which role it grants is ambiguous — the rule was not evaluated")
+        raw_members = values.get("members", values.get("member"))
+        if not group["member"]:
+            # Only a genuinely absent or empty members attribute grants
+            # nothing (the REST extractor's empty-array read). A members
+            # value the claim walker yielded nothing for — a bare string, a
+            # map, any non-list shape — is a grant list nobody read, and
+            # dropping it silently is how a forall promise passes over it.
+            if raw_members is None or raw_members == []:
+                continue
+            raise _Undecidable(
+                f"{label} {binding!r} carries a members attribute that yielded "
+                "no member claims (not a list of plain strings) — the grant "
+                "list was not read — the rule was not evaluated")
+        if isinstance(raw_members, list) and any(
+                not isinstance(member, str) for member in raw_members):
+            raise _Undecidable(
+                f"{label} {binding!r} carries non-string member entries — "
+                "their coerced spellings could fabricate a refutation — the "
+                "rule was not evaluated")
+        base: dict[str, Any] = {"role": group["role"][0].value,
+                                sec_rules.WITNESS_ADDRESS_FIELD: binding}
+        if binding in conditions:
+            base["condition"] = conditions[binding]
+            base["has_condition"] = True
+        records.extend({**base, "member": member.value}
+                       for member in group["member"])
+    unread_bindings = sorted(
+        address for address in by_address
+        if _IAM_BINDING_ADDRESS.match(address) and address not in groups)
+    if unread_bindings:
+        raise _Undecidable(
+            f"{label} resource(s) {', '.join(map(repr, unread_bindings))} "
+            "yielded no readable claims at all — a binding whose role and "
+            "members were both stripped or malformed is a grant nobody read — "
+            "the rule was not evaluated")
+    if not records:
+        raise _Undecidable(
+            f"{_PLAN_WHAT} carries {len(groups)} IAM binding(s) and none of "
+            "them names a member — the rule was not evaluated over any record")
+    return _sorted(records, sec_ast.COLLECTIONS["iam_bindings"].fields), None
+
+
+def _tf_enforce(raw: Any, address: str, label: str) -> bool:
+    """The boolean an org-policy rule's ``enforce`` sets, in either spelling the
+    provider uses (a JSON boolean, or the ``"TRUE"``/``"FALSE"`` enum strings of
+    :data:`tf_claims._TF_BOOLEANS` — read from that one table, not restated)."""
+    value = (raw if isinstance(raw, bool)
+             else tf_claims._TF_BOOLEANS.get(raw) if isinstance(raw, str)
+             else None)
+    if value is None:
+        raise _Undecidable(f"{label} {address!r} carries enforce={raw!r}, which "
+                           "is not a boolean — the rule was not evaluated")
+    return value
+
+
+def _tf_org_rule(by_address: Mapping[str, Any], address: str, index: int,
+                 label: str) -> Mapping[str, Any]:
+    """The ``spec.rules[index]`` block a constraint_value claim was anchored to,
+    re-read through ``tf_claims``' own :func:`~gcp_grounding.tf_claims._first_block`
+    convention — the claim attests the shape, this fetches the one value the
+    claim does not carry."""
+    values = _resource_values(address, by_address, label)
+    spec, _path = tf_claims._first_block(values.get("spec"), "spec")
+    rules = spec.get("rules") if spec is not None else None
+    if not isinstance(rules, list) or not 0 <= index < len(rules) \
+            or not isinstance(rules[index], Mapping):
+        raise _Undecidable(
+            f"{label} {address!r} no longer carries the rule its claim is "
+            f"anchored to (rules[{index}]) — the rule was not evaluated")
+    return rules[index]
+
+
+def _tf_org_policy_rules(ctx):
+    """``org_policy_rules`` rows from a terraform document's constraint /
+    constraint_value claims.
+
+    REST-shaped rows: ``constraint`` is the claim's canonical value with its
+    ``constraints/`` prefix stripped (the spelling the REST extractor's
+    ``…/policies/<id>`` tail yields, so one promise matches both transports),
+    ``enforce`` is fetched from the plan at the claim's own anchor, a
+    list-typed rule yields one row per allowed/denied value with the REST
+    extractor's own ``enforce=False`` reading of a rule that does not state it,
+    and every row carries the block address. ``allow_all`` / ``deny_all`` rules
+    have no REST row shape and abstain by name; so does a policy resource whose
+    rules yielded no claim at all — tf_claims skips an ambiguous or unreadable
+    rule silently, and dropping the whole policy would let a ``forall`` promise
+    pass over rules nobody read."""
+    label = "Org Policy"
+    claims = _plan_claims(ctx.document, _ORG_KINDS, label)
+    by_address = _plan_values(ctx.document)
+    policies: dict[str, str] = {}
+    for claim in claims:
+        if claim.kind != "constraint":
+            continue
+        matched = _CONSTRAINT_AT.match(claim.location)
+        if matched is None:
+            raise _Undecidable(
+                f"the constraint claim at {claim.location!r} names no resource "
+                "address this extraction understands — the rule was not evaluated")
+        policies[matched.group("address")] = claim.value
+    unclaimed = sorted(
+        address for address in by_address
+        if _ORG_POLICY_ADDRESS.match(address) and address not in policies)
+    if unclaimed:
+        raise _Undecidable(
+            f"{label} resource(s) {', '.join(map(repr, unclaimed))} yielded no "
+            "constraint claim — a policy whose name was not readable as a "
+            "constraint is a rule nobody read, and dropping it beside a healthy "
+            "sibling would let a forall promise pass over it — the rule was "
+            "not evaluated")
+    if not policies:
+        raise _no_tf_records(label)
+    read: set[str] = set()
+    records: list[dict] = []
+    for claim in claims:
+        if claim.kind != "constraint_value":
+            continue
+        matched = _ORG_RULE_AT.match(claim.location)
+        address = matched.group("address") if matched is not None else ""
+        if matched is None or address not in policies:
+            raise _Undecidable(
+                f"the org-policy rule claim at {claim.location!r} sits under no "
+                "Org Policy resource this extraction read — the rule was not "
+                "evaluated")
+        constraint = claim.value
+        if constraint.startswith("constraints/"):
+            constraint = constraint[len("constraints/"):]
+        key = matched.group("key")
+        index = int(matched.group("index"))
+        if key not in ("enforce", "values"):
+            raise _Undecidable(
+                f"{label} {address!r} rules[{index}] sets {key!r}, a shape this "
+                "conservative extraction does not evaluate — the rule was not "
+                "evaluated")
+        rule = _tf_org_rule(by_address, address, index, label)
+        read.add(address)
+        base: dict[str, Any] = {"constraint": constraint,
+                                sec_rules.WITNESS_ADDRESS_FIELD: address}
+        if key == "enforce":
+            records.append({**base, "is_list": False, "value": "",
+                            "enforce": _tf_enforce(rule.get("enforce"),
+                                                   address, label)})
+            continue
+        block, _path = tf_claims._first_block(rule.get("values"), "values")
+        if block is None:
+            raise _Undecidable(
+                f"{label} {address!r} no longer carries the values block its "
+                f"claim is anchored to (rules[{index}].values) — the rule was "
+                "not evaluated")
+        lists, unreadable = _values_shape(block, claim.location)
+        if unreadable:
+            raise _Undecidable(f"{label} {address!r}: {'; '.join(unreadable)} — "
+                               "the rule was not evaluated")
+        records.extend({**base, "is_list": True, "enforce": False, "value": entry}
+                       for entry in (*lists["allowed_values"],
+                                     *lists["denied_values"]))
+    unread = sorted(a for a in policies if a not in read)
+    if unread:
+        raise _Undecidable(
+            f"{label} resource(s) {', '.join(map(repr, unread))} yielded no "
+            "rule claim — tf_claims skips an ambiguous, empty or unreadable "
+            "rules block, and dropping the policy would let a forall promise "
+            "pass over rules nobody read — the rule was not evaluated")
+    if not records:
+        raise _Undecidable(
+            f"{_PLAN_WHAT} carries {len(policies)} Org Policy resource(s) and "
+            "none of them yielded a rule record — the rule was not evaluated "
+            "over any record")
+    return _sorted(records, sec_ast.COLLECTIONS["org_policy_rules"].fields), None
+
+
+def _with_terraform_arm(tf_extract: Callable, builtin: Callable) -> Callable:
+    """Dispatch for an overridden base collection: a ``tf_plan`` document takes
+    *tf_extract*; every other kind — including the loud unrecognized/None
+    default — reaches *builtin*, sec_rules' untouched REST extractor, so a
+    non-terraform document's records, refusals and messages are byte-identical
+    to what they always were."""
+    def extract(ctx):
+        if ctx.document_kind == _TF_PLAN:
+            return tf_extract(ctx)
+        return builtin(ctx)
+    return extract
+
+
 # -- registration -------------------------------------------------------------
 
 def _guarded(collection: str, fn: Callable) -> Callable:
@@ -774,3 +1146,18 @@ def register() -> None:
                      _perimeter_entries(vpcsc, "perimeter_restricted_services",
                                         "service", "restricted_services",
                                         _PERIMETER_SERVICE_FIELDS)))
+
+    # The two base collections sec_rules ships (BASE_COLLECTION_OVERRIDES).
+    # Their REST extractors are built-ins this module never edits; what is
+    # registered here is dispatch plus the terraform arm, so an IAM or
+    # org-policy promise judges a terraform proposal the way a firewall promise
+    # already does — from the tf claims, with the block address on every row.
+    sec_rules.register_extractor(
+        "iam_bindings",
+        _guarded("iam_bindings",
+                 _with_terraform_arm(_tf_iam_bindings, sec_rules.iam_bindings)))
+    sec_rules.register_extractor(
+        "org_policy_rules",
+        _guarded("org_policy_rules",
+                 _with_terraform_arm(_tf_org_policy_rules,
+                                     sec_rules.org_policy_rules)))

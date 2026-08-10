@@ -10,9 +10,11 @@ grant to an outsider. This module pins three things:
   proposal really is base-plus-two-blocks, so the README's diff snippet cannot
   drift from the committed files;
 * the GROUNDING — snapshot + terraform state + compiled requirements over the
-  example DENIES, with ``firewall_exposure`` locating ``allow_ssh_world``, the
-  ``sec:vpc_firewall`` promise contradicted, and the refutation carrying the
-  terraform block address an operator would edit;
+  example DENIES, with ``firewall_exposure`` locating ``allow_ssh_world``, BOTH
+  compiled promises contradicted — ``sec:vpc_firewall`` on the world-open rule
+  and ``sec:iam`` on the owner grant — each refutation carrying the terraform
+  block address an operator would edit, and the org-policy promise evaluating
+  (it *holds*: ``no_sa_keys`` enforces key-creation disablement);
 * the ``--proposal`` FLAG — the explicit spelling of the positional: identical
   output, config discovery rooted at the proposal file, a usage error when both
   spellings are given, today's usage error when neither is, fail-open refusal
@@ -57,6 +59,9 @@ SEC_CORPUS = FIXTURES / "sec_requirements"
 
 PROMISE_ID = "no-open-ssh-rdp-ingress"
 ADDRESS = "google_compute_firewall.allow_ssh_world"
+IAM_PROMISE_ID = "no-primitive-roles-outside-domain"
+IAM_ADDRESS = "google_project_iam_binding.contractor_owner"
+ORG_PROMISE_ID = "sa-key-creation-disabled"
 
 HAVE_Z3 = get_solver().backend == "z3"
 
@@ -146,8 +151,9 @@ def test_the_example_ships_no_config_file():
 @_needs_z3
 def test_the_example_grounds_denied_in_process(compiled):
     """Snapshot + terraform state + compiled requirements over the example:
-    not ok, the exposure check locates ``allow_ssh_world``, the vpc_firewall
-    promise is contradicted, and its refutation names the terraform block."""
+    not ok, the exposure check locates ``allow_ssh_world``, BOTH violated
+    promises are contradicted with their terraform blocks named, and the
+    org-policy promise evaluates the terraform document (it holds)."""
     rules, carried = sec_rules.load_directory(str(compiled))
     assert rules, "the corpus must compile at least one enforcing promise"
     current = sources.load_current(sources.SourceOptions(
@@ -174,6 +180,32 @@ def test_the_example_grounds_denied_in_process(compiled):
     # The witness message names the BLOCK an operator must edit, not only the
     # flattened row that witnessed the violation.
     assert f"({ADDRESS})" in promise[0].message, promise[0].message
+
+    # The SECOND violated promise: the owner grant refutes the IAM-domain
+    # promise over the same terraform document, and its witness names the
+    # binding block, the member and the role.
+    grant = [v for v in report.verdicts
+             if v.kind == "sec:iam" and v.target == IAM_PROMISE_ID]
+    assert len(grant) == 1, grant
+    assert grant[0].status == "contradicted", grant[0]
+    assert "refuted by iam_bindings[" in grant[0].message
+    assert f"({IAM_ADDRESS})" in grant[0].message, grant[0].message
+    assert "member='user:mallory@outsider.example'" in grant[0].message
+    assert "role='roles/owner'" in grant[0].message
+
+    # And the org-policy promise EVALUATES the terraform document: no_sa_keys
+    # enforces the constraint, so the promise holds instead of abstaining.
+    org = [v for v in report.verdicts
+           if v.kind == "sec:org_policy" and v.target == ORG_PROMISE_ID]
+    assert len(org) == 1, org
+    assert org[0].status == "grounded", org[0]
+
+    # The closed caveat stays closed: no promise abstains for being handed a
+    # terraform document instead of its own REST kind.
+    stale = [v for v in report.verdicts
+             if "not an IAM allow policy" in v.message
+             or "not an Org Policy" in v.message]
+    assert not stale, stale
 
 
 # -- the --proposal flag -------------------------------------------------------
@@ -268,9 +300,10 @@ def test_the_readme_five_flag_invocation_denies_with_the_narrative(
         compiled, capsys):
     """The exact invocation the README's step 7 shows — every input named by
     its flag — exits 1, and the narrative tells the README's story: the
-    proposal's resource list, DENIED, the VIOLATED promise quoting its English
-    sentence, the named terraform block, the escalation warning, the honest
-    widening abstention and the IAM-promise caveat."""
+    proposal's resource list, DENIED on BOTH violated promises quoting their
+    English sentences and naming their terraform blocks, the escalation
+    warning, the honest widening abstention, and every promise domain
+    evaluating the terraform document."""
     code, out, err = invoke(
         capsys, "verify-policy",
         "--proposal", str(PROPOSAL),
@@ -293,10 +326,22 @@ def test_the_readme_five_flag_invocation_denies_with_the_narrative(
     assert "[firewall_exposure]" in err and ADDRESS in err
     assert f"({ADDRESS})" in err  # the refutation names the block
 
-    # THE PROMISE, violated and quoting its own sentence.
+    # BOTH violated promises, each quoting its own sentence and naming the
+    # terraform block an operator must edit.
     assert f"VIOLATED  {PROMISE_ID}" in err
     assert ("No ingress firewall rule may allow tcp/22 or tcp/3389 "
             "from 0.0.0.0/0.") in err
+    assert f"VIOLATED  {IAM_PROMISE_ID}" in err
+    assert ("No binding may grant roles/owner or roles/editor to any "
+            "principal outside domain acme.example.") in err
+    assert "refuted by iam_bindings[" in err
+    assert f"({IAM_ADDRESS})" in err
+    assert "member='user:mallory@outsider.example'" in err
+    assert "role='roles/owner'" in err
+
+    # The org-policy promise evaluates the terraform document and HOLDS —
+    # no_sa_keys enforces the constraint the promise is scoped to.
+    assert f"holds     {ORG_PROMISE_ID}" in err
 
     # The owner grant: escalation warning named on the binding, and the
     # widening note honestly unverified — terraform is never a complete
@@ -306,10 +351,11 @@ def test_the_readme_five_flag_invocation_denies_with_the_narrative(
     assert "[subset]" in err and "new⊈old" in err
     assert "partial" in err
 
-    # The stated caveat: only the vpc_firewall promise evaluates a terraform
-    # document today; IAM-domain promises say so instead of pretending.
-    assert "not evaluated — the document under review is not an IAM allow " \
-           "policy" in err
+    # The old caveat is CLOSED: no promise reports "not an IAM allow policy" /
+    # "not an Org Policy" for being handed a terraform document — every domain
+    # evaluates it now, or abstains for a reason of its own.
+    assert "not an IAM allow policy" not in err
+    assert "not an Org Policy" not in err
 
 
 def test_the_narrative_caps_the_resource_list_at_twenty_lines(tmp_path, capsys):
