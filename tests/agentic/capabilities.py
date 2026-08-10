@@ -57,11 +57,13 @@ __all__ = [
     "Capability",
     "FIREWALL",
     "HIER_FIREWALL",
+    "IAM_ESCALATION",
     "IAM_EXISTENCE",
     "ORG_CONSTRAINT_VALUE",
     "ORG_ENFORCEMENT",
     "Probe",
     "PUBLIC_PRINCIPAL",
+    "snapshot_requiring",
     "TF_CLAIMS",
     "VPCSC",
     "probe",
@@ -218,6 +220,27 @@ def estate_snapshot() -> GcpSnapshot:
         return GcpSnapshot.from_dict(base)
 
 
+def snapshot_requiring(*categories: str) -> GcpSnapshot:
+    """:func:`estate_snapshot`, REFUSING one that is missing a *category* the
+    caller's bad input can only be decided through.
+
+    This is the mechanism the module docstring promises, in one place: a family
+    decided through the estate declares the categories HERE, so a checkout
+    without them measures that capability DEAD — loudly, with the category
+    named in :attr:`Probe.reason` — instead of every case in the family being
+    ANDed with a shared ``HAVE_ESTATE_CATEGORY`` flag no reader can attribute
+    to a family, which is the shape that lets one flip silence a whole
+    catalogue.
+    """
+    snapshot = estate_snapshot()
+    missing = [name for name in categories if not getattr(snapshot, name, None)]
+    if missing:
+        raise ValueError(
+            f"the estate snapshot did not capture {', '.join(missing)}, so this "
+            f"capability's bad input cannot be decided at all")
+    return snapshot
+
+
 def _tf_plan(address: str, rtype: str, values: dict) -> dict:
     """One-resource ``terraform show -json`` plan output."""
     return {
@@ -254,14 +277,33 @@ def _firewall(source_ranges: list[str]) -> dict:
     })
 
 
-def _firewall_policy_rule(src_ip_ranges: list[str]) -> dict:
+def _firewall_policy_rule(action: str) -> dict:
+    """An org-attached policy rule at priority 100 on tcp/3389 from the world,
+    SCOPED TO ONE PROJECT'S NETWORK.
+
+    ``target_resources`` is load-bearing, not decoration. ``hfw_checks`` derives
+    the project under evaluation from it, and with the list EMPTY an org-level
+    attachment sits above two captured projects — so the check abstains with
+    "2 projects sit below the attachment node", the bad input is never decided,
+    and this capability measures dead for a reason that has nothing to do with
+    whether the hierarchical order can be read.
+
+    The near-twin varies the ACTION, which is exactly the property under test:
+    the same match block at the same precedence OPENS what the org baseline's
+    priority-1000 deny closed, or CLOSES more of it. Varying the source range
+    instead cannot produce a quiet twin — an allow of any range at priority 100
+    widens the effective decision, so a rubber-stamp check and a working one
+    would be indistinguishable.
+    """
     return _tf_plan("google_compute_firewall_policy_rule.rdp",
                     "google_compute_firewall_policy_rule", {
                         "firewall_policy": ("organizations/123456789012/locations/"
                                             "global/firewallPolicies/org-baseline"),
-                        "action": "allow", "direction": "INGRESS",
+                        "action": action, "direction": "INGRESS",
                         "priority": 100, "disabled": False,
-                        "match": [{"src_ip_ranges": src_ip_ranges,
+                        "target_resources": [
+                            "projects/acme-prod/global/networks/prod-vpc"],
+                        "match": [{"src_ip_ranges": ["0.0.0.0/0"],
                                    "layer4_config": [{"ip_protocol": "tcp",
                                                       "ports": ["3389"]}]}],
                     })
@@ -397,9 +439,13 @@ HIER_FIREWALL = Capability(
     family="network",
     kinds=frozenset({"firewall_policy_rule", "hfw_order", "hfw_shadow",
                      "hfw_widen", "hfw_effect"}),
-    # priority 100 re-opens tcp/3389, which org-baseline denies at 1000.
-    bad=lambda: (_firewall_policy_rule(["0.0.0.0/0"]), estate_snapshot()),
-    good=lambda: (_firewall_policy_rule(["10.0.0.0/8"]), estate_snapshot()),
+    # priority 100 re-opens tcp/3389, which org-baseline denies at 1000. The
+    # order it re-opens is read out of THREE captured categories, so all three
+    # are declared: without them the check abstains and this capability is dead.
+    bad=lambda: (_firewall_policy_rule("allow"),
+                 snapshot_requiring("hierarchical_firewall_policies",
+                                    "resource_hierarchy", "firewall_rules")),
+    good=lambda: (_firewall_policy_rule("deny"), estate_snapshot()),
     guts=(("gcp_grounding.hfw_checks", "DOCUMENT_CHECKS"),),
 )
 
@@ -408,8 +454,12 @@ ARMOR = Capability(
     family="network",
     kinds=frozenset({"security_policy_rule", "armor_rule", "armor_bypass",
                      "armor_default", "armor_expr", "armor_priority"}),
-    # An allow at priority 100 in front of the captured deny(403) at 1000.
-    bad=lambda: (_security_policy(["0.0.0.0/0"]), estate_snapshot()),
+    # An allow at priority 100 in front of the captured deny(403) at 1000. The
+    # family's STANDALONE-rule case reads the policy it joins out of
+    # `cloud_armor_policies`, so the category is declared here rather than
+    # ANDed onto that case as a foreign flag.
+    bad=lambda: (_security_policy(["0.0.0.0/0"]),
+                 snapshot_requiring("cloud_armor_policies")),
     good=lambda: (_security_policy(["10.0.0.0/8"]), estate_snapshot()),
     guts=(("gcp_grounding.armor_checks", "DOCUMENT_CHECKS"),),
 )
@@ -421,8 +471,12 @@ VPCSC = Capability(
                      "vpcsc_protection", "vpcsc_dry_run", "vpcsc_ingress",
                      "vpcsc_egress"}),
     # Dropping storage.googleapis.com unprotects a service the captured
-    # perimeter restricts; the near-twin is the perimeter as captured.
-    bad=lambda: (_perimeter(["bigquery.googleapis.com"]), estate_snapshot()),
+    # perimeter restricts; the near-twin is the perimeter as captured. The
+    # previous state comes ENTIRELY from `vpc_sc_perimeters`, so the category is
+    # declared HERE — which is what lets the VPC-SC catalogue stop ANDing a
+    # foreign `HAVE_ESTATE_CATEGORY` flag onto its own domain gate.
+    bad=lambda: (_perimeter(["bigquery.googleapis.com"]),
+                 snapshot_requiring("vpc_sc_perimeters")),
     good=lambda: (_perimeter(["storage.googleapis.com",
                               "bigquery.googleapis.com"]), estate_snapshot()),
     guts=(("gcp_grounding.vpcsc_checks", "DOCUMENT_CHECKS"),
@@ -438,6 +492,20 @@ PUBLIC_PRINCIPAL = Capability(
                   estate_snapshot()),
     guts=(("gcp_grounding.iam_checks", "CLAIM_CHECKS"),
           ("gcp_grounding.iam_checks", "DOCUMENT_CHECKS")),
+)
+
+IAM_ESCALATION = Capability(
+    name="iam_escalation",
+    family="iam",
+    kinds=frozenset({"iam_escalation"}),
+    # An escalation-class role granted to the PUBLIC is the escalation check's
+    # one blocking branch; the same role granted to a real group is a warning
+    # riding on a grounded verdict, which is not a finding, so the near-twin
+    # stays quiet on this channel exactly as it must.
+    bad=lambda: (_iam_policy("roles/owner", "allUsers"), estate_snapshot()),
+    good=lambda: (_iam_policy("roles/owner", "group:platform-sre@acme.example"),
+                  estate_snapshot()),
+    guts=(("gcp_grounding.iam_checks", "DOCUMENT_CHECKS"),),
 )
 
 ORG_ENFORCEMENT = Capability(
@@ -456,6 +524,7 @@ ORG_ENFORCEMENT = Capability(
 CAPABILITIES: dict[str, Capability] = {
     cap.name: cap for cap in (
         IAM_EXISTENCE, TF_CLAIMS, ORG_CONSTRAINT_VALUE, FIREWALL,
-        HIER_FIREWALL, ARMOR, VPCSC, PUBLIC_PRINCIPAL, ORG_ENFORCEMENT,
+        HIER_FIREWALL, ARMOR, VPCSC, PUBLIC_PRINCIPAL, IAM_ESCALATION,
+        ORG_ENFORCEMENT,
     )
 }

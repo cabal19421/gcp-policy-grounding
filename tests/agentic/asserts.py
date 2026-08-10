@@ -106,7 +106,11 @@ FAMILY_KINDS: dict[str, frozenset[str]] = {
         "firewall_rule", "firewall_policy_rule", "security_policy_rule",
         # the VPC firewall, hierarchical firewall and Cloud Armor checkers
         "firewall_exposure", "firewall_pair",
-        "hfw_order", "hfw_shadow", "hfw_widen", "hfw_effect",
+        # `hfw_reopen` is the cross-level re-opening finding hfw_checks emits;
+        # it belongs to this family exactly as `hfw_widen` does, and a channel
+        # that omitted it would refuse the one verdict that names both the port
+        # and the priority of the deny a proposal preempts.
+        "hfw_order", "hfw_shadow", "hfw_widen", "hfw_effect", "hfw_reopen",
         "armor_rule", "armor_bypass", "armor_default", "armor_expr",
         "armor_priority",
     }),

@@ -258,6 +258,10 @@ class CompiledRule:
                          "adds nothing", self.promise.id, ctx.document_kind)
             return None
 
+        off_subject = self._off_subject(ctx)
+        if off_subject is not None:
+            return off_subject
+
         domain = self.promise.domain
         pid = self.promise.id
         ast = self.promise.ast
@@ -301,6 +305,51 @@ class CompiledRule:
                                f"{pid}: the formula was too deeply nested to decide — "
                                "not decided")
         return _adjudicate_one(verdict, ctx, read_set)
+
+    # -- the named-subject non-vacuity gate -----------------------------------
+
+    def _off_subject(self, ctx: RuleContext) -> Optional[Verdict]:
+        """One ``unverified`` when this promise is SCOPED to a named subject and
+        the document under review is about a DIFFERENT one — else ``None``.
+
+        THE NAMED-SUBJECT VACUITY. Some document kinds are *about* exactly one
+        named thing: an Org Policy document is about one constraint, and every
+        record its proposal-tier extractor yields carries that constraint's name.
+        A refute-mode existential over those rows is unsatisfiable over a
+        document about ANOTHER constraint — not because the promise holds, but
+        because there was never a row it could speak about — and refute mode
+        turns that into ``grounded``: an affirmatively false statement that the
+        obligation holds. The document is silent about the promise; the honest
+        answer is an abstention that NAMES the subject it is silent about.
+
+        The scope comes from the promise's own ``vocab:`` line — the value
+        :func:`gcp_grounding.reasoner.ground_existence` already proved exists in
+        the estate before the promise was admitted — and never from the formula,
+        so an author cannot widen the scope by editing the encoding alone. A
+        promise that names no subject of the kind :data:`SUBJECTS` maps this
+        document kind to is not scoped, and this gate is silent for it: "no
+        binding may grant roles/owner" is genuinely SATISFIED by a document that
+        grants no owner, and rewriting that into an abstention would be the
+        opposite error.
+        """
+        scoped = SUBJECTS.get(ctx.document_kind or "")
+        if scoped is None or not isinstance(ctx.document, Mapping):
+            return None
+        kind, prefix, subject_of = scoped
+        wanted = sorted({ref.value[len(prefix):] if ref.value.startswith(prefix)
+                         else ref.value
+                         for ref in self.promise.vocabulary if ref.kind == kind})
+        if not wanted:
+            return None
+        subject = subject_of(ctx.document)
+        if subject in wanted:
+            return None
+        pid = self.promise.id
+        return Verdict(
+            "unverified", f"sec:{self.promise.domain}", pid, 0,
+            f"{pid}: the document under review names the {kind} {subject!r} and "
+            f"never mentions {', '.join(wanted)} — a promise scoped to a named "
+            f"{kind} is not decided by a document about a different one")
 
     # -- the estate-tier completeness gate ------------------------------------
 
@@ -663,6 +712,16 @@ def _org_constraint_name(policy: Mapping) -> str:
     return name.split(marker, 1)[1] if marker in name else name
 
 
+#: Document kind → ``(vocabulary kind, the prefix the vocab spelling carries,
+#: the reader naming what THIS document is about)``. A document of one of these
+#: kinds is ABOUT one named subject, which is what makes
+#: :meth:`CompiledRule._off_subject`'s abstention sound: everything the
+#: proposal-tier extractor yields describes that subject and nothing else.
+SUBJECTS: dict[str, tuple] = {
+    "org_policy": ("constraint", "constraints/", _org_constraint_name),
+}
+
+
 def org_policy_rules(ctx: RuleContext):
     """Proposal-tier ``org_policy_rules`` from an org-policy document.
 
@@ -684,6 +743,14 @@ def org_policy_rules(ctx: RuleContext):
         return (), "the Org Policy's spec has no 'rules' array"
     if not isinstance(rules, list):
         return (), f"the Org Policy's 'rules' is {type(rules).__name__}, not an array"
+    if not rules:
+        # A present-but-empty rules array. Falling through would hand back no
+        # records and no reason, and _normalize_extraction's floor would abstain
+        # naming only the COLLECTION — leaving the reader of a scoped promise's
+        # abstention unable to see WHICH constraint went undecided.
+        return (), (f"the Org Policy for {constraint!r} carries an empty 'rules' "
+                    "array, so it enforces nothing and refutes nothing — the "
+                    "rule was not evaluated")
     records: list[dict] = []
     for i, rule in enumerate(rules):
         if not isinstance(rule, Mapping):
