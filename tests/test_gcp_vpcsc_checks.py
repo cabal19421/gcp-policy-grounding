@@ -49,6 +49,54 @@ Environment-honest like ``test_gcp_preflight``: every expectation that needs the
 solver branches on whether z3 is importable.
 """
 
+# SHARED DEBT TIER 1 — PAYDOWN MEASUREMENT, COMMITTED (task gx-debt-vpcsc-checks).
+#
+# INSTRUMENT: this owning test module alone, never the full suite —
+# `.venv/bin/python -m pytest -q tests/test_gcp_vpcsc_checks.py` — run in a
+# detached `git worktree`, whose `.git` stops the config/tfstate walk. BOTH legs
+# use that one instrument, so the delta is a delta. The harness import was
+# `import sys; sys.path.insert(0, "/home/jones/Downloads/harness")` as the first
+# statement inside a `python -c` program (never a PYTHONPATH= prefix), and each
+# score is `mutation_score(wt, [rel], [focused], max_mutants=len(sites)+5)` over
+# `collect_sites(source_text)`. Both worktrees were ASSERTED GREEN before any
+# mutant outcome was read: BEFORE 29 passed in 0.39s, AFTER 40 passed in 0.42s.
+#
+# gcp_grounding/vpcsc_checks.py, 81 sites   exhaustive       40-draw
+#   BEFORE  8c875c2286ff (this task's seed) 68/81 = 0.840    34/40 = 0.850
+#   AFTER   dbec9a43596f (this commit's     80/81 = 0.988    40/40 = 1.000
+#           parent; this diff adds only this block, no test body, no source)
+#
+# QUOTED SEPARATELY AND NOT COMPARABLE, taken with a different instrument on a
+# different tree: the design's 24/40 = 0.600 on `agent/gx-vpcsc-record-guards`
+# under FULL-SUITE validation. The exhaustive BEFORE for this module had never
+# been taken by anyone; 68/81 above is it.
+#
+# COMPANION, measured in the same pass and unscored so the next task on that
+# file inherits evidence rather than a guess: gcp_grounding/vpcsc_claims.py,
+# 38 sites, exhaustive BEFORE 14/38 = 0.368, AFTER 17/38 = 0.447 — no arm here
+# targets it, and the 3 kills are incidental to driving the checks over it.
+#
+# THE TWELVE NAMED MUST-KILL SITES ARE ALL DEAD, and every advisory line hint
+# resolved. Per site the mutant was applied ALONE in the isolated copy and the
+# node below reported FAILED under it and PASSED on clean source (40 passed):
+#   163 `False`->`True`  _key_present, the absent-vs-empty shape default
+#      -> test_a_previous_perimeter_with_no_side_block_has_no_policy_key_either
+#   605 `False`->`True`  the old side's unreadable-is-any shape flag
+#      -> test_the_old_predicate_refuses_an_unreadable_axis_if_the_abort_regresses
+#   385 `==`->`!=`  -> …decides_or_abstains_for_its_own_reason[union-drops-nothing]
+#   424 `or`->`and` -> …decides_or_abstains_for_its_own_reason[selector-names-neither]
+#   447 `or`->`and` -> test_an_unreadable_new_operation_leaves_both_of_its_axes…
+#   612 `0`->`1`    -> test_a_solver_that_neither_sats_nor_unsats_abstains…
+#   253, 269, 575, 597, 608, 672 `0`->`1`, the Verdict lineno positionals
+#      -> test_no_vpcsc_verdict_carries_a_line_number
+#
+# RESIDUAL: one survivor at 0.988, not on the named list — vpcsc_checks.py:302
+# `True`->`False`, the `@dataclass(frozen=True)` on `_Axis`. Measured equivalent:
+# no site mutates an `_Axis` after building one, and none hashes one or puts one
+# in a set, so unfreezing it changes no behaviour a verdict can carry. No floor
+# failed and no named pin survived, so nothing was relaxed and no Escalation is
+# owed. Diff size against the seed: 17,626 characters, inside the 18,000 budget.
+
 import copy
 import json
 from pathlib import Path
@@ -818,3 +866,268 @@ def test_no_vpcsc_verdict_carries_a_line_number(estate, partial, monkeypatch):
         "unverified", "grounded", "contradicted"}
     for report in reports:
         assert_no_line_numbers(report)
+
+
+# -- shared debt tier 1: perimeter defaults and connectives --------------------
+#
+# Every prior below is the committed `_egress` perimeter with ONE field changed,
+# so the well-formed control is byte-identical apart from that field and still
+# decides. `WIDER` is the one proposal they are all compared against: a strictly
+# wider method than any of them permits, so a direction that decides must
+# contradict and a direction that abstains must say which axis it could not read.
+
+SERVICE = "storage.googleapis.com"
+GET = "google.storage.objects.get"
+EXTERNAL = "//storage.googleapis.com/buckets/exports"
+
+WIDER = _egress([{"method": GET}, {"method": WIDER_METHOD}])
+
+
+def _to(**over) -> dict:
+    to = {"resources": [REMOVED_PROJECT],
+          "operations": [{"serviceName": SERVICE,
+                          "methodSelectors": [{"method": GET}]}]}
+    to.update(over)
+    return to
+
+
+def _prior(*, frm=None, to=None) -> dict:
+    """The well-formed prior, with its one egress policy's blocks replaced."""
+    prior = copy.deepcopy(_egress([{"method": GET}]))
+    policy = prior["status"]["egressPolicies"][0]
+    policy["egressFrom"] = frm if frm is not None else policy["egressFrom"]
+    policy["egressTo"] = to if to is not None else policy["egressTo"]
+    return prior
+
+
+#: ``(id, prior, the status it must reach, the reason it must name)``. The first
+#: three are OLD-side readings that abort their direction; the fourth is the
+#: readable `identity_type` that is not an ANY_* wildcard, which is a decidable
+#: literal axis and must NOT be mistaken for a value nobody could read.
+_TIER1_PRIORS = [
+    ("union-drops-nothing",
+     _prior(to=_to(resources=REMOVED_PROJECT, externalResources=[EXTERNAL])),
+     "unverified",
+     "egress resource axis could not be read ('resources' is str, not a list)"),
+    ("selector-names-neither",
+     _prior(to=_to(operations=[{"serviceName": SERVICE,
+                                "methodSelectors": [{"method": 7}]}])),
+     "unverified",
+     "operations[0].method_selectors[0] declares no readable 'method' or "
+     "'permission' string"),
+    ("service-name-unreadable",
+     _prior(to=_to(operations=[{"serviceName": 7,
+                                "methodSelectors": [{"method": GET}]}])),
+     "unverified", "operations[0].service_name is int, not a string"),
+    ("identity-type-is-a-literal",
+     _prior(frm={"identityType": "IDENTITY_TYPE_UNSPECIFIED",
+                 "identities": [PRINCIPAL]}),
+     "contradicted", WIDER_METHOD),
+]
+
+
+@pytest.mark.parametrize("prior, status, reason", [c[1:] for c in _TIER1_PRIORS],
+                         ids=[c[0] for c in _TIER1_PRIORS])
+def test_each_old_side_reading_decides_or_abstains_for_its_own_reason(
+        estate, prior, status, reason):
+    # One unreadable OLD axis aborts its direction naming THAT axis — a union
+    # that silently drops the unreadable half of the resource axis, a selector
+    # whose reason nobody records, or a service name nobody could read all end
+    # as "nothing new is permitted", which is the masked widening in three more
+    # spellings. The last case is the opposite error: a readable identity_type
+    # that simply is not a wildcard, which decides.
+    if status == "contradicted" and not HAVE_Z3:
+        pytest.skip("the widening comparison needs z3")
+    [egress] = [v for v in vpcsc(ground_policy(WIDER, estate, baseline=prior))
+                if v.kind == "vpcsc_egress"]
+    assert (egress.status, egress.kind, egress.target) == (status, "vpcsc_egress",
+                                                           NAME)
+    assert reason in egress.message
+
+    # The byte-identical well-formed control decides, and finds the widening.
+    [control] = [v for v in vpcsc(ground_policy(WIDER, estate, baseline=_prior()))
+                 if v.kind == "vpcsc_egress"]
+    assert control.status == ("contradicted" if HAVE_Z3 else "unverified")
+    assert WIDER_METHOD in control.message or not HAVE_Z3
+
+
+def test_a_previous_perimeter_with_no_side_block_has_no_policy_key_either(estate):
+    # There is no block to read the key OFF, which is the ABSENT reading and
+    # never the captured-empty one. Reading it as present sends the direction on
+    # to report the shape of a key nobody ever looked for.
+    prior = {"name": NAME, "perimeterType": "PERIMETER_TYPE_REGULAR",
+             "useExplicitDryRunSpec": False}
+    assert detect_kind(prior) == "vpc_sc_perimeter"
+    found = vpcsc(ground_policy(POLICIES / "vpcsc_perimeter_shrunk.json", estate,
+                                baseline=prior))
+
+    [gap] = [v for v in found if v.kind == "vpcsc_egress"]
+    assert (gap.status, gap.target) == ("unverified", NAME)
+    assert "no 'status.egress_policies' key" in gap.message
+    assert "indistinguishable offline" in gap.message
+    assert "not a list" not in gap.message
+    # CHECK 1 abstains for its own reason on the same document, and nothing
+    # anywhere claims the proposal removes nothing.
+    assert ("unverified", "vpcsc_protection", NAME) in triples(found)
+    assert not [v for v in found if v.status == "grounded"
+                and v.kind == "vpcsc_protection"]
+
+
+@pytest.mark.skipif(not HAVE_Z3, reason="the widening comparison needs z3")
+def test_an_unreadable_new_operation_leaves_both_of_its_axes_over_approximated(
+        estate):
+    # The NEW side's over-approximation, one axis at a time. An operation entry
+    # that is not an object makes BOTH the service and the method axis of that
+    # policy unreadable, and on the NEW side unreadable is EVERY value: narrowing
+    # either axis back to the literals of the operations that WERE readable is
+    # how a proposal stops looking wider than the perimeter it replaces.
+    # `_normalize_config` drops such an entry before the document path sees it,
+    # so the raw config goes to `_check_widening` directly — the same call the
+    # new side's asymmetry test above makes.
+    ctx = CheckContext(snapshot=estate, solver=get_solver(), document={},
+                       document_kind="vpc_sc_perimeter", source="<doc>", claims=())
+    unreadable = _prior(to=_to(operations=[
+        "not-an-object", {"serviceName": SERVICE,
+                          "methodSelectors": [{"method": GET}]}]))
+
+    def widening(new_config, prior_ops):
+        return _check_widening("egress", new_config,
+                               _prior(to=_to(operations=prior_ops)),
+                               NAME, "<doc>", "status", "", ctx)
+
+    # A prior permitting every service but only GET, then one permitting every
+    # method but only SERVICE: the proposal is wider on exactly one axis each.
+    for prior_ops in ([{"methodSelectors": [{"method": GET}]}],
+                      [{"serviceName": SERVICE}]):
+        [found] = widening(unreadable["status"], prior_ops)
+        assert (found.status, found.kind, found.target) == (
+            "contradicted", "vpcsc_egress", NAME)
+        assert PRINCIPAL in found.message
+        # Without the unreadable entry the SAME proposal is inside both priors.
+        [control] = widening(_prior()["status"], prior_ops)
+        assert control.status == "grounded"
+        assert "permits no egress the previous configuration did not" in control.message
+
+
+@pytest.mark.skipif(not HAVE_Z3, reason="the widening comparison needs z3")
+def test_the_old_predicate_refuses_an_unreadable_axis_if_the_abort_regresses(
+        estate, monkeypatch):
+    # Two independent layers, and this pins the second. `_check_widening` aborts
+    # a direction whose OLD side carries an unreadable axis; underneath it the
+    # predicate refuses that axis outright, because over-approximating the
+    # PREVIOUS permission set can only HIDE a widening. Reading the old side's
+    # unreadable axis as every value is not a narrower answer, it is a wrong
+    # one — so the second layer must FAIL rather than answer. Stubbing the abort
+    # out is the only way to reach it.
+    ctx = CheckContext(snapshot=estate, solver=get_solver(), document={},
+                       document_kind="vpc_sc_perimeter", source="<doc>", claims=())
+    prior = _prior(to=_to(operations=[{"serviceName": SERVICE,
+                                       "methodSelectors": "not-a-list"}]))
+    [aborted] = _check_widening("egress", WIDER["status"], prior, NAME, "<doc>",
+                                "status", "", ctx)
+    assert (aborted.status, aborted.kind) == ("unverified", "vpcsc_egress")
+    assert "method axis could not be read" in aborted.message
+
+    monkeypatch.setattr("gcp_grounding.vpcsc_checks._first_unreadable_axis",
+                        lambda policies: None)
+    with pytest.raises(ValueError, match="that direction must abstain instead"):
+        _check_widening("egress", WIDER["status"], prior, NAME, "<doc>",
+                        "status", "", ctx)
+
+
+class _Unknown:
+    """z3's third answer: the solver ran and decided nothing."""
+
+    def __str__(self) -> str:
+        return "unknown"
+
+
+class _UndecidedZ3:
+    """Just enough of z3 to build the assertion and then refuse to answer it."""
+
+    unsat = "unsat"
+    sat = "sat"
+
+    def String(self, name): return ("var", name)
+    def StringVal(self, value): return ("val", value)
+    def BoolVal(self, value): return ("bool", value)
+    def And(self, *args): return ("and", args)
+    def Or(self, *args): return ("or", args)
+    def Not(self, arg): return ("not", arg)
+    def Solver(self): return self
+    def add(self, assertion): self.asserted = assertion
+    def check(self): return _Unknown()
+
+
+class _UndecidedBackend:
+    """A solver backend whose z3 always answers `unknown`."""
+
+    backend = "stub-undecided"
+    _z3 = _UndecidedZ3()
+
+
+def test_a_solver_that_neither_sats_nor_unsats_abstains_naming_the_answer(estate):
+    # The third answer is neither a widening nor a clean bill: an undecided
+    # solver has decided nothing, so this must abstain and quote what came back
+    # rather than fall through either decision arm. No offline document drives a
+    # real z3 here — `tests/lineno_invariant` names this arm as the one the
+    # shared invariant could not reach — so the backend is stubbed, exactly as
+    # `_StubZ3` above stubs the predicate's two constant branches.
+    ctx = CheckContext(snapshot=estate, solver=_UndecidedBackend(), document={},
+                       document_kind="vpc_sc_perimeter", source="<doc>", claims=())
+    [undecided] = _check_widening("egress", WIDER["status"], _prior(), NAME,
+                                  "<doc>", "status", "", ctx)
+    assert (undecided.status, undecided.kind, undecided.target) == (
+        "unverified", "vpcsc_egress", NAME)
+    assert "solver returned unknown" in undecided.message
+    assert "egress widening was not decided" in undecided.message
+    assert undecided.lineno == 0
+
+
+@pytest.mark.skipif(not HAVE_Z3, reason="the widening comparison needs z3")
+def test_an_axis_no_assertion_mentions_still_reads_as_every_value(estate):
+    # Both sides declare ANY_IDENTITY, so the identity axis never enters the
+    # assertion and the model carries no value for it at all. Reporting what the
+    # solver left behind would name a z3 variable instead of an identity; the
+    # witness must complete the model and say "every identity".
+    any_identity = {"identityType": "ANY_IDENTITY"}
+    wider = _prior(frm=any_identity, to=_to(operations=[
+        {"serviceName": SERVICE,
+         "methodSelectors": [{"method": GET}, {"method": WIDER_METHOD}]}]))
+    [found] = [v for v in vpcsc(ground_policy(wider, estate,
+                                              baseline=_prior(frm=any_identity)))
+               if v.kind == "vpcsc_egress"]
+
+    assert found.status == "contradicted"
+    assert "newly permits <any identity> to reach" in found.message
+    assert WIDER_METHOD in found.message
+
+
+def test_an_unrecognized_baseline_names_the_kind_it_did_detect(estate):
+    # Two spellings of "that is not a perimeter": a baseline whose kind IS
+    # recognized, which must be named so the reader can see the mix-up, and one
+    # nothing recognizes at all, which is "nothing" — never a bare None.
+    for baseline, detected in ((POLICIES / "iam_policy_good.json", "iam_policy"),
+                               ({"foo": "bar"}, "nothing")):
+        found = vpcsc(ground_policy(POLICIES / "vpcsc_perimeter_shrunk.json",
+                                    estate, baseline=baseline))
+        assert triples(found) == [("unverified", "vpcsc_protection", NAME)]
+        assert f"(detected {detected})" in found[0].message
+
+
+def test_a_perimeter_that_declares_no_name_is_targeted_by_the_empty_string(estate):
+    # A perimeter document with no name at all: the claim's own value is the
+    # only target left and it is "", never None — every verdict this module
+    # emits carries a string target, and the location leads the message.
+    nameless = {"perimeterType": "PERIMETER_TYPE_REGULAR",
+                "status": {"resources": [REMOVED_PROJECT],
+                           "restrictedServices": [SERVICE],
+                           "ingressPolicies": [], "egressPolicies": []},
+                "useExplicitDryRunSpec": False}
+    assert detect_kind(nameless) == "vpc_sc_perimeter"
+    found = vpcsc(ground_policy(nameless, estate, baseline=nameless))
+
+    assert triples(found) == [("grounded", "vpcsc_egress", ""),
+                              ("grounded", "vpcsc_ingress", ""),
+                              ("grounded", "vpcsc_protection", "")]
+    assert all(v.message.startswith("servicePerimeter: ") for v in found)
