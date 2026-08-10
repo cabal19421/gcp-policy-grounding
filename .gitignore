@@ -7,3 +7,9 @@ dist/
 *.egg-info/
 designs/
 demo/
+
+# Agent tooling — the published project is agent-agnostic; nothing
+# Claude Code / Anthropic specific is tracked.
+.claude/
+CLAUDE.md
+.mcp.json
