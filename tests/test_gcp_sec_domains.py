@@ -209,6 +209,12 @@ def expected_extractors():
 def test_register_is_idempotent(monkeypatch):
     """The second call registers nothing — asserted by a counter."""
     sec_domains.reset()
+    # The base-collection overrides land only over the shipped built-ins
+    # (a prior registration outranks a side-effect import), so put the
+    # built-ins back: the fixture's own register() left the wrappers in
+    # place, and counting a skipped override would read as a lost one.
+    for name in sec_domains.BASE_COLLECTION_OVERRIDES:
+        sec_rules.EXTRACTORS[name] = getattr(sec_rules, name)
     calls = {"collections": 0, "extractors": 0}
     real_collection = sec_ast.register_collection
     real_extractor = sec_rules.register_extractor
