@@ -45,7 +45,7 @@ Exit codes carry the gate's honesty contract:
 - ``1`` — something is ungrounded or contradicted;
 - ``2`` — a usage error in NORMAL mode (bad flags, no snapshot), or a real
   ungrounded/contradicted finding in ``--hook`` mode — ``2`` is the
-  Claude-Code blocking exit code, and the findings go to stderr so the hook
+  editor agent's blocking exit code, and the findings go to stderr so the hook
   runner feeds them back to the agent. In hook mode there is no such thing as
   a usage error: an unusable invocation reports itself on stderr and exits 0,
   because a misconfigured hook must degrade to checking nothing, never to
@@ -158,7 +158,7 @@ the document is not grounded at all: one verdict carrying
 run produced no grounding, and fail-open (exit 0, one stderr note) in ``--hook``
 mode.
 
-``--hook`` reads a Claude-Code PostToolUse event (JSON on stdin), pulls the
+``--hook`` reads the editor agent's PostToolUse event (JSON on stdin), pulls the
 edited file out of ``tool_input.file_path``, and grounds it when it looks
 like a policy document (``.tf``/``.json``, case-insensitive, matching the
 gate's suffix rules). Everything else — unparsable
@@ -240,7 +240,7 @@ and the default contract is silence on a passing run.
 
 The eventual replacement is structured JSON on stdout — a
 ``hookSpecificOutput`` object with an ``additionalContext`` field, which
-Claude Code feeds to the agent without blocking, so the ignorance would reach
+the hook runner feeds to the agent without blocking, so the ignorance would reach
 the agent as data rather than as prose on stderr. That option needs stdout,
 and the stdout-is-empty invariant of hook mode is preserved here deliberately
 — the notes go to stderr alone — so it stays available.
@@ -398,7 +398,7 @@ Its exit codes are NOT the gate's, and it is not a gate:
 - ``2`` — a usage error ONLY (an unknown ``--include`` category, an unwritable
   output path, a ``--captured-at`` that is not ISO-8601, ``--source hcl``
   together with ``--no-hcl``). NEVER for a partial or empty capture: ``2`` is
-  Claude Code's blocking code and this subcommand blocks nothing.
+  the editor agent's blocking code and this subcommand blocks nothing.
 
 The coverage summary is printed before returning on EVERY path, successful or
 empty: a user must never receive a snapshot without being told what it does not
@@ -638,7 +638,7 @@ _STALENESS_ADVICE = (
 
 EXIT_OK = 0
 EXIT_FAILED = 1
-#: Usage errors, and hook-mode gate failures (Claude Code's blocking code).
+#: Usage errors, and hook-mode gate failures (the editor agent's block code).
 EXIT_BLOCK = 2
 
 
@@ -679,7 +679,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="dump the z3 constraints generated this run to stderr")
     verify.add_argument(
         "--hook", action="store_true",
-        help="read a Claude-Code PostToolUse event JSON on stdin and ground "
+        help="read an editor-agent PostToolUse event JSON on stdin and ground "
              "the edited .tf/policy file; findings block via exit 2 + stderr")
     verify.add_argument(
         "--bash-policy", choices=_BASH_POLICIES, default=None,
@@ -780,7 +780,7 @@ def _add_capture_terraform(sub: Any) -> None:
                     "terraform and not a failure; 1 when no terraform artifact "
                     "could be classified or every reader failed, so nothing was "
                     "captured; 2 for usage errors ONLY. A partial or empty "
-                    "capture is NEVER a 2: that is Claude Code's blocking code "
+                    "capture is NEVER a 2: that is the editor agent's block code "
                     "and this subcommand is not a gate.")
     capture.add_argument(
         "paths", nargs="+", metavar="PATH",
@@ -1799,7 +1799,7 @@ def _narrative_lines(path: str, baseline: str | None, ground: _Ground,
     return lines
 
 
-# -- --hook: Claude-Code PostToolUse ------------------------------------------
+# -- --hook: the editor agent's PostToolUse -----------------------------------
 
 
 def _run_hook(args: argparse.Namespace) -> int:
@@ -1998,7 +1998,7 @@ def _hook_bash(event: Mapping[str, Any],
     ``argv[0]`` — a non-shell field that happens to be called ``command`` will
     not have ``gcloud`` there.
 
-    A command-bearing event belongs to this arm alone: Claude-Code events carry
+    A command-bearing event belongs to this arm alone: editor-agent events carry
     either a ``command`` or a ``file_path``, never both, so returning an exit
     code here takes nothing away from the file arm.
     """
@@ -2188,7 +2188,7 @@ def _cmd_capture_terraform(args: argparse.Namespace) -> int:
     EXIT CODES, and they are NOT the gate's: 0 when a snapshot was written even
     when coverage is partial, 1 when nothing could be captured, 2 for usage
     errors only. A partial capture is the normal case for terraform, so making
-    it a 2 would hand Claude Code a blocking code for a healthy run.
+    it a 2 would hand the editor agent a blocking code for a healthy run.
     """
     try:
         from . import estate

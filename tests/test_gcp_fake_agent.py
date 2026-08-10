@@ -3,7 +3,7 @@
 The process-boundary tests (a real ``gcp-ground verify-policy --hook`` child fed
 these envelopes) belong to the adversarial-family modules. Here the questions
 are purely local: does a turn mutate the file *before* it describes it, is the
-envelope the full realistic Claude-Code payload, and is the whole thing
+envelope the full realistic agent-host payload, and is the whole thing
 byte-reproducible across two agents built from the same script?
 """
 

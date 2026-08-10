@@ -55,7 +55,7 @@ NO_Z3_EXPLAIN_NOTE = ("  (z3 is not available — no constraints were generated;
 
 
 def hook_event(path) -> dict:
-    """A Claude-Code PostToolUse event naming *path* as the edited file."""
+    """An editor-agent PostToolUse event naming *path* as the edited file."""
     return {
         "session_id": "hookrunner-self-test",
         "hook_event_name": "PostToolUse",

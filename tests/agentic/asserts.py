@@ -290,7 +290,7 @@ def assert_blocked(outcome, *substrings: str, expect_render: bool = True) -> Non
     """The proposal was BLOCKED: exit 2, nothing on stdout, the finding on
     stderr.
 
-    Exit 2 is Claude Code's blocking code and stderr is what the hook runner
+    Exit 2 is the editor agent's blocking code and stderr is what the hook runner
     feeds back to the agent, so both halves are the contract — a finding
     printed to stdout would block the edit while telling the agent nothing.
 

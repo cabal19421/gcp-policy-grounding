@@ -55,7 +55,7 @@ def bad_policy(policies_dir):
 
 
 def hook_event(path, tool_name="Write", hook_event_name="PostToolUse") -> dict:
-    """A Claude-Code event naming *path* as the file *tool_name* touched.
+    """An editor-agent event naming *path* as the file *tool_name* touched.
 
     Either key can be dropped entirely by passing :data:`_ABSENT`, and
     *tool_name* can be any JSON value — the malformed-envelope cases below need

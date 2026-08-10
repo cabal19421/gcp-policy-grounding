@@ -1,8 +1,8 @@
 """The hook's ENVELOPE CONTRACT: which event fields it reads, and which it does not.
 
-``gcp-ground verify-policy --hook`` is handed a whole Claude-Code hook event and
+``gcp-ground verify-policy --hook`` is handed a whole agent-host hook event and
 looks at almost none of it. That blindness is deliberate and it is load-bearing
-— an event key the gate does not read is a key a future Claude Code release can
+— an event key the gate does not read is a key a future agent-host release can
 rename, drop or repurpose without silently turning the guardrail off — but until
 this module existed it was nowhere written down. It survived only as the absence
 of code, which is the one property a reader cannot check and a refactor cannot
@@ -69,7 +69,7 @@ exit-code cases and nine stdin payloads.
 #
 # EVERY OTHER KEY IS DECORATIVE — session_id, transcript_path, cwd,
 # permission_mode, tool_response, tool_input.content, tool_input.new_string,
-# tool_input.notebook_path, and any key a future Claude Code release adds. That
+# tool_input.notebook_path, and any key a future agent-host release adds. That
 # list is what the "ignored" half of this module defends.
 
 from __future__ import annotations
@@ -112,7 +112,7 @@ CLEAN_POLICY_TEXT = json.dumps(
 def envelope(bad_policy, **overrides) -> dict:
     """A realistic, BLOCKING PostToolUse envelope, with *overrides* applied.
 
-    Every decorative field a real Claude-Code event carries is present and
+    Every decorative field a real agent-host event carries is present and
     plausible, so a mutation test changes exactly one thing about an otherwise
     ordinary event. Passing :data:`_ABSENT` for a key removes it entirely.
 
@@ -204,7 +204,7 @@ def test_e01_a_minimal_event_is_a_tool_input_with_a_file_path(
     {"file_path": ...}}`` — no ``session_id``, no ``transcript_path``, no
     ``cwd``, no ``tool_response``, nothing else — and it still blocks.
 
-    The two identifying fields present in every real Claude-Code envelope are
+    The two identifying fields present in every real agent-host envelope are
     therefore NOT required. That matters twice over: a hand-rolled or
     third-party hook runner that omits them is still gated, and the gate cannot
     grow a dependency on session bookkeeping without this test going red.
@@ -314,8 +314,8 @@ def test_cwd_is_ignored(cwd, bad_policy, estate_snapshot_path,
     ids=["absent", "bypass-permissions", "plan"])
 def test_permission_mode_is_ignored(permission_mode, bad_policy,
                                     estate_snapshot_path, baseline_outcome):
-    """``bypassPermissions`` is the one that matters. It relaxes Claude Code's
-    OWN permission prompts, and a guardrail that read it would let the operator
+    """``bypassPermissions`` is the one that matters. It relaxes the editor
+    agent's OWN permission prompts, and a guardrail that read it would let the operator
     turn the gate off from inside the session it is meant to constrain. It is
     not a grounding input, so it is not read."""
     outcome = run_hook(envelope(bad_policy, permission_mode=permission_mode),
@@ -350,7 +350,7 @@ def test_tool_response_is_ignored(tool_response, bad_policy,
 def test_an_unknown_top_level_key_is_ignored(bad_policy, estate_snapshot_path,
                                              baseline_outcome):
     """FORWARD COMPATIBILITY. A key this release has never heard of — the shape
-    every future Claude Code addition arrives in — changes nothing."""
+    every future agent-host protocol addition arrives in — changes nothing."""
     outcome = run_hook(
         envelope(bad_policy, some_future_field={"nested": ["value", 1, None]}),
         snapshot=estate_snapshot_path)
@@ -408,8 +408,8 @@ def test_e04_stdout_is_always_empty_in_hook_mode(
     abstain, a fail-open and an ``--explain`` run.
 
     stdout is the channel a future structured-output contract would claim: a
-    ``hookSpecificOutput`` object with ``additionalContext``, which Claude Code
-    ingests as data instead of prose. Keeping it byte-empty today is what keeps
+    ``hookSpecificOutput`` object with ``additionalContext``, which the editor
+    agent ingests as data instead of prose. Keeping it byte-empty today is what keeps
     that option open, so this is an invariant and not an accident.
     """
     if case == "pass":
@@ -470,7 +470,7 @@ def test_e06_the_hook_emits_no_structured_output(baseline_outcome):
     This assertion is meant to be *deleted* one day, together with the change
     that adds structured output. Until then it is what stops the two contracts
     from being half-implemented at once — a JSON blob on stderr that nothing
-    reads, or a ``decision`` key that Claude Code ignores because it is on the
+    reads, or a ``decision`` key that the editor agent ignores because it is on the
     wrong stream.
     """
     stderr = baseline_outcome.stderr
@@ -490,7 +490,7 @@ def test_e07_hook_exit_codes_are_only_0_or_2(
     ``{0, 2}``.
 
     ``1`` is the whole point. In NORMAL mode 1 means "ungrounded or
-    contradicted", but Claude Code reads any nonzero-but-not-2 exit as *the hook
+    contradicted", but the editor agent reads any nonzero-but-not-2 exit as *the hook
     itself failed* and surfaces it as a hook error rather than as feedback to
     the agent — so a hook that returned 1 would report real findings through a
     channel that discards them. Hook mode must never produce it, and every arm

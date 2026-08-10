@@ -328,7 +328,7 @@ def test_hook_good_policy_is_silent_and_passes(capsys, monkeypatch):
 
 def test_hook_bad_policy_blocks_with_findings_on_stderr(capsys, monkeypatch):
     code, out, err = run_hook(capsys, monkeypatch, hook_event(BAD))
-    assert code == 2  # Claude Code's blocking exit code
+    assert code == 2  # the editor agent's blocking exit code
     assert out == ""
     assert "FAILED" in err and "roles/bigquery.reader" in err
 

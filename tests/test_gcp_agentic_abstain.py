@@ -125,7 +125,7 @@ _CONFIGMAP = {
 
 
 def hook_event(path) -> dict:
-    """A Claude-Code PostToolUse event naming *path* as the edited file."""
+    """An editor-agent PostToolUse event naming *path* as the edited file."""
     return {
         "session_id": "abstain-bucket",
         "hook_event_name": "PostToolUse",
@@ -432,7 +432,7 @@ def test_c03_deep_nesting_abstains_without_a_traceback(
     scanner, shallow enough that the child stays fast.
 
     The failure mode being excluded is a traceback escaping ``ground_policy``:
-    a crash in the hook is an exit code Claude Code reads as *something*, and
+    a crash in the hook is an exit code the editor agent reads as *something*, and
     a gate that dies on a pathological file is a gate someone disables.
     """
     document = tmp_path / "deeply_nested.json"

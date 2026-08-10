@@ -1,4 +1,4 @@
-"""A deterministic scripted emitter of Claude-Code tool events — NOT an LLM.
+"""A deterministic scripted emitter of editor-agent tool events — NOT an LLM.
 
 There is no network call, no API key and no model call anywhere in this module:
 :class:`FakeAgent` replays a fixed ``script`` of :class:`Proposal` objects. That
@@ -33,7 +33,7 @@ The one subtlety in that ordering: an ``Edit`` event's ``old_string`` is the
 the file. It is captured inside :meth:`~FakeAgent.turn` and passed into
 :meth:`~FakeAgent.envelope`, which itself never touches disk.
 
-The emitted envelope is the FULL realistic Claude-Code payload even though the
+The emitted envelope is the FULL realistic agent-host payload even though the
 hook reads only ``tool_input.file_path``. Emitting the whole thing is precisely
 what makes this a contract test: if the CLI ever starts reading
 ``tool_response`` or ``cwd``, these events already carry them, and the
@@ -106,7 +106,7 @@ EXPECTATIONS = ("block", "pass", "abstain")
 #: ``permission_mode`` on every emitted event.
 PERMISSION_MODE = "default"
 
-#: Claude Code's default Bash timeout, in milliseconds.
+#: The editor agent's default Bash timeout, in milliseconds.
 BASH_TIMEOUT_MS = 120000
 
 #: The parenthesised did-you-mean list the human renderer appends at

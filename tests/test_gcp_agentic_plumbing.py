@@ -20,7 +20,7 @@ from tests.agentic.budget import SubprocessBudget
 # every test still sees them gone — see
 # ``test_sec_llm_env_is_scrubbed_for_the_whole_session``.
 os.environ["GCP_SEC_LLM"] = "1"
-os.environ["GCP_SEC_LLM_MODEL"] = "claude-opus-4-8"
+os.environ["GCP_SEC_LLM_CMD"] = "some-llm --json"
 os.environ["GCP_SEC_LLM_TIMEOUT"] = "60"
 
 
@@ -350,7 +350,7 @@ def test_blocked_import_env_aliases(blocked_import_env, no_z3_env, no_tf_claims_
 
 def test_sec_llm_env_is_scrubbed_for_the_whole_session():
     assert "GCP_SEC_LLM" not in os.environ
-    assert "GCP_SEC_LLM_MODEL" not in os.environ
+    assert "GCP_SEC_LLM_CMD" not in os.environ
     assert "GCP_SEC_LLM_TIMEOUT" not in os.environ
 
 

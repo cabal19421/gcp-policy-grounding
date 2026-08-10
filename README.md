@@ -1,11 +1,15 @@
 # gcp-policy-grounding
 
-A **neuro-symbolic grounding gate** for Google Cloud IAM allow/deny policies,
-Organization Policy, and the Terraform that generates them. It catches the
-policy analog of code hallucination: an LLM (or a human) confidently writing
-`roles/bigquery.reader` (doesn't exist) instead of `roles/bigquery.dataViewer`,
-binding a service account nobody created, or putting list values on a boolean
-org-policy constraint.
+A **neuro-symbolic grounding gate** for Google Cloud policy changes — IAM
+allow/deny policies, Organization Policy, VPC and hierarchical firewalls,
+Cloud Armor, VPC Service Controls, and the Terraform that generates all of
+them. It catches the policy analog of code hallucination — an LLM (or a human)
+confidently writing `roles/bigquery.reader` (doesn't exist) instead of
+`roles/bigquery.dataViewer`, binding a service account nobody created, putting
+list values on a boolean org-policy constraint — and the provably dangerous
+change a linter can't see: a firewall allow inserted ahead of the deny that
+used to cover it, a perimeter quietly flipped to dry-run, `roles/owner`
+granted outside your domain.
 
 Every claim a policy makes lands in one of four honest buckets:
 
@@ -22,6 +26,24 @@ of the GCP estate (offline, deterministic, no credentials). Satisfiability and
 comparison questions — "is this CEL condition ever true?", "does the new policy
 grant a strict subset of the old one?" — go to **z3** when installed, and
 degrade to explicit `unverified` when not.
+
+## What it checks — supported policy surfaces
+
+| Surface | Documents read | Checks |
+| --- | --- | --- |
+| **IAM allow policies** | policy JSON, terraform | role/permission/principal existence with did-you-mean; CEL condition satisfiability (dead bindings); escalation-class warnings; public-principal blocking; new⊆old widening against a baseline |
+| **IAM deny policies** (v2) | deny-policy JSON | denied-permission existence; deny-rule semantics, exceptions honestly abstained |
+| **Organization Policy** | v1 + v2 JSON, terraform | constraint existence; boolean/list value-type contradictions; enforce-flip detection; all three disablement spellings |
+| **VPC firewall rules** | firewall JSON, terraform | world-open exposure via the packet algebra (CIDR/port/protocol bit-vectors); pair non-enlargement; estate-level shadowing and re-opening by priority |
+| **Hierarchical firewall policies** | policy JSON, terraform | cross-level evaluation order and `goto_next`; a folder allow re-opening an org deny; placement and replacement |
+| **Cloud Armor** | security-policy JSON, terraform | priority-order bypass; default-rule removal; match-expression grounding over the offline-decidable subset |
+| **VPC Service Controls** | perimeter / access-level JSON, terraform | perimeter shrink; restricted-service removal; ingress/egress widening (`ANY_IDENTITY`, wildcards); dry-run flips; ghost access levels |
+| **Custom roles** | role JSON, terraform | every included permission must exist in the estate's enumeration |
+| **Shell commands** | `gcloud` `gsutil` `bq` `terraform` `kubectl` `curl` text | state-mutation classification (audit via `scan-command`, blocking via the hook's `--bash-policy`) |
+
+Every surface gets the same four-bucket honesty contract, and every domain can
+carry compiled promises from your requirements (`iam`, `vpc_firewall`,
+`hier_firewall`, `cloud_armor`, `org_policy`, `vpc_sc`).
 
 ## Quick start
 
@@ -575,7 +597,7 @@ python3 show_promises.py demo/compiled
 .venv/bin/gcp-ground scan-command --command \
     'gcloud projects add-iam-policy-binding acme-prod --member=user:x@evil.example --role=roles/owner'
 
-# 6. Hook mode — the exact PostToolUse event Claude Code sends on a file
+# 6. Hook mode — the exact PostToolUse event the editor agent sends on a file
 #    edit. The attack exits 2 (the blocking code) with findings on stderr;
 #    a benign edit exits 0 in byte-for-byte silence.
 printf '{"hook_event_name":"PostToolUse","tool_name":"Write","tool_input":{"file_path":"%s"}}' \

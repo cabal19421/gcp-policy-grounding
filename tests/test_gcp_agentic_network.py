@@ -7,7 +7,7 @@ of the estate's deny, and a Cloud Armor policy losing its terminal default
 rule — plus four benign counterparts that must pass in byte-silence. Every one
 is driven by :class:`tests.agentic.fake_agent.FakeAgent` writing the document
 and by :func:`tests.agentic.hookrunner.run_hook` spawning the gate, so what is
-asserted is the contract Claude Code actually consumes: an exit code and two
+asserted is the contract the editor agent actually consumes: an exit code and two
 streams, not an in-process return value.
 
 **Every fixture is a plan document.** Raw HCL is unparseable offline and always

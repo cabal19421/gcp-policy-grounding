@@ -361,7 +361,7 @@ def test_dry_run_writes_nothing_and_still_prints_the_summary(capsys, tmp_path):
 
 
 def test_an_empty_directory_exits_one_and_writes_nothing(capsys, tmp_path):
-    """Nothing captured is exit 1 — never 2, which is Claude Code's blocking
+    """Nothing captured is exit 1 — never 2, the editor agent's blocking
     code — with the examined paths named and the coverage summary still
     printed."""
     if degradation_is_honest(capsys):

@@ -1,9 +1,9 @@
 """The optional LLM assist (:mod:`gcp_grounding.sec_llm`) — fully offline.
 
-Every test injects its own ``runner``, so the default ``claude`` subprocess path
-is never taken; an autouse fixture makes that a hard assertion by replacing
+Every test injects its own ``runner``, so the default subprocess path is never
+taken; an autouse fixture makes that a hard assertion by replacing
 ``subprocess.run`` with a detonator for the whole module. Nothing here needs a
-network, an API key or the ``claude`` binary.
+network, an API key or any LLM CLI on ``PATH``.
 
 What the suite is really proving is the safety chain: the assist emits only the
 authoring syntax a human writes, so a hallucinated role dies at vocabulary
@@ -117,15 +117,34 @@ def _by_id(doc):
 
 def test_available_is_false_without_the_env_var(monkeypatch):
     monkeypatch.delenv(sec_llm.LLM_ENV, raising=False)
-    monkeypatch.setattr(sec_llm.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setenv(sec_llm.LLM_CMD_ENV, "some-llm --json")
+    monkeypatch.setattr(sec_llm.shutil, "which", lambda name: "/usr/bin/" + name)
     assert sec_llm.available() is False
 
 
-def test_available_needs_the_binary_too(monkeypatch):
+def test_available_is_false_without_the_command(monkeypatch):
+    # GCP_SEC_LLM=1 alone is not enough: no command means unavailable, even on
+    # a machine where which() would resolve anything asked of it.
     monkeypatch.setenv(sec_llm.LLM_ENV, "1")
+    monkeypatch.delenv(sec_llm.LLM_CMD_ENV, raising=False)
+    monkeypatch.setattr(sec_llm.shutil, "which", lambda name: "/usr/bin/" + name)
+    assert sec_llm.available() is False
+    # Blank and unsplittable command lines are the same honest "off".
+    monkeypatch.setenv(sec_llm.LLM_CMD_ENV, "   ")
+    assert sec_llm.available() is False
+    monkeypatch.setenv(sec_llm.LLM_CMD_ENV, "some-llm 'unterminated")
+    assert sec_llm.available() is False
+    # Both halves set and argv[0] resolvable: on.
+    monkeypatch.setenv(sec_llm.LLM_CMD_ENV, "some-llm --json")
+    assert sec_llm.available() is True
+
+
+def test_available_needs_the_executable_too(monkeypatch):
+    monkeypatch.setenv(sec_llm.LLM_ENV, "1")
+    monkeypatch.setenv(sec_llm.LLM_CMD_ENV, "some-llm --json")
     monkeypatch.setattr(sec_llm.shutil, "which", lambda name: None)
     assert sec_llm.available() is False
-    monkeypatch.setattr(sec_llm.shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr(sec_llm.shutil, "which", lambda name: "/usr/bin/" + name)
     assert sec_llm.available() is True
     # Only the exact string "1" enables it.
     monkeypatch.setenv(sec_llm.LLM_ENV, "true")
@@ -134,9 +153,11 @@ def test_available_needs_the_binary_too(monkeypatch):
 
 def test_propose_block_without_a_runner_stays_off(monkeypatch):
     monkeypatch.delenv(sec_llm.LLM_ENV, raising=False)
+    monkeypatch.delenv(sec_llm.LLM_CMD_ENV, raising=False)
     with pytest.raises(sec_llm.LlmUnavailable) as exc:
         sec_llm.propose_block(SENTENCE)
     assert sec_llm.LLM_ENV in str(exc.value)
+    assert sec_llm.LLM_CMD_ENV in str(exc.value)
 
 
 # -- the prompt ---------------------------------------------------------------

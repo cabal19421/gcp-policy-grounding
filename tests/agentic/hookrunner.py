@@ -7,11 +7,11 @@ explain variants) and the sidecar :func:`ground_json`, so the process boundary
 here, instead of being re-guessed per module.
 
 Why a subprocess at all, when 233 in-process tests already exercise the gate:
-the hook contract Claude Code actually consumes is *exit code 2 plus stderr*,
-produced by a child interpreter reading a JSON event on stdin. An in-process
-call to :func:`~gcp_grounding.cli.main` cannot observe argv assembly, stdin
-decoding, the environment fallback, or a crash that never reaches
-``sys.exit``.
+the hook contract the editor agent actually consumes is *exit code 2 plus
+stderr*, produced by a child interpreter reading a JSON event on stdin. An
+in-process call to :func:`~gcp_grounding.cli.main` cannot observe argv
+assembly, stdin decoding, the environment fallback, or a crash that never
+reaches ``sys.exit``.
 
 Determinism of the child environment is the load-bearing detail. The child
 starts from ``os.environ`` — a developer's ``PATH``, ``HOME`` and locale must
@@ -19,9 +19,9 @@ survive — and then every environment variable this repo reads is
 unconditionally removed (see :data:`SCRUBBED_ENV`), whatever the developer has
 exported. ``GCP_SEC_LLM`` is then set to ``"0"`` rather than merely left unset:
 :func:`sec_llm.available` is true when ``GCP_SEC_LLM=1`` *and*
-``shutil.which("claude")`` is non-None, so a developer with both exported would
-hand the child a live LLM path and break the fully-offline guarantee in a way
-that reproduces on exactly one machine. Setting it explicitly also makes the
+``GCP_SEC_LLM_CMD`` names an on-PATH command, so a developer with both exported
+would hand the child a live LLM path and break the fully-offline guarantee in a
+way that reproduces on exactly one machine. Setting it explicitly also makes the
 intent visible in a ``ps -e`` listing or a crash dump, where an absent variable
 is invisible.
 
@@ -107,7 +107,7 @@ SCRUBBED_ENV = (
     "GCP_GROUNDING_REQUIREMENTS",
     "GCP_TEST_BLOCK_IMPORTS",
     "GCP_SEC_LLM",
-    "GCP_SEC_LLM_MODEL",
+    "GCP_SEC_LLM_CMD",
     "GCP_SEC_LLM_TIMEOUT",
 )
 

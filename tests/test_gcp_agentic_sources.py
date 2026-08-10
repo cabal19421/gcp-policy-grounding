@@ -376,7 +376,7 @@ def test_drift_policy_block_blocks_through_the_hook_envelope(runs):
     material drift on stderr and stdout byte-empty.
 
     In process this is ``report.ok`` going False; through the envelope it is the
-    Claude-Code blocking code plus the rendered report on the stream the hook
+    editor agent's blocking code plus the rendered report on the stream the hook
     runner feeds back to the agent. Nothing else in the suite pins that the
     second follows from the first.
     """

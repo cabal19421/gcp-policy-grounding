@@ -648,7 +648,7 @@ PRODUCT_ESCALATIONS: tuple[ProductEscalation, ...] = (
             "On a machine whose solver is installed but not initialisable — a "
             "mismatched libz3, a wrong-arch wheel — the gate writes that line "
             "to the hook's stderr ONCE PER TOOL CALL. The hook's stderr is a "
-            "contract surface: Claude Code feeds it back to the agent, and the "
+            "contract surface: the hook runner feeds it back to the agent; the "
             "operator reads it. A guardrail that chatters on every clean edit "
             "is a guardrail that gets switched off. Nothing downstream may "
             "claim unconditional byte-silence without naming the filtered line "

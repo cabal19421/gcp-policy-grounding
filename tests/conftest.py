@@ -188,14 +188,14 @@ def _scrub_sec_llm_env():
     """Guarantee the fully-offline contract for the whole run.
 
     ``sec_llm.available()`` is True when ``GCP_SEC_LLM=1`` and
-    ``shutil.which("claude")`` is non-None, so a developer with both could
+    ``GCP_SEC_LLM_CMD`` names an on-PATH command, so a developer with both could
     otherwise reach the default runner from any in-process test that touches the
     sec-llm path — for reasons unrelated to that test's intent.
     ``hookrunner.run_hook`` scrubs the same three names from its *child* env;
     this fixture covers the in-process half. It runs after collection, so a
     module that set these at import time still sees them gone inside every test.
     """
-    for name in ("GCP_SEC_LLM", "GCP_SEC_LLM_MODEL", "GCP_SEC_LLM_TIMEOUT"):
+    for name in ("GCP_SEC_LLM", "GCP_SEC_LLM_CMD", "GCP_SEC_LLM_TIMEOUT"):
         os.environ.pop(name, None)
 
 

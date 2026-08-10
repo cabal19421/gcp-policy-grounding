@@ -27,11 +27,12 @@ decision:
 There is no path from this module into the gate that skips those steps: it never
 writes an artifact, never registers a check, and never constructs an AST itself.
 
-OPT IN TWICE. :func:`available` is True only when ``GCP_SEC_LLM=1`` *and* a
-``claude`` binary is on ``PATH``. The default runner shells out to that binary
-and is NEVER exercised by the test suite; every test injects its own ``runner``.
-No model id is hardcoded — ``GCP_SEC_LLM_MODEL`` overrides the CLI's configured
-default only when the operator sets it, so this module cannot go stale.
+OPT IN TWICE. :func:`available` is True only when ``GCP_SEC_LLM=1`` *and*
+``GCP_SEC_LLM_CMD`` names a command whose executable is on ``PATH``. The default
+runner shells out to that command and is NEVER exercised by the test suite;
+every test injects its own ``runner``. No vendor binary and no model id is
+hardcoded — the operator writes the whole command line, model flags included,
+into ``GCP_SEC_LLM_CMD``, so this module cannot go stale.
 
 THE REVIEW MARKER. :func:`annotate_document` writes each proposed block into the
 markdown with :data:`MARKER` as the first line inside the block. Its presence
@@ -51,6 +52,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -63,7 +65,7 @@ from .core.report import GroundingReport, Verdict
 logger = get_logger(__name__)
 
 __all__ = [
-    "LLM_ENV", "LLM_MODEL_ENV", "LLM_TIMEOUT_ENV", "DEFAULT_TIMEOUT",
+    "LLM_ENV", "LLM_CMD_ENV", "LLM_TIMEOUT_ENV", "DEFAULT_TIMEOUT",
     "MARKER", "REVIEW_REASON", "SMT_KEYWORDS", "TERM_KEYWORDS",
     "LlmUnavailable", "available", "build_prompt", "propose_block",
     "extract_block", "annotate_document", "marked_ids", "compile_with_review",
@@ -75,9 +77,10 @@ __all__ = [
 #: Must equal exactly ``"1"`` to enable the assist. Half of the opt-in.
 LLM_ENV = "GCP_SEC_LLM"
 
-#: Optional model id passed through as ``--model``. Unset means the CLI's own
-#: configured default, which is why no model id appears anywhere in this file.
-LLM_MODEL_ENV = "GCP_SEC_LLM_MODEL"
+#: The command line the default runner executes — split with :func:`shlex.split`,
+#: prompt on stdin. The other half of the opt-in: unset means unavailable, which
+#: is why no vendor command and no model id appears anywhere in this file.
+LLM_CMD_ENV = "GCP_SEC_LLM_CMD"
 
 #: Subprocess timeout in seconds; unset or unparseable means
 #: :data:`DEFAULT_TIMEOUT`.
@@ -98,9 +101,25 @@ class LlmUnavailable(Exception):
     """The assist could not produce a candidate; the reason is the message."""
 
 
+def _command() -> list[str]:
+    """The argv :data:`LLM_CMD_ENV` names, or ``[]`` when unset or unsplittable."""
+    raw = os.environ.get(LLM_CMD_ENV, "")
+    if not raw.strip():
+        return []
+    try:
+        return shlex.split(raw)
+    except ValueError as exc:
+        logger.warning("%s=%r cannot be split into a command: %s",
+                       LLM_CMD_ENV, raw, exc)
+        return []
+
+
 def available() -> bool:
-    """True only when the env var is exactly ``"1"`` AND ``claude`` is on PATH."""
-    return os.environ.get(LLM_ENV) == "1" and shutil.which("claude") is not None
+    """True only when the env var is exactly ``"1"`` AND :data:`LLM_CMD_ENV`
+    names a command whose executable is on ``PATH``."""
+    argv = _command()
+    return (os.environ.get(LLM_ENV) == "1" and bool(argv)
+            and shutil.which(argv[0]) is not None)
 
 
 def _timeout() -> float:
@@ -290,46 +309,52 @@ smt:
 # -- the runner seam ----------------------------------------------------------
 
 def _default_runner(prompt: str) -> str:
-    """Shell out to the ``claude`` CLI. NEVER exercised by the test suite.
+    """Run the configured LLM command. NEVER exercised by the test suite.
 
-    Appends ``--model`` only when :data:`LLM_MODEL_ENV` is set, so the CLI's own
-    configured default is used and no model id is pinned here. Every failure
-    mode — missing binary, timeout, non-zero exit, output that is not the JSON
-    envelope ``--output-format json`` promises — raises :class:`LlmUnavailable`
-    naming the reason.
+    The command line is :data:`LLM_CMD_ENV` verbatim — argv via
+    :func:`shlex.split`, the prompt on stdin, the reply on stdout either as
+    plain text or as a JSON ``{"result": ...}`` envelope (:func:`_unwrap`
+    accepts both). Every failure mode — missing executable, timeout, non-zero
+    exit — raises :class:`LlmUnavailable` naming the reason.
     """
-    argv = ["claude", "-p", "--output-format", "json"]
-    model = os.environ.get(LLM_MODEL_ENV)
-    if model:
-        argv += ["--model", model]
+    argv = _command()
+    if not argv:
+        raise LlmUnavailable(f"{LLM_CMD_ENV} does not name a command")
     timeout = _timeout()
     try:
         proc = subprocess.run(argv, input=prompt, capture_output=True, text=True,
                               timeout=timeout, check=False)
     except FileNotFoundError as exc:
-        raise LlmUnavailable(f"the 'claude' CLI is not on PATH: {exc}") from exc
+        raise LlmUnavailable(f"the LLM command {argv[0]!r} is not on PATH: {exc}") from exc
     except subprocess.TimeoutExpired as exc:
-        raise LlmUnavailable(f"the 'claude' CLI did not answer within {timeout}s") from exc
+        raise LlmUnavailable(f"the LLM command did not answer within {timeout}s") from exc
     except OSError as exc:
-        raise LlmUnavailable(f"the 'claude' CLI could not be run: {exc}") from exc
+        raise LlmUnavailable(f"the LLM command could not be run: {exc}") from exc
     if proc.returncode != 0:
         detail = (proc.stderr or "").strip().splitlines()
         tail = detail[-1] if detail else "no stderr"
-        raise LlmUnavailable(f"the 'claude' CLI exited {proc.returncode}: {tail}")
+        raise LlmUnavailable(f"the LLM command exited {proc.returncode}: {tail}")
     return _unwrap(proc.stdout)
 
 
 def _unwrap(stdout: str) -> str:
-    """Pull the assistant text out of the ``--output-format json`` envelope."""
+    """The model text in *stdout*: a JSON envelope's ``result``, or the bytes
+    as-is.
+
+    Some CLIs emit a ``{"result": "<text>"}`` JSON envelope instead of the bare
+    reply; both shapes are accepted. Anything that is not that envelope is
+    returned verbatim as plain text — the strict fence extraction downstream
+    rejects a non-answer in the open, so nothing is guessed at here.
+    """
     try:
         payload = json.loads(stdout)
-    except ValueError as exc:
-        raise LlmUnavailable(f"the 'claude' CLI did not emit JSON: {exc}") from exc
+    except ValueError:
+        return stdout
     if isinstance(payload, Mapping):
         result = payload.get("result")
         if isinstance(result, str):
             return result
-    raise LlmUnavailable("the 'claude' CLI JSON has no string 'result' field")
+    return stdout
 
 
 # -- extraction ---------------------------------------------------------------
@@ -370,8 +395,8 @@ def propose_block(section_text: str, *, runner=None, collections=None) -> str:
     if call is None:
         if not available():
             raise LlmUnavailable(
-                f"the LLM assist is off: set {LLM_ENV}=1 and put the 'claude' CLI "
-                f"on PATH, or pass an explicit runner")
+                f"the LLM assist is off: set {LLM_ENV}=1 and point {LLM_CMD_ENV} "
+                f"at an on-PATH command, or pass an explicit runner")
         call = _default_runner
     return extract_block(call(prompt))
 
