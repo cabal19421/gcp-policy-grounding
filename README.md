@@ -688,6 +688,13 @@ no network. Run from the repo root after the Development setup above.
 | 4 | The attribute the provider doesn't know: `src_ranges` for `source_ranges` (step 10) | `examples/terraform-schema/proposal_typo.tf.json` | DENIED — `[tf_attribute]` ungrounded, with the did-you-mean naming `source_ranges` |
 | 4b | Version skew: an attribute absent from the captured provider schema (step 10) | `examples/terraform-schema/proposal_newer.tf.json` | DENIED — same finding, carrying the recapture guidance instead of a suggestion |
 | 4c | The clean counterpart (step 10) | `examples/terraform-schema/proposal_ok.tf.json` | APPROVED — every attribute is in the captured schema, so the family stays silent |
+| 4d | Policy configured, schema omitted (step 10) | `examples/terraform-schema/proposal_ok.tf.json`, no `--provider-schema` | APPROVED — with one honest `[tf_schema]` abstention naming what was not judged and the capture command |
+
+Two variations worth showing live: rerun 4 with `--schema-policy annotate`
+(the identical finding demoted to a warning at exit 0 — the hook-warns-while-
+CI-blocks pattern), and add `--provider-schema` to scenario 1's command (a
+valid configuration gains zero schema noise — its verdict counts are
+byte-identical with and without the schema).
 
 Steps 0–6 below are the non-terraform acts: the acceptance suite, compiling
 the promises, the REST attack, the hallucination did-you-mean, shell-command
