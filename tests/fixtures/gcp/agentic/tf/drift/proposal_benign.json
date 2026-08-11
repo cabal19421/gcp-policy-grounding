@@ -1,0 +1,21 @@
+{
+  "allow": [
+    {
+      "ports": [
+        "22"
+      ],
+      "protocol": "tcp"
+    }
+  ],
+  "direction": "INGRESS",
+  "name": "allow-internal-ssh",
+  "network": "projects/acme-prod/global/networks/prod-vpc",
+  "priority": 1000,
+  "project": "acme-prod",
+  "source_ranges": [
+    "10.0.0.0/16"
+  ],
+  "target_tags": [
+    "bastion"
+  ]
+}

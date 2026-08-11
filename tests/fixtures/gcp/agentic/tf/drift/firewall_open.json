@@ -1,0 +1,26 @@
+{
+  "action": "allow",
+  "destination_ranges": [],
+  "direction": "INGRESS",
+  "disabled": false,
+  "layer4": [
+    {
+      "ports": [
+        "22"
+      ],
+      "protocol": "tcp"
+    }
+  ],
+  "network": "projects/acme-prod/global/networks/prod-vpc",
+  "priority": 1000,
+  "source_ranges": [
+    "10.0.0.0/8",
+    "172.16.0.0/12"
+  ],
+  "source_service_accounts": [],
+  "source_tags": [],
+  "target_service_accounts": [],
+  "target_tags": [
+    "bastion"
+  ]
+}
