@@ -32,7 +32,10 @@ class SubprocessBudget:
     #: modules without deleting cases. The ceiling is therefore the measured
     #: integrated total plus headroom, and it still BITES: it is a hard aggregate
     #: cap, and each module's own teardown cap is unchanged and unrelaxed.
-    MAX_SUBPROCESS_SPAWNS = 450
+    #: 450 -> 466 when tx-agentic-tf-block (8 spawns) and tx-agentic-tf-drift
+    #: (6) landed: the measured total moved to 456, and the ceiling moved by
+    #: exactly the two modules' declared budgets plus two of headroom.
+    MAX_SUBPROCESS_SPAWNS = 466
 
     #: The env name the mutation contract's machinery stamps on every child it
     #: spawns. A spawn carrying it is counted against :attr:`max_marked` — the
