@@ -1,0 +1,117 @@
+{
+  "resource": {
+    "google_compute_firewall": {
+      "allow_internal_https": {
+        "allow": [{"ports": ["443"], "protocol": "tcp"}],
+        "destination_ranges": ["10.0.0.0/8"],
+        "direction": "INGRESS",
+        "name": "allow-internal-https",
+        "network": "projects/acme-prod/global/networks/prod-vpc",
+        "priority": 1000,
+        "project": "acme-prod",
+        "source_ranges": ["10.0.0.0/8"]
+      },
+      "egress_deny_world": {
+        "deny": [{"protocol": "all"}],
+        "destination_ranges": ["0.0.0.0/0"],
+        "direction": "EGRESS",
+        "name": "deny-egress-world",
+        "network": "projects/acme-prod/global/networks/prod-vpc",
+        "priority": 65534,
+        "project": "acme-prod"
+      },
+      "egress_internal": {
+        "allow": [{"ports": ["443"], "protocol": "tcp"}],
+        "destination_ranges": ["10.0.0.0/8"],
+        "direction": "EGRESS",
+        "name": "allow-egress-internal",
+        "network": "projects/acme-prod/global/networks/prod-vpc",
+        "priority": 1000,
+        "project": "acme-prod"
+      }
+    },
+    "google_compute_network": {
+      "prod_vpc": {
+        "auto_create_subnetworks": false,
+        "name": "prod-vpc",
+        "project": "acme-prod"
+      }
+    },
+    "google_org_policy_policy": {
+      "neg_no_internet": {
+        "name": "organizations/123456789012/policies/compute.disableInternetNetworkEndpointGroups",
+        "parent": "organizations/123456789012",
+        "spec": [{"rules": [{"enforce": "FALSE"}]}]
+      },
+      "run_ingress_internal": {
+        "name": "organizations/123456789012/policies/run.allowedIngress",
+        "parent": "organizations/123456789012",
+        "spec": [
+          {
+            "rules": [
+              {
+                "values": [
+                  {
+                    "allowed_values": ["internal", "internal-and-cloud-load-balancing"]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "security_contacts": {
+        "name": "organizations/123456789012/policies/essentialcontacts.allowedContactDomains",
+        "parent": "organizations/123456789012",
+        "spec": [{"rules": [{"values": [{"allowed_values": ["@acme.example"]}]}]}]
+      },
+      "serial_port_disabled": {
+        "name": "organizations/123456789012/policies/compute.disableSerialPortAccess",
+        "parent": "organizations/123456789012",
+        "spec": [{"rules": [{"enforce": "TRUE"}]}]
+      },
+      "storage_no_public": {
+        "name": "projects/acme-prod/policies/storage.publicAccessPrevention",
+        "parent": "projects/acme-prod",
+        "spec": [{"rules": [{"enforce": "TRUE"}]}]
+      },
+      "vm_no_external_ip": {
+        "name": "organizations/123456789012/policies/compute.vmExternalIpAccess",
+        "parent": "organizations/123456789012",
+        "spec": [{"rules": [{"values": [{"allowed_values": []}]}]}]
+      },
+      "vpc_peering_internal": {
+        "name": "organizations/123456789012/policies/compute.restrictVpcPeering",
+        "parent": "organizations/123456789012",
+        "spec": [
+          {
+            "rules": [
+              {
+                "values": [
+                  {
+                    "allowed_values": [
+                      "under:organizations/123456789012",
+                      "under:organizations/999999999999"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "google_project_iam_binding": {
+      "auditors": {
+        "members": ["group:security@acme.example"],
+        "project": "acme-prod",
+        "role": "roles/logging.viewer"
+      },
+      "ci_builds": {
+        "members": ["serviceAccount:ci-deployer@acme-prod.iam.gserviceaccount.com"],
+        "project": "acme-prod",
+        "role": "roles/cloudbuild.builds.editor"
+      }
+    }
+  }
+}

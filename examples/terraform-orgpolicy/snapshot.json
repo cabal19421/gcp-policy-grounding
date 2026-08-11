@@ -1,0 +1,171 @@
+{
+  "captured_at": "2026-07-25T08:00:00Z",
+  "constraints": {
+    "constraints/compute.disableInternetNetworkEndpointGroups": {
+      "description": "Disable internet network endpoint groups",
+      "value_type": "boolean"
+    },
+    "constraints/compute.disableSerialPortAccess": {
+      "description": "Disable VM serial port access",
+      "value_type": "boolean"
+    },
+    "constraints/compute.requireShieldedVm": {
+      "description": "Shielded VMs",
+      "value_type": "boolean"
+    },
+    "constraints/compute.restrictVpcPeering": {
+      "description": "Restrict VPC peering usage",
+      "value_type": "list"
+    },
+    "constraints/compute.vmExternalIpAccess": {
+      "description": "Define allowed external IPs for VM instances",
+      "value_type": "list"
+    },
+    "constraints/essentialcontacts.allowedContactDomains": {
+      "description": "Domain restricted contacts",
+      "value_type": "list"
+    },
+    "constraints/iam.allowedPolicyMemberDomains": {
+      "description": "Domain restricted sharing",
+      "value_type": "list"
+    },
+    "constraints/iam.disableServiceAccountKeyCreation": {
+      "description": "Disable service account key creation",
+      "value_type": "boolean"
+    },
+    "constraints/run.allowedIngress": {
+      "description": "Allowed ingress settings for Cloud Run services",
+      "value_type": "list"
+    },
+    "constraints/sql.restrictPublicIp": {
+      "description": "Restrict public IP access on Cloud SQL instances",
+      "value_type": "boolean"
+    },
+    "constraints/storage.publicAccessPrevention": {
+      "description": "Enforce public access prevention",
+      "value_type": "boolean"
+    }
+  },
+  "permissions": [
+    "cloudbuild.builds.create",
+    "cloudbuild.builds.get",
+    "cloudbuild.builds.list",
+    "cloudbuild.builds.update",
+    "compute.firewalls.get",
+    "compute.firewalls.list",
+    "compute.networks.get",
+    "compute.networks.list",
+    "iam.roles.get",
+    "iam.roles.list",
+    "iam.serviceAccounts.actAs",
+    "iam.serviceAccounts.get",
+    "iam.serviceAccounts.getAccessToken",
+    "iam.serviceAccounts.implicitDelegation",
+    "iam.serviceAccounts.list",
+    "iam.serviceAccounts.signBlob",
+    "iam.serviceAccounts.signJwt",
+    "logging.logEntries.list",
+    "logging.logs.list",
+    "monitoring.timeSeries.list",
+    "orgpolicy.constraints.list",
+    "orgpolicy.policies.list",
+    "orgpolicy.policy.get",
+    "resourcemanager.projects.get",
+    "resourcemanager.projects.getIamPolicy",
+    "storage.buckets.get",
+    "storage.buckets.list",
+    "storage.objects.get",
+    "storage.objects.list"
+  ],
+  "principals": [
+    "domain:acme.example",
+    "group:network-eng@acme.example",
+    "group:platform-sre@acme.example",
+    "group:security@acme.example",
+    "serviceAccount:ci-deployer@acme-prod.iam.gserviceaccount.com",
+    "serviceAccount:terraform@acme-prod.iam.gserviceaccount.com",
+    "user:alice@acme.example",
+    "user:bob@acme.example"
+  ],
+  "resource_types": [
+    "google_compute_firewall",
+    "google_compute_network",
+    "google_compute_subnetwork",
+    "google_org_policy_policy",
+    "google_project_iam_binding",
+    "google_project_iam_custom_role",
+    "google_project_iam_member",
+    "google_service_account",
+    "google_storage_bucket"
+  ],
+  "roles": {
+    "roles/cloudbuild.builds.editor": {
+      "included_permissions": [
+        "cloudbuild.builds.create",
+        "cloudbuild.builds.get",
+        "cloudbuild.builds.list",
+        "cloudbuild.builds.update"
+      ],
+      "stage": "GA",
+      "title": "Cloud Build Editor"
+    },
+    "roles/editor": {
+      "stage": "GA",
+      "title": "Editor"
+    },
+    "roles/iam.serviceAccountTokenCreator": {
+      "included_permissions": [
+        "iam.serviceAccounts.get",
+        "iam.serviceAccounts.getAccessToken",
+        "iam.serviceAccounts.implicitDelegation",
+        "iam.serviceAccounts.list",
+        "iam.serviceAccounts.signBlob",
+        "iam.serviceAccounts.signJwt"
+      ],
+      "stage": "GA",
+      "title": "Service Account Token Creator"
+    },
+    "roles/iam.serviceAccountUser": {
+      "included_permissions": [
+        "iam.serviceAccounts.actAs",
+        "iam.serviceAccounts.get",
+        "iam.serviceAccounts.list"
+      ],
+      "stage": "GA",
+      "title": "Service Account User"
+    },
+    "roles/logging.viewer": {
+      "included_permissions": [
+        "logging.logEntries.list",
+        "logging.logs.list"
+      ],
+      "stage": "GA",
+      "title": "Logs Viewer"
+    },
+    "roles/monitoring.viewer": {
+      "included_permissions": [
+        "monitoring.timeSeries.list"
+      ],
+      "stage": "GA",
+      "title": "Monitoring Viewer"
+    },
+    "roles/owner": {
+      "stage": "GA",
+      "title": "Owner"
+    },
+    "roles/storage.admin": {
+      "included_permissions": [
+        "storage.buckets.get",
+        "storage.buckets.list",
+        "storage.objects.get",
+        "storage.objects.list"
+      ],
+      "stage": "GA",
+      "title": "Storage Admin"
+    },
+    "roles/viewer": {
+      "stage": "GA",
+      "title": "Viewer"
+    }
+  }
+}

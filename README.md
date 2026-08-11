@@ -730,6 +730,14 @@ no network. Run from the repo root after the Development setup above.
 | 4b | Version skew: an attribute absent from the captured provider schema (step 10) | `examples/terraform-schema/proposal_newer.tf.json` | DENIED — same finding, carrying the recapture guidance instead of a suggestion |
 | 4c | The clean counterpart (step 10) | `examples/terraform-schema/proposal_ok.tf.json` | APPROVED — every attribute is in the captured schema, so the family stays silent |
 | 4d | Policy configured, schema omitted (step 10) | `examples/terraform-schema/proposal_ok.tf.json`, no `--provider-schema` | APPROVED — with one honest `[tf_schema]` abstention naming what was not judged and the capture command |
+| 5 | The org-policy rollback, compliant estate: eleven catalogue-named promises in force (step 11) | `examples/terraform-orgpolicy/base.tf.json` | APPROVED — all eleven promises hold |
+| 5a | Serial console re-enabled + a VM allowed an external IP (step 11) | `examples/terraform-orgpolicy/proposal_serial_and_publicip.tf.json` | DENIED — `compute-disable-serialport-access` + `vm-public-ip-gcp` VIOLATED |
+| 5b | Cloud Run ingress opened to `all` (step 11) | `examples/terraform-orgpolicy/proposal_run_ingress_public.tf.json` | DENIED — `run-allowed-ingress-internal-loadbalancing` + `cloudrun-ingress-non-public` VIOLATED |
+| 5c | External VPC peering allowed + internet-NEG enforcement dropped (step 11) | `examples/terraform-orgpolicy/proposal_peering_and_neg.tf.json` | DENIED — `vpc-externally-peered-vpc-gcp` + `compute-disable-internet-neg` VIOLATED |
+| 5d | Public-access prevention off + an outside contact domain (step 11) | `examples/terraform-orgpolicy/proposal_storage_contacts.tf.json` | DENIED — `public-access-prevention` + `security-contact-gcp` VIOLATED |
+| 5e | `roles/owner` to an outsider + a token-creator grant (step 11) | `examples/terraform-orgpolicy/proposal_admin_impersonation.tf.json` | DENIED — `deny-admin-roles` + `iam-deny-service-account-impersonation` VIOLATED |
+| 5f | An egress allow to `0.0.0.0/0` (step 11) | `examples/terraform-orgpolicy/proposal_egress_world.tf.json` | DENIED — `egress-firewall-policy-high-strength-vpc-firewall` VIOLATED, beside the built-in `[firewall_reopen]` |
+| 5g | The benign counterpart: the ingress allowlist tightened (step 11) | `examples/terraform-orgpolicy/proposal_benign.tf.json` | APPROVED — a narrowing violates nothing; all eleven still hold |
 
 Two variations worth showing live: rerun 4 with `--schema-policy annotate`
 (the identical finding demoted to a warning at exit 0 — the hook-warns-while-
@@ -1157,6 +1165,150 @@ abstains by name instead of passing in silence:
       $GCP_GROUNDING_PROVIDER_SCHEMA or the 'provider_schema' key in
       .gcp-grounding.json
 ```
+
+### 11. Scenario five: the org-policy rollback
+
+This scenario's promise corpus stands in for **your own compiled promises**:
+its eleven promise ids are an organisation's own control names respelled into
+the artifact id grammar — promise ids admit `[a-z0-9-]` only, so each
+catalogue underscore becomes a hyphen, a one-to-one mapping the corpus states
+up front — and every refutation below reads back in the catalogue's vocabulary — swap `--requirements` at will, and note that three of
+the eleven controls are deliberately **not** org policies (one VPC-firewall
+egress control and two IAM controls), because "no egress to the world" and "no
+admin grants" are facts about firewall rules and bindings, not about
+`google_org_policy_policy` resources — the corpus models each control in the
+domain the engine actually judges it in.
+
+`examples/terraform-orgpolicy/` holds the pieces: `snapshot.json` is the
+scenario's estate snapshot (the constraint vocabulary the eight org-policy
+controls ground against, plus the roles and principals the IAM promises and
+the estate's own names need), `cmm_demo.md` is the corpus,
+`base.tf.json` (with `terraform.tfstate` as its applied state) is a compliant
+estate — eight constraints correctly set at the org and project nodes, a
+modest VPC whose only world-facing egress rule is a deny, bindings with no
+admin grants — and each `proposal_*.tf.json` is that estate after one small,
+realistic, bad edit. Two modelling honesties, stated in the corpus itself
+rather than papered over: the conservative terraform extraction abstains by
+name on `allow_all`/`deny_all` rules, so this estate spells "deny all external
+IPs" as an **empty allowlist** (the most restrictive list there is); and the
+flattened `org_policy_rules` rows do not record which *side* of a list a value
+sat on, so the list-shaped promises judge values-on-the-policy — stricter than
+their sentences, over-blocking rather than under-blocking.
+
+```bash
+# 11. Compile the scenario corpus — EXPECTED TO EXIT 0: all eleven promises
+#     ground and admit (nothing in this corpus is booby-trapped).
+.venv/bin/gcp-ground compile-requirements examples/terraform-orgpolicy \
+    --snapshot examples/terraform-orgpolicy/snapshot.json --out demo/compiled-orgpolicy
+
+# 11a. The compliant estate itself — EXPECTED TO EXIT 0, with every one of the
+#      eleven promises reported as holding.
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-orgpolicy/base.tf.json \
+    --snapshot examples/terraform-orgpolicy/snapshot.json \
+    --terraform-state examples/terraform-orgpolicy/terraform.tfstate \
+    --requirements demo/compiled-orgpolicy \
+    --explain
+```
+
+The base run's narrative shows the whole corpus in force — `promises in force
+(11 enforcing, 0 not — from demo/compiled-orgpolicy)`, then eleven `holds`
+stanzas — and ends `decision recap: APPROVED (exit 0)`. Each violating
+proposal is the same command with the proposal swapped in; every one is
+**EXPECTED TO EXIT 1**, and the recap names the violated controls by their
+catalogue ids:
+
+```bash
+# 11b. Serial console re-enabled + a legacy VM allowed an external IP.
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-orgpolicy/proposal_serial_and_publicip.tf.json \
+    --snapshot examples/terraform-orgpolicy/snapshot.json \
+    --terraform-state examples/terraform-orgpolicy/terraform.tfstate \
+    --requirements demo/compiled-orgpolicy \
+    --explain
+```
+
+```text
+decision recap: DENIED (exit 1) — because:
+  ⚠ [sec:org_policy] compute-disable-serialport-access: refuted by
+      org_policy_rules[1] (google_org_policy_policy.serial_port_disabled)
+      constraint='compute.disableSerialPortAccess' enforce=False …
+  ⚠ [sec:org_policy] vm-public-ip-gcp: refuted by org_policy_rules[3]
+      (google_org_policy_policy.vm_no_external_ip)
+      constraint='compute.vmExternalIpAccess' … is_list=True
+      value='projects/acme-prod/zones/us-central1-a/instances/legacy-bastion'
+```
+
+— the flipped `enforce` refutes the serial-port control, and under deny-all
+the single enumerated instance *is* the violation of the external-IP control:
+an exception being carved. The other five proposals follow the same shape
+(swap the `--proposal` path; everything else is identical):
+
+- `proposal_run_ingress_public.tf.json` — `run.allowedIngress` gains the value
+  `all`. One added value, two named controls: the recap carries both
+  `run-allowed-ingress-internal-loadbalancing` and
+  `cloudrun-ingress-non-public` refutations, each quoting
+  `(google_org_policy_policy.run_ingress_internal) … value='all'` — the
+  catalogue keeps "stay internal" and "never public" as separate controls, and
+  the gate reports in the catalogue's own granularity.
+- `proposal_peering_and_neg.tf.json` — the peering allowlist gains
+  `under:organizations/999999999999` (someone else's organization) and the
+  internet-NEG policy drops to `enforce=FALSE`: refutes
+  `vpc-externally-peered-vpc-gcp` and `compute-disable-internet-neg`.
+- `proposal_storage_contacts.tf.json` — `storage.publicAccessPrevention` drops
+  to `enforce=FALSE` and the essential-contacts allowlist gains
+  `@contractor-mail.example`: refutes `public-access-prevention` and
+  `security-contact-gcp`.
+- `proposal_admin_impersonation.tf.json` — a binding grants `roles/owner` to
+  `user:mallory@outsider.example` and another grants
+  `roles/iam.serviceAccountTokenCreator`: refutes `deny-admin-roles` and
+  `iam-deny-service-account-impersonation`, each refutation naming the binding
+  block, the member and the role. (Over a fresh snapshot the outsider also
+  draws the `✗ [principal] … does not exist in the snapshot` hallucination
+  block beside the promise refutations.)
+- `proposal_egress_world.tf.json` — a "temporary vendor sync" firewall rule
+  allows egress to `0.0.0.0/0`. The compiled promise and a built-in estate
+  check condemn it from two directions at once:
+
+```text
+decision recap: DENIED (exit 1) — because:
+  ⚠ [firewall_reopen] google_compute_firewall.egress_vendor_sync: this allow
+      at priority 900 re-opens traffic that the existing deny
+      'deny-egress-world' at priority 65534 blocks — e.g. src (…); dst (…);
+      protocol 6; port 443
+  ⚠ [sec:vpc_firewall] egress-firewall-policy-high-strength-vpc-firewall:
+      refuted by proposed_firewall_rules[1]
+      (google_compute_firewall.egress_vendor_sync) action='allow'
+      destination_range='0.0.0.0/0' … direction='EGRESS' …
+```
+
+(the `(…)` hold solver-minted witness addresses — an example packet through
+the overlap, not constants of the rule, so nothing should pin them)
+
+The contrast run is a *benign* org-policy edit — the Cloud Run ingress
+allowlist tightened to `internal` alone, a strict narrowing:
+
+```bash
+# 11c. The benign counterpart — EXPECTED TO EXIT 0: tightening a list
+#      constraint violates nothing, and all eleven promises still hold.
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-orgpolicy/proposal_benign.tf.json \
+    --snapshot examples/terraform-orgpolicy/snapshot.json \
+    --terraform-state examples/terraform-orgpolicy/terraform.tfstate \
+    --requirements demo/compiled-orgpolicy \
+    --explain
+```
+
+One freshness note, because this scenario ships its own snapshot: its
+`captured_at` is fixed (2026-07-25, the same fixture era as the demo estate),
+so run at today's wall clock it sits past the 7-day ceiling and the run
+carries the loud `? [staleness]` abstention demoting the snapshot's
+categories. That is the ceiling working as designed — staleness abstains, it
+never blocks, and the promise refutations judge the proposal's own content, so
+every exit code above holds either way (the suite's own runs pin the clock
+with `GCP_GROUNDING_NOW`, the package's documented CI answer). What a stale
+snapshot costs is the hallucination findings: recapture — never `--max-age
+off` — is the fix, exactly as the abstention says.
 
 In production the five flags collapse into a `.gcp-grounding.json` config file
 discovered next to the proposal (see "Two overlapping ways to get the current
