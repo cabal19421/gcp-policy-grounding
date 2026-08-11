@@ -22,12 +22,18 @@ the proposal tier is quiet (:func:`test_the_proposal_tier_is_quiet_so_the_block_
 and every exit code below is attributable to the pair/drift channel this module
 is about.
 
-THE TWO ARMS THAT DO NOT REACH THEIR DESIGNED OUTCOME, and why they are landed
-as strict-xfailed spec literals rather than softened: ``ESC-TX-TFDRIFT-001`` and
-``ESC-TX-TFDRIFT-002`` in :mod:`tests.escalations`. Both are the same measured
-product gap — no source configured through the CLI can declare itself
-``complete`` where the engine reads a source's own scope — and the register
-entry carries the measurement. House rule 4: escalate, do not route around.
+WHAT ENTITLES A VIEW TO BLOCK, because it is the axis the two blocking arms turn
+on and it is NOT fidelity. A ``requires_complete`` check reasons from what the
+baseline does NOT contain, so only a view that DECLARED it enumerated the domain
+can tell a real widening from a row it never saw; every other reading is
+reported and rewritten to ``unverified`` naming the source. Completeness is
+never inferred from content, so the declaration is explicit and per source —
+``--completeness`` for case one's ``--snapshot``, a real ``gcp-source-ledger/1``
+sidecar for the third arm's merged source. It is deliberately NOT the merged
+estate's category scope: any terraform source caps that at ``partial`` however
+completely the API side enumerated the domain, which is `ESC-GX-TFPROMISE-001`
+and is a statement about the merged view rather than about what one source
+declared.
 
 WHAT IS REUSED. The temp terraform repo, its probes, the shared hook argv and
 the scripted-turn helper come from :mod:`tests.agentic.tfrepo`; the hook runner
@@ -158,16 +164,29 @@ class Case:
 #: because byte-empty is exactly what it asserts.
 NOTES = ("--abstain-notes",)
 
+#: THE API SIDE'S OWN COMPLETENESS DECLARATION, and the reason case one can
+#: block at all. Completeness is never inferred from content, so a view that
+#: enumerated the firewall domain has to SAY so; ``--completeness`` (or the
+#: config key) is that surface, it declares the ``--snapshot`` source and no
+#: other, and it is what entitles that view's ``contradicted`` to survive.
+#: Explicitly NOT the merged estate's category scope, which any terraform source
+#: caps at ``partial`` however completely the API side enumerated the domain —
+#: that cap is `ESC-GX-TFPROMISE-001` and it is about the merged view, not about
+#: what one source declared.
+COMPLETE = ("--completeness", "complete")
+
 CASES: dict[str, Case] = {
     # CASE ONE — terraform-safe, API-dangerous.
     "api_dangerous": Case(api="firewall_restricted", state="firewall_open",
-                          proposal="proposal_open", hook=NOTES,
+                          proposal="proposal_open", extra=COMPLETE, hook=NOTES,
                           repo="api_dangerous"),
     # CASE THREE — the SAME repo and the same agent turn, graded differently.
+    # It carries case one's flags VERBATIM plus the policy, or the two runs
+    # would not be one input graded twice.
     "api_dangerous_block": Case(api="firewall_restricted", state="firewall_open",
                                 proposal="proposal_open",
-                                extra=("--drift-policy", "block"), hook=(),
-                                repo="api_dangerous"),
+                                extra=COMPLETE + ("--drift-policy", "block"),
+                                hook=(), repo="api_dangerous"),
     # CASE TWO — the mirror: the terraform view holds the restricted rule.
     "tf_dangerous": Case(api="firewall_open", state="firewall_restricted",
                          proposal="proposal_open", hook=NOTES,
@@ -490,14 +509,16 @@ def _expectation(case: Case) -> str:
     scripted proposal records — and it is ADVISORY: nothing here asserts an
     outcome from it.
 
-    It describes the turn under the DEFAULT policy, because one turn per repo is
-    replayed under several flag sets and ``--drift-policy block`` is a grading
-    choice made after the edit, not a property of it. ``abstain`` for the two
-    disagreeing repos, because that is what the gate honestly does under the
-    default: case two says so outright, and case one's designed ``block`` is
-    carried by ``ESC-TX-TFDRIFT-001`` rather than claimed here.
+    It describes the turn under the DEFAULT drift policy and that case's own
+    flags, because one turn per repo is replayed under several flag sets and
+    ``--drift-policy block`` is a grading choice made after the edit, not a
+    property of it. The widening turn is a ``block`` where the view that finds
+    it declared itself complete and an ``abstain`` where it did not — which is
+    the whole distinction between case one and case two.
     """
-    return "abstain" if case.proposal == "proposal_open" else "pass"
+    if case.proposal != "proposal_open":
+        return "pass"
+    return "block" if COMPLETE[0] in case.extra else "abstain"
 
 
 # -- the committed corpus ------------------------------------------------------
@@ -596,15 +617,30 @@ def test_case_one_reports_both_values_of_the_one_field_that_differs(world):
     assert "'10.0.0.0/8'" in message and "'172.16.0.0/12'" in message, message
     assert "picks none" in message, message
 
-    # THE WHOLE FAMILY, counted: the engine's per-entry verdict and the
-    # loader's own per-dispute one, and nothing else. A third channel appearing
-    # would double-report every disagreement to the agent.
+    # THE WHOLE FAMILY FOR THIS ROW, counted: the engine's per-entry verdict and
+    # the loader's own per-dispute one, and nothing else. A third channel
+    # appearing would double-report every disagreement to the agent.
     whole = of_kind(report, drift.DRIFT_MATERIAL)
-    assert len(whole) == 2, [(v["target"], v["message"][:80]) for v in whole]
-    assert {v["target"] for v in whole} == {KEY, f"firewall_rules/{KEY}"}
-    for verdict in whole:
+    about_the_row = [v for v in whole if KEY in v["target"]]
+    assert len(about_the_row) == 2, [(v["target"], v["message"][:80])
+                                     for v in about_the_row]
+    assert {v["target"] for v in about_the_row} == {KEY, f"firewall_rules/{KEY}"}
+    for verdict in about_the_row:
         assert named_sources(verdict["message"], snapshot_label, state_label) == \
             {snapshot_label, state_label}, verdict["message"]
+
+    # AND THE ONE OTHER MATERIAL FINDING :data:`COMPLETE` BUYS, named rather
+    # than filtered away: declaring the API view complete makes "terraform
+    # manages a row this view does not list" an EXISTENCE disagreement instead
+    # of an unremarkable hole, and the base corpus contains exactly one. It is
+    # about a different row in a different category, it is honest, and pinning
+    # it here is what stops it drifting into the firewall count above.
+    existence = [v for v in whole if v not in about_the_row]
+    assert len(existence) == 1, [(v["target"], v["message"][:80])
+                                 for v in existence]
+    assert KEY not in existence[0]["target"], existence[0]["target"]
+    assert "ABSENT from" in existence[0]["message"], existence[0]["message"]
+    assert snapshot_label in existence[0]["message"], existence[0]["message"]
 
 
 def test_case_one_answers_twice_and_never_collapses_to_one_answer(world):
@@ -668,51 +704,82 @@ def test_the_proposal_tier_is_quiet_so_the_block_can_only_come_from_the_pair(wor
     current-state view. If it fired here, case one would "block on the
     disagreement" while actually blocking on a rule shape, and case two's exit 0
     would be unreachable for a reason that has nothing to do with drift.
+
+    The drift kinds and the PAIR kinds are the two channels that DID look at a
+    current-state view, so they are excluded by kind and asserted elsewhere.
+    Everything else must be quiet: case one's exit 2 is attributable to the pair
+    channel only because nothing else in its report is hard.
     """
+    looked_at_the_current_state = set(drift.DRIFT_KINDS) | {PAIR_KIND,
+                                                           "pair:no-check"}
     for case_id in ("api_dangerous", "tf_dangerous", "drifted_benign"):
         report = world.reports[case_id]
         hard = [v for v in report["verdicts"]
                 if v["status"] in ("contradicted", "ungrounded")
-                and v["kind"] not in drift.DRIFT_KINDS]
+                and v["kind"] not in looked_at_the_current_state]
         assert hard == [], (case_id, [(v["kind"], v["message"][:120])
                                       for v in hard])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=("ESC-TX-TFDRIFT-001: no source configured through the CLI can "
-            "declare itself 'complete' where the engine reads a source's own "
-            "scope, so the API view's `contradicted` is always rewritten to "
-            "`unverified` and the run cannot reach exit 2"),
-)
 def test_case_one_blocks_on_its_complete_source_finding(world):
-    """THE SPEC LITERAL, landed under a strict xfail per house rule 4.
+    """"a not-ok report and a hook exit of 2, meaning the dangerous reading wins
+    the GATE decision while both readings win the REPORT".
 
-    "a not-ok report and a hook exit of 2, meaning the dangerous reading wins
-    the GATE decision while both readings win the REPORT" — the REPORT half is
-    asserted for real by the three tests above; this is the GATE half.
+    The REPORT half is the three tests above. This is the GATE half, and the
+    thing that earns it is :data:`COMPLETE`: the API view DECLARED that it
+    enumerated the firewall domain, so its ``contradicted`` is a finding it was
+    entitled to and nothing rewrites it. Case two is the same input with the
+    entitlement on the other side, and it does not block — which is the pair.
     """
-    assert world.reports["api_dangerous"]["ok"] is False
-    assert world.outcomes["api_dangerous"].exit_code == 2
+    report = world.reports["api_dangerous"]
+    repo = world.repos["api_dangerous"]
+    snapshot_label, _state_label = labels(repo)
+
+    if HAVE_PAIR_CHECK:
+        surviving = [v for v in pair_verdicts(report)
+                     if v["status"] == "contradicted"]
+        assert len(surviving) == 1, [(v["status"], v["message"])
+                                     for v in pair_verdicts(report)]
+        # THE BLOCK IS THE API VIEW'S, and it is not softened: the message must
+        # not carry the partial-baseline clause, or the run blocked on a finding
+        # the gate itself said nobody was entitled to.
+        assert snapshot_label in surviving[0]["message"], surviving[0]["message"]
+        assert PARTIAL_BASELINE not in surviving[0]["message"], \
+            surviving[0]["message"]
+        assert report["ok"] is False
+        assert world.outcomes["api_dangerous"].exit_code == 2
+        return
+    # No decidable widening check: neither view can produce the finding, so the
+    # honest outcome is the abstention — asserted rather than skipped.
+    assert_pair_degraded(report)
+    assert report["ok"] is True
+    assert world.outcomes["api_dangerous"].exit_code == 0
 
 
 def test_case_one_shows_both_readings_to_the_agent(world):
-    """What the run DOES deliver through the envelope, asserted rather than
-    assumed: both readings, on the agent-visible stream, with stdout untouched.
+    """What the run delivers through the envelope, asserted rather than assumed:
+    BOTH readings, on the agent-visible stream, with stdout untouched.
 
-    This is the half of case one that survives ``ESC-TX-TFDRIFT-001``, and it is
-    the half the design calls "both readings win the REPORT".
+    "both readings win the REPORT", separately from the gate decision the test
+    above pins — the two halves are asserted apart because a run that blocked
+    while showing one side would satisfy either one alone.
     """
     outcome = world.outcomes["api_dangerous"]
     repo = world.repos["api_dangerous"]
     snapshot_label, state_label = labels(repo)
     assert outcome.stdout == "", str(outcome)
-    assert "NOT DECIDED" in outcome.stderr, str(outcome)
     assert f"[{drift.DRIFT_MATERIAL}]" in outcome.stderr, str(outcome)
     assert snapshot_label in outcome.stderr and state_label in outcome.stderr, \
         str(outcome)
     if HAVE_PAIR_CHECK:
-        assert f"[{drift.DRIFT_VERDICT}]" in outcome.stderr, str(outcome)
+        # The blocked shape: exit 2, the rendered report, and BOTH source
+        # labels on it. The material drift and the disagreement are on the same
+        # stream as the block, so the agent is told what disagreed and not only
+        # that something did.
+        assert_blocked(outcome, drift.DRIFT_MATERIAL, drift.DRIFT_VERDICT,
+                       state_label, snapshot_label)
+    else:
+        assert "NOT DECIDED" in outcome.stderr, str(outcome)
 
 
 # -- CASE TWO: the mirror ------------------------------------------------------
@@ -826,23 +893,36 @@ def test_the_third_arm_adds_a_complete_source_and_still_reports_every_side(world
     assert len(of_kind(report, drift.DRIFT_VERDICT)) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=("ESC-TX-TFDRIFT-002: `sources.LoadedSource.record()` flattens every "
-            "configured source's own scope to 'undeclared', so "
-            "`engine._source_scope` never sees the sidecar's 'complete' and the "
-            "per-source `contradicted` is always rewritten"),
-)
 def test_the_complete_api_source_arm_blocks(world):
-    """THE SPEC LITERAL, landed under a strict xfail per house rule 4.
-
-    "configure an API source that also covers the firewall domain COMPLETELY
+    """"configure an API source that also covers the firewall domain COMPLETELY
     and holds the restricted rule, and assert the same disagreement now produces
     a surviving `contradicted` and exit 2".
+
+    WHERE THE HARD BLOCK LEGITIMATELY COMES BACK. The input is byte-identical to
+    case two — same tree, same agent turn — and the only addition is a source
+    that declared, in its own ``gcp-source-ledger/1`` sidecar, that it
+    enumerated the firewall domain. The terraform view's finding is still
+    softened; this one is not, because this one was entitled to it. That is the
+    distinction the comment above case two is about.
     """
     report = world.reports["tf_dangerous_complete"]
+    repo = world.repos["tf_dangerous"]
+    mirror_label = str(repo.root / MIRROR_NAME)
+    _snapshot_label, state_label = labels(repo)
+
+    if not HAVE_PAIR_CHECK:
+        assert_pair_degraded(report)
+        assert world.outcomes["tf_dangerous_complete"].exit_code == 0
+        return
     surviving = [v for v in pair_verdicts(report) if v["status"] == "contradicted"]
-    assert surviving, [v["status"] for v in pair_verdicts(report)]
+    assert len(surviving) == 1, [(v["status"], v["message"])
+                                 for v in pair_verdicts(report)]
+    assert mirror_label in surviving[0]["message"], surviving[0]["message"]
+    assert PARTIAL_BASELINE not in surviving[0]["message"], surviving[0]["message"]
+    # ... and the TERRAFORM view's identical reading is still softened. Both
+    # findings are in the report; only one of them decides the gate.
+    softened = [v for v in pair_verdicts(report) if state_label in v["message"]]
+    assert [v["status"] for v in softened] == ["unverified"], softened
     assert report["ok"] is False
     assert world.outcomes["tf_dangerous_complete"].exit_code == 2
 
@@ -855,14 +935,19 @@ def test_block_mode_changes_the_bucket_and_not_one_byte_of_the_message(world):
     material drift becomes ``contradicted`` and its message is byte-identical,
     so an operator can see it is the same finding graded differently rather than
     a second, different one."""
-    annotated = of_kind(world.reports["api_dangerous"], drift.DRIFT_MATERIAL)
-    blocked = of_kind(world.reports["api_dangerous_block"], drift.DRIFT_MATERIAL)
-    assert len(annotated) == len(blocked) == 2, (len(annotated), len(blocked))
-    for before, after in zip(annotated, blocked):
+    annotated = {v["target"]: v
+                 for v in of_kind(world.reports["api_dangerous"], drift.DRIFT_MATERIAL)}
+    blocked = {v["target"]: v
+               for v in of_kind(world.reports["api_dangerous_block"], drift.DRIFT_MATERIAL)}
+    # Matched by TARGET rather than by position: a comparison that lined the two
+    # lists up by index would still pass if one run reordered them.
+    assert set(annotated) == set(blocked), (sorted(annotated), sorted(blocked))
+    assert {KEY, f"firewall_rules/{KEY}"} <= set(annotated), sorted(annotated)
+    for target, before in annotated.items():
+        after = blocked[target]
         assert before["status"] == "unverified", before
         assert after["status"] == "contradicted", after
         assert before["kind"] == after["kind"] == drift.DRIFT_MATERIAL
-        assert before["target"] == after["target"]
         assert before["message"] == after["message"], (
             "block mode rewrote the message as well as the bucket, so the two "
             "runs no longer read as one finding graded twice")

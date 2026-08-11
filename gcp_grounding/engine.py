@@ -429,7 +429,7 @@ def evaluate(proposal: Proposal, current: Any, rules: RuleSet, *,
             pair_results = _stage(
                 report, proposal, "pair-tier",
                 lambda: _stage_pair(report, proposal, vocabulary, solver,
-                                    derivation, options, projected),
+                                    derivation, ledger, options, projected),
                 default={}) or {}
 
         # STAGE 4 — the estate tier: collect and report, run NOTHING.
@@ -601,7 +601,7 @@ def _stage_baseline(report: GroundingReport, proposal: Proposal, current: Any,
 
 def _stage_pair(report: GroundingReport, proposal: Proposal,
                 vocabulary: GcpSnapshot, solver: Any, derivation: Any,
-                options: EvalOptions,
+                ledger: Any, options: EvalOptions,
                 projected: Mapping[str, tuple[Any, str | None]]
                 ) -> dict[int, tuple[Verdict, ...]]:
     """DISPATCHED PER BASELINE ENTRY AND NEVER PER FILE.
@@ -632,7 +632,8 @@ def _stage_pair(report: GroundingReport, proposal: Proposal,
         document = _proposed_document(projected, entry, proposal)
         verdicts, identity = _run_pair(entry.kind, document, entry, vocabulary,
                                        solver, proposal)
-        verdicts = _apply_baseline_soundness(verdicts, identity, entry.scope,
+        verdicts = _apply_baseline_soundness(verdicts, identity,
+                                             _entry_scope(ledger, entry),
                                              entry.source_id or "the current state")
         verdicts = tuple(_attributed(v, entry) for v in verdicts)
         for verdict in verdicts:
@@ -1022,6 +1023,64 @@ def _source_scope(ledger: Any, source_id: str) -> str:
     record = getattr(ledger, "sources", {}).get(source_id) if ledger is not None else None
     scope = getattr(record, "scope", "") if record is not None else ""
     return scope or "undeclared"
+
+
+def _entry_scope(ledger: Any, entry: Any) -> str:
+    """THE COVERAGE THAT GOVERNS ONE BASELINE ENTRY: the stronger of the merged
+    category scope and the OWN declared scope of the source the entry's document
+    came from.
+
+    A resolved entry's document is one source's record, taken wholesale — the
+    merge picks a winner per row and backfills, it does not blend two readings —
+    and ``entry.source_id`` names that source. The merged CATEGORY scope is
+    composed across every source and is capped by views that did not supply this
+    row: most visibly by the terraform cap, which holds any category a terraform
+    artifact touched at ``partial`` however completely an API capture enumerated
+    it. Reading only that is how PRECEDENCE ends up SUPPRESSING a finding —
+    winning the merge would demote a source's own answer to a scope it never
+    declared, and the same source's finding would have survived as a losing
+    alternate in stage 6, which routes through exactly this declaration. The
+    per-source answers and the primary's answer are graded by one rule.
+
+    STRONGER, never weaker, and that direction is the whole safety argument: the
+    merge can license a row past what its own source declared (a complete peer
+    backfilling it), so the composition may add, but it may not take away what
+    the source that supplied the row said about itself. ``BASELINE_SOUNDNESS``
+    is empty by construction, so every check is ``requires_complete`` and the
+    only reachable effect is a ``contradicted`` SURVIVING — fail-safe.
+
+    THE ONE PLACE THE SOURCE'S OWN CLAIM IS REFUSED is a BOUNDARY MISMATCH.
+    ``complete within organizations/1`` and ``complete`` are different claims
+    about different universes, which is why ``compose_scope`` demotes a category
+    whose contributors name different boundaries and drops the boundary with it.
+    Re-reading one contributor's ``complete`` there would undo that demotion by
+    the back door, so the upgrade applies only where the source is speaking
+    about the SAME universe the merged category describes.
+    """
+    scope = getattr(entry, "scope", "") or "uncaptured"
+    source_id = getattr(entry, "source_id", "")
+    sources = getattr(ledger, "sources", None) if ledger is not None else None
+    record = sources.get(source_id) if (source_id and sources is not None) else None
+    if record is None:
+        return scope
+    category = getattr(getattr(entry, "target", None), "category", "")
+    scope_of = getattr(ledger, "scope_of", None)
+    if not callable(scope_of):
+        # A ledger that cannot be asked what the category's boundary is cannot
+        # have the boundary check applied to it, and an unchecked upgrade is
+        # the back door the paragraph above closes.
+        return scope
+    if getattr(scope_of(category), "boundary", "") != getattr(record, "boundary", ""):
+        return scope
+    declared = getattr(record, "scope", "") or "uncaptured"
+    try:
+        return max((scope, declared), key=provenance.scope_rank)
+    except ValueError:
+        # A ledger written by a future version may spell a scope this lattice
+        # does not know; the merged answer is the one that was already trusted.
+        logger.debug("source %s declares unknown scope %r — keeping the merged "
+                     "category scope %r", source_id, declared, scope)
+        return scope
 
 
 def _differing_paths(category: str, entry: Any

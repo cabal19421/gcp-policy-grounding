@@ -423,19 +423,41 @@ class LoadedSource:
             return "unattributed"
         return min(kinds, key=provenance.fidelity_rank)
 
+    def declared_scope(self) -> str:
+        """The WEAKEST coverage this source's own ledger declares for itself.
+
+        Weakest rather than strongest and never guessed upward, exactly as
+        :meth:`fidelity` does it, and ``undeclared`` — "nobody said" — for a
+        ledger that names no source at all.
+
+        THIS IS THE SOURCE'S OWN COMPLETENESS DECLARATION, and it is the only
+        thing a reader downstream can ask "what did THIS view claim to cover"
+        of: ``--completeness`` (or the config key) lands here because
+        :func:`load_source` builds the fallback ledger AT THE DECLARED SCOPE,
+        and a real ``gcp-source-ledger/1`` sidecar lands here because its own
+        source records carry it. Flattening it away — which this method used to
+        do — meant a source could declare itself complete and have no way to
+        say so to anything reading the merged ledger.
+        """
+        scopes = [record.scope for record in self.ledger.sources.values()
+                  if record.scope]
+        if not scopes:
+            return "undeclared"
+        return min(scopes, key=provenance.scope_rank)
+
     def record(self) -> SourceRecord:
         """This source as one :class:`~gcp_grounding.provenance.SourceRecord`
         for the merge.
 
-        The record's own scope is ``undeclared`` — the same answer ``merge``
-        synthesizes for a source nobody described — and the REAL coverage
-        travels per category in :meth:`category_scopes`. A single flattened
-        claim here would either license a category the ledger never covered or
-        withhold one it did.
+        The record carries :meth:`declared_scope`, and the REAL PER-CATEGORY
+        coverage still travels in :meth:`category_scopes` — which
+        :func:`load_current` always supplies and which ``merge`` prefers, so
+        this flattened claim never licenses a category the ledger described
+        differently.
         """
         return SourceRecord(source_id=self.source_id, kind=self.fidelity(),
                             origin=self.path, captured_at=self.captured_at,
-                            scope="undeclared",
+                            scope=self.declared_scope(),
                             note=f"{self.kind} source loaded in memory")
 
     def category_scopes(self) -> dict[str, str]:
