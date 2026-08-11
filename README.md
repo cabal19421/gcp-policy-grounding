@@ -294,6 +294,15 @@ Side by side, the two messages you will actually see:
   never saw
 ```
 
+And the boundary is judged **per source, per entry**: when a baseline entry's
+document came from a source that declared itself complete (an API capture with
+`completeness: complete`, or a merged category whose contributors all agree),
+a widening finding against that entry **survives** as a block even while other
+categories stay partial — the coverage that governs each entry is the stronger
+of the merged category scope and the owning source's own declaration. Declaring
+a source complete is therefore exactly as consequential as it sounds, and it is
+never inferred.
+
 The first is a pass you can rely on. The second is not a pass and not a block —
 it is the tool saying it was not entitled to the finding. Capture an API
 snapshot to turn those into hard blocks.
@@ -684,7 +693,7 @@ no network. Run from the repo root after the Development setup above.
 | 2a | Custom-role swap meant to reduce scope; the accidental extra permission is harmless (step 8) | `examples/terraform-roles/proposal_a.tf.json` | APPROVED — with the `[iam_scope_diff]` warning naming the extra permission |
 | 2b | The same swap, but the extra permission is `iam.serviceAccounts.actAs` (step 8) | `examples/terraform-roles/proposal_b.tf.json` | DENIED — the permission promise VIOLATED, custom-role block named |
 | 3 | Masked deny removed — the dormant allow wakes up world-open (step 9) | `examples/terraform-masked/proposal.tf.json` | DENIED — exposure + shadow verdicts |
-| 3b | The benign counterpart: deleting the dead allow instead (step 9) | `examples/terraform-masked/cleanup.tf.json` | DENIED — the restated deny still reads as killing the allow the state carries; deletion-awareness is the parked pair tier's territory |
+| 3b | The benign counterpart: deleting the dead allow instead (step 9) | `examples/terraform-masked/cleanup.tf.json` | DENIED — the restated deny still reads as killing the allow the state carries; deletion-awareness needs the pair tier's old-set-versus-new-set comparison, and this shape derives no baseline target for it to run against |
 | 4 | The attribute the provider doesn't know: `src_ranges` for `source_ranges` (step 10) | `examples/terraform-schema/proposal_typo.tf.json` | DENIED — `[tf_attribute]` ungrounded, with the did-you-mean naming `source_ranges` |
 | 4b | Version skew: an attribute absent from the captured provider schema (step 10) | `examples/terraform-schema/proposal_newer.tf.json` | DENIED — same finding, carrying the recapture guidance instead of a suggestion |
 | 4c | The clean counterpart (step 10) | `examples/terraform-schema/proposal_ok.tf.json` | APPROVED — every attribute is in the captured schema, so the family stays silent |
@@ -976,8 +985,10 @@ estate fold still holds `deny-external-rdp` — the very rule this change
 deletes — so the same allow is also *"unreachable … already decided by …
 deny-external-rdp"* today. Dead today, world-open the moment this applies.
 Note what the gate does NOT say: there is no *"you removed deny-external-rdp"*
-line — that pair-tier articulation (old set versus new set) is the parked
-verification tasks' territory. The deny's absence is never named; what is
+line — that pair-tier articulation (old set versus new set) runs only where a
+baseline target is derived for the document, which this scenario's shape does
+not produce (the pair tier itself is verified end to end by the
+`tf_block`/`tf_drift` suites). The deny's absence is never named; what is
 named is what its absence leaves behind — the exposure check condemns the
 allow from its own text (as 9a shows, it does so even while the deny still
 stands beside it), and with the deny gone from the document nothing softens
