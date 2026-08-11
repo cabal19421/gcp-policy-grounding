@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 .harness/
+build/
 dist/
 *.egg-info/
 designs/

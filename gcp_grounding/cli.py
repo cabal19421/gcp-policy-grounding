@@ -480,8 +480,11 @@ ABSTAIN_NOTES_ENV = "GCP_GROUNDING_ABSTAIN_NOTES"
 #: Environment variable naming the compiled requirements — an artifact
 #: directory or a single ``*.promises.json`` — when ``--requirements`` is not
 #: given. Exporting it once is how a hook or a CI job turns requirements on
-#: globally, exactly as :data:`SNAPSHOT_ENV` configures the estate.
-REQUIREMENTS_ENV = "GCP_GROUNDING_REQUIREMENTS"
+#: globally, exactly as :data:`SNAPSHOT_ENV` configures the estate. The name
+#: is OWNED by :mod:`gcp_grounding.discovery`, whose environment layer resolves
+#: it (that is what makes ``--state-explain`` label an env-supplied value
+#: ``[env]``); re-exported here where every other CLI env name lives.
+REQUIREMENTS_ENV = discovery.REQUIREMENTS_ENV
 
 #: Where ``compile-requirements`` looks when DIR is omitted, resolved against
 #: the cwd.
@@ -1036,6 +1039,13 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
     if problem is not None:
         return _usage(problem)
     settings, notes = _resolve_settings(args, start=args.file)
+    # THE CLOCK IS RESOLVED ONCE, HERE, at the top of the command, and injected
+    # into the settings every surface below reads — grounding, the freshness
+    # ceiling, --state-explain and the json state document alike. Resolving it
+    # again further down would be a second answer to "how old is this estate".
+    settings, problem = _inject_clock(settings)
+    if problem is not None:
+        return _usage(problem)
     snapshot, more, problem = _load_snapshot(args, settings=settings)
     if snapshot is None:
         return _usage(problem)
@@ -1174,6 +1184,74 @@ def _state_configured(settings: discovery.Settings) -> bool:
                 or any(getattr(options, name, None) for name in _STATE_OPTIONS))
 
 
+def _inject_clock(settings: discovery.Settings
+                  ) -> tuple[discovery.Settings, str | None]:
+    """*settings* with THE resolved clock stamped into ``options.now``.
+
+    → ``(settings, problem)`` — *problem* is ``None`` on success. This is the
+    ONE per-run call to :func:`gcp_grounding.freshness.resolve_now` on the CLI
+    paths: ``--as-of`` / config / :data:`~gcp_grounding.freshness.NOW_ENV` win
+    in the usual order and the wall clock is the fallback, exactly as before —
+    but the answer now reaches EVERY surface (grounding, the freshness ceiling,
+    ``--state-explain``, the json ``state.as_of``) instead of only the
+    enforcement side, so the explain surfaces can never again print
+    "age=unknown" while the same run's staleness verdicts computed a real age.
+    """
+    try:
+        now = freshness.resolve_now(settings.options.now)
+    except ValueError as exc:
+        return settings, str(exc)
+    options = discovery.to_source_options(settings, as_of=now)
+    return dataclasses.replace(settings, options=options), None
+
+
+def _snapshot_only_freshness(settings: discovery.Settings, snapshot: GcpSnapshot
+                             ) -> tuple[GcpSnapshot, tuple[Verdict, ...],
+                                        str | None]:
+    """The default staleness ceiling, applied on the snapshot-only path.
+
+    → ``(snapshot, staleness_verdicts, problem)``. A FRESH snapshot comes back
+    untouched with no verdicts, so a fresh snapshot-only run stays
+    byte-identical to what it has always been. A snapshot past the ceiling (or
+    one whose ``captured_at`` cannot be read as an aware timestamp) earns the
+    SAME per-source ``staleness`` abstention the engine path emits — through
+    :func:`gcp_grounding.freshness.check_freshness` itself, never a parallel
+    implementation — and comes back with EVERY captured category demoted to
+    uncaptured, so existence checks become named abstentions rather than
+    verdicts blessed by a vocabulary nobody can show is current. The ceiling is
+    on by default here for the same reason it is everywhere else: a hook is one
+    fixed command line nobody edits per-run, and ``--snapshot`` alone is
+    exactly the shape a hook is configured with (``$GCP_GROUNDING_SNAPSHOT``).
+
+    *problem* is a usage error for a malformed ``max_age`` — the same
+    flag-naming refusal :func:`gcp_grounding.sources.load_current` gives the
+    engine path, because a typo that silently restored (or disabled) the
+    ceiling would change what the gate enforces with nothing saying so.
+    """
+    options = settings.options
+    try:
+        max_age = freshness.parse_duration(options.max_age) \
+            if options.max_age is not None else freshness.MAX_AGE_DEFAULT
+    except ValueError as exc:
+        return snapshot, (), (f"--max-age / ${sources.MAX_AGE_ENV} "
+                              f"{options.max_age!r}: {exc}")
+    if max_age is None:
+        return snapshot, (), None
+    # options.now is the stamp _inject_clock resolved; parsing it back is a
+    # deterministic read of that one answer, not a second clock resolution.
+    now = freshness.resolve_now(options.now)
+    source = options.primary or "<snapshot>"
+    ledger = provenance.SourceLedger.unattributed(snapshot, source_id=source,
+                                                  origin=source)
+    stale = freshness.check_freshness(ledger, now=now, max_age=max_age)
+    if not stale:
+        return snapshot, (), None
+    demoted = dataclasses.replace(
+        snapshot, **{category: None
+                     for category in snapshot.captured_categories()})
+    return demoted, stale, None
+
+
 def _parse_target(raw: str) -> tuple[TargetRef | None, str | None]:
     """``DOMAIN:KEY`` as a :class:`~gcp_grounding.baseline.TargetRef`.
 
@@ -1265,11 +1343,11 @@ def _cli_layer(args: argparse.Namespace, start: str) -> dict[str, Any]:
             logger.debug("ignoring unusable --target %r: %s", raw, problem)
     if targets:
         layer["targets"] = targets
-    # ``requirements`` has no slot in discovery's env layer — ``from_env``
-    # resolves SourceOptions fields alone — so the CLI's own flag-then-
-    # $GCP_GROUNDING_REQUIREMENTS resolution IS this layer's contribution, and
-    # both therefore report the ``cli`` origin.
-    requirements = _requirements_flag_or_env(args)
+    # Only the FLAG is this layer's contribution. $GCP_GROUNDING_REQUIREMENTS
+    # is resolved by discovery's environment layer like every other env-supplied
+    # setting, so an env-only value reports the ``env`` origin — the flag alone
+    # reports ``cli``.
+    requirements = getattr(args, "requirements", None)
     if requirements:
         layer["requirements"] = requirements
     return layer
@@ -1300,9 +1378,13 @@ def _resolve_settings(args: argparse.Namespace, *, start: str
             config, problems = discovery.load_config(named)
         else:
             config, problems = discovery.discover(start, env=env)
-            if config is None:
+            if config is None and not problems:
                 # Same rule one layer down: an operator who wrote a config has
-                # already said what the sources are.
+                # already said what the sources are — and a DISCOVERED config
+                # that was refused (None plus problems) suppresses detection
+                # exactly like the named-config arm above, for the same reason:
+                # grounding against a state file the operator never named. The
+                # refusal itself still surfaces through the provenance notes.
                 auto, detected = discovery.auto_detect(start)
                 problems += detected
     settings = discovery.resolve_settings(cli=_cli_layer(args, start), env=env,
@@ -1380,30 +1462,31 @@ def _ground_routed(args: argparse.Namespace, settings: discovery.Settings,
                    path: str, rules: Any, carried: Any) -> _Ground:
     """Ground *path* on whichever route this run's configuration chose.
 
-    NO STATE CONFIGURED is the pre-existing path, unchanged, so a run that names
-    only a snapshot is byte-identical to what it has always been. With a state
-    source configured the three inputs meet in ``engine.evaluate``: the current
-    state is assembled ONCE by ``sources.load_current``, every state-source
-    verdict is added to the report, and the rule set carries the compiled
-    requirements the engine will not load for itself.
+    NO STATE CONFIGURED is the pre-existing path, so a FRESH-snapshot run that
+    names only a snapshot is byte-identical to what it has always been; the one
+    addition there is the default freshness ceiling, which was never allowed to
+    depend on which options were typed (see :func:`_snapshot_only_freshness`).
+    With a state source configured the three inputs meet in ``engine.evaluate``:
+    the current state is assembled ONCE by ``sources.load_current``, every
+    state-source verdict is added to the report, and the rule set carries the
+    compiled requirements the engine will not load for itself.
     """
     if not _state_configured(settings):
+        snapshot, stale, problem = _snapshot_only_freshness(settings, snapshot)
+        if problem is not None:
+            return _Ground(report=GroundingReport(), problem=problem)
         report = ground_policy(path, snapshot, baseline=args.baseline, rules=rules)
         # The carry verdicts are what keeps a rejected or unverified promise
         # visible: without them a requirement that did not run is
         # indistinguishable from one that passed.
         for verdict in carried:
             report.add(verdict)
-        return _Ground(report=_finish_report(report, snapshot, notes))
+        return _Ground(report=_finish_report(report, snapshot, stale + notes))
 
-    # THE CLOCK IS RESOLVED ONCE, HERE, and injected downward; nothing below
-    # this boundary reads the wall clock.
-    try:
-        now = freshness.resolve_now(settings.options.now)
-    except ValueError as exc:
-        return _Ground(report=GroundingReport(), problem=str(exc))
-    options = discovery.to_source_options(settings, as_of=now)
-    settings = dataclasses.replace(settings, options=options)
+    # THE CLOCK arrives here already resolved and stamped into the options by
+    # :func:`_inject_clock` at the command entry point; nothing below this
+    # boundary reads the wall clock, and nothing re-resolves it.
+    options = settings.options
     current = sources.load_current(options)
     if current.problem:
         return _Ground(report=GroundingReport(), current=current,
@@ -1626,12 +1709,13 @@ def _prefix(hook: bool) -> str:
 
 
 def _requirements_flag_or_env(args: argparse.Namespace) -> str | None:
-    """``--requirements``, then :data:`REQUIREMENTS_ENV` — the CLI's own two
-    layers, which is what :func:`_cli_layer` contributes to the settings.
+    """``--requirements``, then :data:`REQUIREMENTS_ENV` — the fallback for a
+    caller with NO resolved settings in hand (see :func:`_requirements_source`).
 
-    They are resolved together because ``discovery``'s environment layer is
-    ``sources.from_env``, which knows the ``SourceOptions`` fields alone and has
-    no slot for a settings-only field like ``requirements``.
+    On the settings path the two are separate layers with separate origins:
+    :func:`_cli_layer` contributes the flag alone and discovery's environment
+    layer resolves :data:`REQUIREMENTS_ENV`, so ``--state-explain`` labels each
+    with the layer that actually supplied it.
     """
     flag = getattr(args, "requirements", None)
     if flag:
@@ -1907,6 +1991,11 @@ def _run_hook(args: argparse.Namespace) -> int:
     # line, per-file state. That is what makes auto-baseline work for an agent
     # moving between terraform roots in one repo.
     settings, notes = _resolve_settings(args, start=path)
+    # The same single clock resolution the normal mode performs, fail-open like
+    # every other hook-mode state problem.
+    settings, problem = _inject_clock(settings)
+    if problem is not None:
+        return _usage(problem, hook=True)
     snapshot, more, problem = _load_snapshot(args, settings=settings)
     if snapshot is None:
         print(f"gcp-ground --hook: {problem} — nothing was checked (fail-open)",

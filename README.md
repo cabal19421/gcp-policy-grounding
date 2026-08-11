@@ -72,10 +72,14 @@ Exit code 1, and the last lines on your terminal are the verdict:
 ```text
 decision recap: DENIED (exit 1) — because:
   ⚠ [firewall_exposure] google_compute_firewall.allow_ssh_world: a public
-      source can reach tcp/22 through this rule
+      source (…) can reach tcp/22 through this rule
   ⚠ [sec:vpc_firewall] no-open-ssh-rdp-ingress: refuted by
       proposed_firewall_rules[1] (google_compute_firewall.allow_ssh_world) …
 ```
+
+(the `(…)` holds a solver-minted example address — e.g. `(35.32.0.0)` — not a
+constant of the rule, so nothing should pin it; the trailing `…` covers the
+recap's third deny line, an `[sec:iam]` refutation)
 
 — the violated promise is one of six English sentences compiled from
 `tests/fixtures/gcp/sec_requirements/`, and the refutation names the exact
@@ -198,8 +202,18 @@ export GCP_GROUNDING_CONFIG=/checkout/.gcp-grounding.json
 ```
 
 Flags beat the environment, the environment beats the config file, and the
-config file beats what was auto-detected. `--state-explain` (below) prints which
-layer supplied every one of them.
+config file beats what was auto-detected. Once any current-state source is
+configured, `--state-explain` (below) prints which layer supplied every one of
+them; with no current-state source at all it collapses to the single "none
+configured" line and prints no settings block.
+
+A malformed value is handled differently by layer, on purpose: typo'd as a
+flag or an environment variable it is a hard usage error (exit 2) naming the
+token, but a malformed config FILE is refused **whole** — never partially
+applied — and the run continues on the defaults, reporting the refusal as
+non-blocking `? [provenance]` notes in the report body. A refused config still
+counts as "the operator wrote a config": auto-detection of a sibling
+`terraform.tfstate` is suppressed exactly as it is for a config that parsed.
 
 **No terraform binary is ever invoked.** The tool reads the files directly:
 state files, `terraform show -json` output, plan JSON, terraform JSON
@@ -623,7 +637,12 @@ fetch.capture_snapshot(
 Viewer-tier IAM roles suffice; only the categories you configure are captured
 (everything else honestly answers "not captured" rather than "absent"), and a
 snapshot older than the freshness ceiling (7 days by default) demotes itself —
-staleness can never silently bless a deleted role.
+staleness can never silently bless a deleted role. One namespace note for
+hand-authored snapshots: the `resource_types` category holds **terraform
+provider type names** (`google_compute_firewall`), never CAI asset types
+(`compute.googleapis.com/Instance`) — it is what terraform proposals are
+grounded against, and filling it with asset-type strings would make every real
+terraform type in a proposal read as a hallucinated `ungrounded` block.
 
 ## Proposing a terraform change — agent or human
 
@@ -637,12 +656,25 @@ terraform plan -out change.plan && terraform show -json change.plan > proposal.j
 gcp-ground verify-policy proposal.json --snapshot estate/api-snapshot.json
 
 # 2. Terraform JSON configuration (.tf.json), as edited in the repo
-gcp-ground verify-policy infra/prod/iam.tf.json --snapshot estate/api-snapshot.json
+gcp-ground verify-policy infra/prod/iam.tf.json --snapshot estate/api-snapshot.json \
+    --terraform-state infra/prod/terraform.tfstate
 
 # 3. Raw HCL (.tf) — read by a deliberately small built-in parser; anything it
 #    cannot resolve (module magic, interpolations) abstains loudly
-gcp-ground verify-policy infra/prod/iam.tf --snapshot estate/api-snapshot.json
+gcp-ground verify-policy infra/prod/iam.tf --snapshot estate/api-snapshot.json \
+    --terraform-state infra/prod/terraform.tfstate
 ```
+
+Forms 2 and 3 REQUIRE a current-state or provider-schema option (any of
+`--terraform-state` / `--terraform-plan` / `--terraform-dir` /
+`--provider-schema`, a config-file equivalent, or the auto-detected sibling
+`terraform.tfstate`): the terraform configuration routes live on the engine
+path, which only a configured current state or schema selects. With
+`--snapshot` alone, a `.tf.json` or `.tf` document is not judged — the run
+says so honestly (`? [document] … nothing was checked`, headline `PASSED —
+NOTHING VERIFIED`, exit 0) rather than passing silently, but nothing is
+checked. Form 1 needs no such option: rendered plan JSON is recognized on
+every path.
 
 Agents hit the same gate through hook mode automatically on every file edit;
 humans and CI call it directly as above. A `.tfstate` file is refused as a
@@ -727,8 +759,11 @@ scanning, and the hook pair (attack blocks, benign is byte-silent).
 
 # 2. Read the promises back: English sentence -> enforcement status ->
 #    compiled SMT rule -> pinned witnesses. Note the honest negatives: the
-#    untranslated prose sentence stays NOT ENFORCED, and the corpus naming
-#    the hallucinated roles/bigquery.reader is REJECTED with a did-you-mean.
+#    untranslated prose sentence stays NOT ENFORCED, and the promise naming
+#    the hallucinated roles/bigquery.reader shows as REJECTED with the
+#    compile's reason ("vocabulary is not grounded: roles/bigquery.reader
+#    does not exist in the snapshot"). The did-you-mean suggestions are
+#    step 1's compile-time output — the artifact carries the reason alone.
 python3 show_promises.py demo/compiled
 
 # 3. Block an attack: roles/owner granted to an external attacker. Exits 1
@@ -910,7 +945,8 @@ stanza quotes *"No role may include the permission
 iam.serviceAccounts.actAs."* and the refutation names the block to edit:
 `refuted by proposed_role_permissions[3]
 (google_project_iam_custom_role.data_viewer_scoped)
-permission='iam.serviceAccounts.actAs'`. The same `[iam_scope_diff]` warning
+permission='iam.serviceAccounts.actAs'
+role='projects/acme-prod/roles/dataViewerScoped'`. The same `[iam_scope_diff]` warning
 appears with the extra annotated as `(impersonation)` — the escalation class
 the accident would have handed to every member of the binding. What still
 abstains, stated rather than papered over: the binding's role existence (the
@@ -1020,10 +1056,12 @@ provider has never heard of. Both changes ground clean against the estate
 snapshot — roles, members and permissions all real — and both would die at
 `terraform plan`. `examples/terraform-schema/` holds the pieces:
 `provider-schema.json` is a captured `terraform providers schema -json` for
-the `google` provider (the three resource types this scenario uses,
-hand-authored here faithfully to the real shape; in your own repo, capture it
-from the init'd checkout with `terraform providers schema -json >
-provider-schema.json` and refresh it when `.terraform.lock.hcl` changes),
+the `google` provider (six resource types: the three this scenario uses plus
+the three the scenario-1 variation touches — the extras are what let that
+variation run with zero schema noise — hand-authored here faithfully to the
+real shape; in your own repo, capture it from the init'd checkout with
+`terraform providers schema -json > provider-schema.json` and refresh it when
+`.terraform.lock.hcl` changes),
 `proposal_ok.tf.json` is a clean change (a health-check firewall rule, a
 binding, a custom role), `proposal_typo.tf.json` is the same change with
 `src_ranges` for `source_ranges`, and `proposal_newer.tf.json` adds a `params`

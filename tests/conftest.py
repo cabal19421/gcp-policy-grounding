@@ -183,6 +183,38 @@ def no_tf_claims_env(blocked_import_env):
 # -- session-wide hygiene the suite cannot get right per-module ---------------
 
 
+#: THE SUITE'S PINNED CLOCK. The committed fixture snapshots carry fixed
+#: capture stamps (the toy snapshot 2026-07-18T09:30:00Z, the drift fixtures
+#: 2026-07-17T12:00:00Z, the agentic estate 2026-07-25T08:00:00Z), and the
+#: default seven-day freshness ceiling now runs on EVERY verify-policy path —
+#: the snapshot-only one included — so a suite measured against the wall clock
+#: would begin demoting every fixture-backed run about a week after the
+#: fixtures were authored. Pinning ``GCP_GROUNDING_NOW`` is the package's own
+#: documented answer ("a CI run can pin its own clock"); the value sits inside
+#: every committed stamp's ceiling (a stamp later than the pin is a negative
+#: age, which the ceiling passes). Tests about staleness itself pin their own
+#: clock per-test, which overrides this session default.
+PINNED_NOW = "2026-07-18T12:00:00Z"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _pin_the_clock():
+    """Pin :data:`gcp_grounding.freshness.NOW_ENV` for the whole run — see
+    :data:`PINNED_NOW`. Restored at session end so a surrounding shell keeps
+    its own value. Reaches subprocess children too: ``hookrunner.SCRUBBED_ENV``
+    deliberately does not scrub the clock, and the direct ``subprocess`` tests
+    inherit ``os.environ``."""
+    from gcp_grounding.freshness import NOW_ENV
+
+    previous = os.environ.get(NOW_ENV)
+    os.environ[NOW_ENV] = PINNED_NOW
+    yield
+    if previous is None:
+        os.environ.pop(NOW_ENV, None)
+    else:
+        os.environ[NOW_ENV] = previous
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _scrub_sec_llm_env():
     """Guarantee the fully-offline contract for the whole run.

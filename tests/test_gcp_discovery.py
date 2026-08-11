@@ -352,6 +352,30 @@ def test_auto_detection_runs_only_when_no_config_file_was_found(tmp_path):
     assert settings.options.terraform_state == ()
 
 
+def test_a_refused_discovered_config_also_suppresses_auto_detection(tmp_path):
+    """A DISCOVERED config whose parse was refused suppresses auto-detection
+    exactly like a parsed one: the operator who wrote it has already said what
+    the sources are, and grounding against a sibling ``terraform.tfstate`` the
+    (broken) config never named is exactly what the config-presence rule
+    exists to prevent. The refusal still surfaces as problems, and every
+    setting falls to its default."""
+    root = repo(tmp_path)
+    write(os.path.join(root, CONFIG),
+          config_document(precedence="bogus-token", max_age="not-a-duration"))
+    write(os.path.join(root, "terraform.tfstate"), {"version": 4})
+
+    settings, problems = discovery.settings_for(os.path.join(root, "iam.json"),
+                                                env={})
+
+    assert problems, "the refusal must stay on the record"
+    assert any("bogus-token" in problem for problem in problems)
+    # The load-bearing assertion: the refused config did NOT fall through to
+    # the auto-detection layer.
+    assert settings.options.terraform_state == ()
+    assert settings.origins["terraform_state"] == "default"
+    assert settings.origins["max_age"] == "default"
+
+
 # -- precedence ---------------------------------------------------------------
 
 
@@ -385,6 +409,35 @@ def test_resolve_settings_origins_name_the_layer_that_supplied_each_field(tmp_pa
 
     # The map is TOTAL, so the explain surface can print a line per input.
     assert set(settings.origins) == set(discovery.SETTINGS_FIELDS)
+
+
+def test_env_supplied_requirements_report_the_env_origin(tmp_path):
+    """``$GCP_GROUNDING_REQUIREMENTS`` is the ENVIRONMENT layer's contribution:
+    an env-only value reports ``env`` (never ``cli``), the flag still beats it,
+    and the environment still beats a config file's ``requirements`` — the same
+    precedence and the same labels every other setting gets."""
+    root = repo(tmp_path)
+    path = write(os.path.join(root, CONFIG),
+                 config_document(requirements="sec_requirements/prod.md"))
+    config, problems = discovery.discover(os.path.join(root, "iam.json"), env={})
+    assert problems == () and config is not None
+
+    env = {discovery.REQUIREMENTS_ENV: "/env/reqs"}
+    env_only = discovery.resolve_settings(cli={}, env=env, config=config)
+    assert env_only.requirements == "/env/reqs"
+    assert env_only.origins["requirements"] == "env"
+
+    flagged = discovery.resolve_settings(cli={"requirements": "/flag/reqs"},
+                                         env=env, config=config)
+    assert flagged.requirements == "/flag/reqs"
+    assert flagged.origins["requirements"] == "cli"
+
+    from_config = discovery.resolve_settings(cli={}, env={}, config=config)
+    assert from_config.origins["requirements"] == f"config {path}"
+
+    # The CLI re-exports the name it has always exported; the OWNER moved.
+    from gcp_grounding.cli import REQUIREMENTS_ENV
+    assert REQUIREMENTS_ENV == discovery.REQUIREMENTS_ENV
 
 
 def test_an_unknown_cli_setting_is_a_caller_bug():

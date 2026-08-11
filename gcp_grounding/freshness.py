@@ -32,6 +32,13 @@ that asymmetry is deliberate: a stale source may no longer justify a pass, but a
 would make letting a snapshot rot a way to switch the gate off, which is a
 strictly easier attack than fixing the finding.
 
+The demotion's exact scope, so nobody reads more into it: ABSENCE claims
+(would-be ``ungrounded``) demote to named abstentions and existence lookups
+over the demoted categories go undecidable, but contradictions survive, and
+positive verdicts a check already computed remain visible — ``grounded``
+lines can sit directly beside the loud ``staleness`` abstention that says
+their vocabulary is no longer licensed to justify a pass.
+
 **Timestamps are strict, and naive means unknown.** :func:`parse_timestamp`
 returns ``None`` for a stamp with no offset rather than assuming UTC, because
 assuming UTC on a local-time stamp silently shifts an age by up to a day, and it

@@ -100,6 +100,7 @@ __all__ = [
     "STATE_NAME",
     "BACKEND_DIR",
     "TARGET_HOW",
+    "REQUIREMENTS_ENV",
     "CONFIG_KEYS",
     "TERRAFORM_KEYS",
     "OPTION_FIELDS",
@@ -151,6 +152,14 @@ BACKEND_DIR = ".terraform"
 #: The :data:`gcp_grounding.baseline.HOWS` spelling a config-supplied target
 #: carries into the explain surface.
 TARGET_HOW = "config-map"
+
+#: Environment variable naming the compiled requirements. Defined HERE, in the
+#: settings layer that owns the ``requirements`` field, and re-exported by the
+#: CLI: ``requirements`` has no ``SourceOptions`` slot, so
+#: :func:`gcp_grounding.sources.from_env` cannot resolve it — the environment
+#: layer below reads it directly, which is what makes an env-supplied value
+#: report the ``env`` origin like every other env-supplied setting.
+REQUIREMENTS_ENV = "GCP_GROUNDING_REQUIREMENTS"
 
 #: Config key → the settings field it supplies. THE ONE TABLE: the config file
 #: spells the snapshot ``snapshot`` and the drift mode ``drift`` while
@@ -498,7 +507,10 @@ def discover(start_path: str | os.PathLike[str], *,
     walking up from the start path's directory wins, and a config that fails to
     parse is the answer — ``None`` plus its problems — rather than a reason to
     keep climbing: a broken config silently replaced by a grandparent's is a run
-    that used a state file the operator never named.
+    that used a state file the operator never named. ``(None, ())`` therefore
+    means "no config file was found" and ``(None, problems)`` means "found but
+    refused" — callers use that distinction to suppress auto-detection for a
+    refused config exactly as they would for a parsed one.
 
     NEVER RAISES. A discovery layer that can crash is a gate that can crash on a
     file it was only asked to look near.
@@ -593,9 +605,21 @@ def _cli_layer(cli: Any) -> Mapping[str, Any]:
 
 def _env_layer(env: Mapping[str, str] | None) -> Mapping[str, Any]:
     """The environment layer, resolved by THE ONE env resolver. A second one
-    here is a second place to apply a different precedence."""
+    here is a second place to apply a different precedence.
+
+    ``requirements`` is the one field read directly: it has no ``SourceOptions``
+    slot for :func:`gcp_grounding.sources.from_env` to fill, and resolving
+    :data:`REQUIREMENTS_ENV` anywhere else would either misattribute the value's
+    origin or let a config file outrank the environment for this one setting.
+    """
     options = sources.from_env(env)
-    return {name: getattr(options, name) for name in OPTION_FIELDS}
+    layer: dict[str, Any] = {name: getattr(options, name)
+                             for name in OPTION_FIELDS}
+    environ = os.environ if env is None else env
+    raw = environ.get(REQUIREMENTS_ENV)
+    if raw and raw.strip():
+        layer["requirements"] = raw.strip()
+    return layer
 
 
 def _config_layer(config: Config | None) -> Mapping[str, Any]:
@@ -673,14 +697,18 @@ def settings_for(start_path: str | os.PathLike[str], *, cli: Any = None,
                  ) -> tuple[Settings, tuple[str, ...]]:
     """The settings governing *start_path*, plus every problem found.
 
-    Discovery first; auto-detection runs ONLY when no config file was found,
-    because an operator who wrote a config has already said what the sources
-    are and a detected file appearing beside it would be a source they never
-    named.
+    Discovery first; auto-detection runs ONLY when no config file was found —
+    a found-but-REFUSED config (``discover`` returned ``None`` with problems)
+    also suppresses detection, because an operator who wrote a config has
+    already said what the sources are and a detected file appearing beside it
+    would be a source they never named. That the config failed to parse does
+    not change who said what: the refusal surfaces as problems, the settings
+    fall to their defaults, and no source the operator never named is guessed
+    into the run.
     """
     config, problems = discover(start_path, env=env)
     auto: Auto | None = None
-    if config is None:
+    if config is None and not problems:
         auto, detected = auto_detect(start_path)
         problems = problems + detected
     return resolve_settings(cli=cli, env=env, config=config, auto=auto), problems

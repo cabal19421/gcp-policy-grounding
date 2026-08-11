@@ -45,7 +45,7 @@ from pathlib import Path
 
 import pytest
 
-from gcp_grounding import discovery, sources
+from gcp_grounding import discovery, freshness, sources
 from gcp_grounding.cli import SNAPSHOT_ENV, build_parser, main
 from gcp_grounding.core.solver import get_solver
 from gcp_grounding.knowledge import GcpSnapshot
@@ -80,13 +80,25 @@ def _state_env_off(monkeypatch):
     """No test here inherits a developer's exported state configuration.
 
     Every assertion is about what a GIVEN configuration does, and an ambient
-    ``$GCP_GROUNDING_TF_STATE`` (or ``$GCP_GROUNDING_SNAPSHOT``, or a pinned
-    ``$GCP_GROUNDING_NOW``) would turn a "nothing is configured" case into a
-    configured one and invert it without saying so.
+    ``$GCP_GROUNDING_TF_STATE`` (or ``$GCP_GROUNDING_SNAPSHOT``) would turn a
+    "nothing is configured" case into a configured one and invert it without
+    saying so.
+
+    THE CLOCK IS THE ONE EXCEPTION, re-pinned after the scrub: the default
+    freshness ceiling runs on every path (the snapshot-only one included), so
+    an unpinned run measures the committed fixtures against the wall clock and
+    every case here would go stale about a week after the fixtures were
+    authored — and the two-invocation byte-equality cases would each resolve
+    their own microsecond wall clock into ``state.as_of``. Pinning ``now`` is
+    a *given configuration* like any flag in these tests, not an ambient state
+    source: it configures no current state (see ``_STATE_OPTIONS``).
     """
+    from tests.conftest import PINNED_NOW
+
     for name in list(os.environ):
         if name.startswith("GCP_GROUNDING"):
             monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(freshness.NOW_ENV, PINNED_NOW)
 
 
 def invoke(capsys, *argv: str) -> tuple[int, str, str]:
@@ -515,6 +527,100 @@ def test_an_as_of_past_the_ceiling_makes_the_counterpart_stale(capsys, tmp_path)
     assert kinds_of(aged, "staleness")
 
 
+def test_the_default_ceiling_runs_on_the_snapshot_only_path(capsys, monkeypatch,
+                                                            tmp_path):
+    """``--snapshot`` alone — the hook's own configured shape — is still under
+    the DEFAULT seven-day ceiling: an over-age snapshot earns the same
+    per-source ``staleness`` abstention the engine path emits, every category
+    it supplies is demoted (existence checks become named abstentions, never
+    blessings from a vocabulary nobody can show is current), the headline
+    carries the coverage qualifier, and the exit stays 0 — unverified never
+    blocks."""
+    monkeypatch.setenv(freshness.NOW_ENV, "2027-06-01T00:00:00Z")
+    code, out, err = invoke(capsys, "verify-policy", str(GOOD),
+                            "--snapshot", str(SNAPSHOT), "--no-config")
+    assert code == 0 and err == ""
+    # The coverage-qualified headline, never the bare PASSED. GOOD carries one
+    # solver-only CEL check that survives the demotion (staleness demotes
+    # snapshot-backed existence, not solver arithmetic), so the form here is
+    # 'PASSED (N unchecked)'; a document with snapshot-backed claims alone
+    # earns 'PASSED — NOTHING VERIFIED (N unchecked)'.
+    assert "unchecked) [" in out and "PASSED [" not in out
+    assert "? [staleness]" in out
+    assert "past the 7 days freshness limit" in out
+    assert "demoted to 'uncaptured'" in out
+    assert "snapshot did not capture" in out
+    assert "exists in the snapshot" not in out
+
+    # A document whose every claim is snapshot-backed grounds NOTHING once the
+    # vocabulary is demoted, and the headline says so.
+    existence_only = write_json(tmp_path / "existence_only.json", {
+        "bindings": [{"role": "roles/bigquery.dataViewer",
+                      "members": ["group:data-eng@acme.example"]}],
+        "etag": "BwXtRfPolicy=", "version": 1})
+    code, nothing, _ = invoke(capsys, "verify-policy", existence_only,
+                              "--snapshot", str(SNAPSHOT), "--no-config")
+    assert code == 0
+    assert "PASSED — NOTHING VERIFIED" in nothing
+    assert "? [staleness]" in nothing
+
+
+def test_a_typed_max_age_and_as_of_are_honoured_with_only_a_snapshot(capsys):
+    """``--max-age`` and ``--as-of`` are read on the snapshot-only path: a
+    pinned clock a year out demotes under the default ceiling, a generous
+    typed ceiling admits the same snapshot, and the ``off`` spelling is the
+    explicit opt-out."""
+    stale_clock = ("--as-of", "2027-06-01T00:00:00Z")
+    code, out, _ = invoke(capsys, "verify-policy", str(GOOD), "--snapshot",
+                          str(SNAPSHOT), "--no-config", *stale_clock)
+    assert code == 0 and "? [staleness]" in out
+
+    code, generous, _ = invoke(capsys, "verify-policy", str(GOOD), "--snapshot",
+                               str(SNAPSHOT), "--no-config", *stale_clock,
+                               "--max-age", "3650d")
+    assert code == 0
+    assert "staleness" not in generous and "PASSED [" in generous
+
+    code, opted_out, _ = invoke(capsys, "verify-policy", str(GOOD), "--snapshot",
+                                str(SNAPSHOT), "--no-config", *stale_clock,
+                                "--max-age", "off")
+    assert code == 0
+    assert "staleness" not in opted_out and "PASSED [" in opted_out
+
+
+def test_the_max_age_environment_variable_reaches_the_snapshot_only_path(
+        capsys, monkeypatch):
+    """``$GCP_GROUNDING_MAX_AGE`` tightens (and, malformed, refuses) the
+    snapshot-only run exactly as it does the engine path: a two-day-old
+    snapshot under a one-day env ceiling demotes, and a typo'd ceiling is a
+    usage error naming the token — never a silent fall back."""
+    monkeypatch.setenv(freshness.NOW_ENV, "2026-07-20T12:00:00Z")
+    monkeypatch.setenv(sources.MAX_AGE_ENV, "1d")
+    code, out, _ = invoke(capsys, "verify-policy", str(GOOD),
+                          "--snapshot", str(SNAPSHOT), "--no-config")
+    assert code == 0
+    assert "past the 1 day freshness limit" in out
+
+    monkeypatch.setenv(sources.MAX_AGE_ENV, "7dd")
+    code, _, err = invoke(capsys, "verify-policy", str(GOOD),
+                          "--snapshot", str(SNAPSHOT), "--no-config")
+    assert code == 2 and "7dd" in err
+
+
+def test_hook_mode_surfaces_snapshot_staleness_through_abstain_notes(
+        capsys, monkeypatch):
+    """The hook with only a snapshot configured stays exit 0 on staleness —
+    unverified never blocks — and ``--abstain-notes`` puts the demotion on the
+    record instead of byte-silence."""
+    monkeypatch.setenv(freshness.NOW_ENV, "2027-06-01T00:00:00Z")
+    code, out, err = run_hook(capsys, monkeypatch, hook_event(GOOD),
+                              "--snapshot", str(SNAPSHOT), "--no-config",
+                              "--abstain-notes")
+    assert (code, out) == (0, "")
+    assert "NOT DECIDED" in err
+    assert "[staleness]" in err and "demoted to 'uncaptured'" in err
+
+
 # -- --state-explain and the json state key ------------------------------------
 
 
@@ -529,6 +635,28 @@ def test_state_explain_writes_the_provenance_block_to_stderr(capsys, tmp_path):
     assert err.startswith("state used this run:")
     assert "sources:" in err and "settings:" in err and "targets:" in err
     assert state in err and str(ESTATE) in err
+
+
+def test_a_default_run_resolves_one_clock_for_the_explain_surfaces(
+        capsys, tmp_path, monkeypatch):
+    """On a run with NO ``--as-of`` and no pinned environment clock, the wall
+    clock the run resolves for enforcement is the SAME clock the explain
+    surfaces read: ``--state-explain`` prints real per-source ages (never
+    'age=unknown (no clock was injected)') and the json ``state.as_of`` is the
+    resolved clock, not a fallback to the oldest capture time."""
+    monkeypatch.delenv(freshness.NOW_ENV, raising=False)
+    state = write_json(tmp_path / "terraform.tfstate", firewall_state())
+    code, out, err = _state_run(capsys, GOOD, "--terraform-state", state,
+                                "--state-explain")
+    assert code == 0
+    assert "no clock was injected" not in err
+    assert "age=unknown" not in err
+    assert " age=" in err
+    as_of = json.loads(out)["state"]["as_of"]
+    resolved = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    assert resolved.tzinfo is not None
+    # Not the oldest capture time: the estate snapshot's committed stamp.
+    assert as_of != GcpSnapshot.load(str(ESTATE)).captured_at
 
 
 def test_state_explain_with_a_domain_and_key_prints_the_drill_down(capsys, tmp_path):

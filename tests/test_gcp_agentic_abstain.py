@@ -715,6 +715,12 @@ def test_c09_stale_stamp_reaches_the_human_render(cel_policy, tmp_path,
     NOT on ungrounded ones — those already carry the capture time inside the
     reasoner's own message (``reasoner.py:164``), and double-stamping would
     read as two different facts.
+
+    ``--max-age off`` is the explicit opt-out the run needs to JUDGE against a
+    2019 snapshot at all: the default freshness ceiling now demotes a stale
+    snapshot's categories on the snapshot-only hook path too, so without the
+    opt-out this run abstains instead of blocking — which is its own, separate
+    contract. This test is about the render's stamp, not the ceiling.
     """
     document = json.loads(cel_policy.read_text(encoding="utf-8"))
     document["bindings"].append(
@@ -722,7 +728,8 @@ def test_c09_stale_stamp_reaches_the_human_render(cel_policy, tmp_path,
     rendered_source = write_json(tmp_path / "stale_render.json", document)
     stale = snapshot_variant(captured_at=STALE_CAPTURED_AT)
 
-    outcome = run_hook(hook_event(rendered_source), snapshot=stale)
+    outcome = run_hook(hook_event(rendered_source), snapshot=stale,
+                       extra_argv=("--max-age", "off"))
     assert_blocked(outcome, "roles/bigquery.reader")
 
     stamp = f"[snapshot {STALE_CAPTURED_AT}]"

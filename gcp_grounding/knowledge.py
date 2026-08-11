@@ -382,7 +382,12 @@ class GcpSnapshot:
     principals: frozenset[str] | None = None
     #: org-policy constraint name → record ({"value_type": "boolean"|"list", ...}).
     constraints: dict[str, dict[str, Any]] | None = None
-    #: asset types (e.g. "compute.googleapis.com/Instance").
+    #: TERRAFORM provider resource type names (e.g. "google_compute_firewall"),
+    #: never CAI asset types: the grounding route checks the types a terraform
+    #: proposal declares, and fetch.py fills this category from the terraform
+    #: schema alone because unioning CAI asset types into it would flag the
+    #: category as enumerated with the wrong namespace — a partial capture
+    #: manufacturing false "ungrounded" evidence for perfectly real types.
     resource_types: frozenset[str] | None = None
     #: VPC networks as "projects/<project>/global/networks/<name>" (extractors
     #: normalize self-links by stripping the
