@@ -27,7 +27,18 @@ second source today.
 ``GCP_GROUNDING_MAX_AGE``      a :func:`gcp_grounding.freshness.parse_duration` ceiling
 ``GCP_GROUNDING_NOW``          the pinned clock (:data:`gcp_grounding.freshness.NOW_ENV`)
 ``GCP_GROUNDING_REDACT_SALT``  the digest salt (:data:`gcp_grounding.redact.SALT_ENV`)
+``GCP_GROUNDING_PROVIDER_SCHEMA`` captured ``terraform providers schema -json``
+                               path(s), ``os.pathsep``-separated
+                               (:data:`gcp_grounding.provider_schema.PROVIDER_SCHEMA_ENV`)
+``GCP_GROUNDING_SCHEMA_POLICY`` one of :data:`gcp_grounding.provider_schema.SCHEMA_POLICIES`
 ============================== ================================================
+
+The two provider-schema options ride on :class:`SourceOptions` so the settings
+layers, the origin tracking and ``--state-explain`` treat them like every other
+setting — but they are NOT current-state sources: :meth:`SourceOptions
+.configured` does not list them, ``load_current`` never reads them, and the
+schema file is consumed by :mod:`gcp_grounding.tf_schema_checks` through
+:mod:`gcp_grounding.provider_schema` alone.
 
 ``completeness`` is the ONE option with no environment variable, on purpose. It
 is the licence to read an absence as a non-existence, and an exported variable
@@ -99,7 +110,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-from . import drift, estate, facts, freshness, knowledge, merge, provenance, redact
+from . import (drift, estate, facts, freshness, knowledge, merge, provenance,
+               provider_schema, redact)
 from .core.log import get_logger
 from .core.report import Verdict
 from .knowledge import GcpSnapshot
@@ -120,6 +132,8 @@ __all__ = [
     "MAX_AGE_ENV",
     "NOW_ENV",
     "SALT_ENV",
+    "PROVIDER_SCHEMA_ENV",
+    "SCHEMA_POLICY_ENV",
     "PATH_FIELDS",
     "ENV_FIELDS",
     "ESTATE_TABLES",
@@ -169,11 +183,17 @@ MAX_AGE_ENV = "GCP_GROUNDING_MAX_AGE"
 NOW_ENV = freshness.NOW_ENV
 #: The digest salt. Owned by ``redact``, for the same reason.
 SALT_ENV = redact.SALT_ENV
+#: The captured provider schema path(s). Owned by ``provider_schema``, for the
+#: same reason.
+PROVIDER_SCHEMA_ENV = provider_schema.PROVIDER_SCHEMA_ENV
+#: The schema policy. Owned by ``provider_schema``.
+SCHEMA_POLICY_ENV = provider_schema.SCHEMA_POLICY_ENV
 
 #: The :class:`SourceOptions` fields holding a LIST of paths. Everything else is
 #: a single value, and the split rule is applied by field name rather than by
 #: sniffing the value, so a path containing a separator cannot change the shape.
-PATH_FIELDS = ("extra", "terraform_state", "terraform_plan", "terraform_dir")
+PATH_FIELDS = ("extra", "terraform_state", "terraform_plan", "terraform_dir",
+               "provider_schema")
 
 #: Field → environment variable. ``completeness`` is deliberately absent; see
 #: the module docstring.
@@ -188,6 +208,8 @@ ENV_FIELDS = {
     "drift_policy": DRIFT_POLICY_ENV,
     "max_age": MAX_AGE_ENV,
     "now": NOW_ENV,
+    "provider_schema": PROVIDER_SCHEMA_ENV,
+    "schema_policy": SCHEMA_POLICY_ENV,
 }
 
 # -- the vocabulary this module decides with ----------------------------------
@@ -257,6 +279,13 @@ class SourceOptions:
     max_age: str | None = None
     now: str | None = None
     completeness: str | None = None
+    #: Captured ``terraform providers schema -json`` path(s) — NOT a
+    #: current-state source (absent from :meth:`configured`); consumed by
+    #: :mod:`gcp_grounding.tf_schema_checks` alone.
+    provider_schema: tuple[str, ...] = ()
+    #: One of :data:`gcp_grounding.provider_schema.SCHEMA_POLICIES`, or
+    #: ``None`` when nobody chose (the checks then apply their own default).
+    schema_policy: str | None = None
 
     def __post_init__(self) -> None:
         for name in PATH_FIELDS:
@@ -711,6 +740,12 @@ def _resolve(options: SourceOptions) -> tuple[_Resolved | None, str]:
     if completeness is not None and completeness not in provenance.SCOPES:
         return None, (f"--completeness {completeness!r} is not one of "
                       f"{list(provenance.SCOPES)}")
+
+    if options.schema_policy is not None \
+            and options.schema_policy not in provider_schema.SCHEMA_POLICIES:
+        return None, (f"--schema-policy / ${SCHEMA_POLICY_ENV} "
+                      f"{options.schema_policy!r} is not one of "
+                      f"{list(provider_schema.SCHEMA_POLICIES)}")
 
     return _Resolved(options=options, precedence=policy, precedence_name=name,
                      drift_policy=drift_policy, max_age=max_age, now=now,

@@ -64,6 +64,7 @@ __all__ = [
     "RESOURCE_DRIFT_MARKER",
     "RESOURCE_DRIFT_SAMPLE",
     "NOT_DECIDED",
+    "NON_ESTATE_KINDS",
     "drift_verdicts",
     "adjudicate",
     "guarded",
@@ -112,6 +113,21 @@ DRIFT_POLICIES = ("annotate", "block", "abstain")
 
 #: The default. Reporting is always on; blocking and suppressing are opt-in.
 DEFAULT_DRIFT_POLICY = "annotate"
+
+#: Verdict kinds whose EVIDENCE lies wholly outside the estate — a family
+#: registers its kinds here (at import time, the way domain modules register
+#: estate soundness) to say its findings rest on some other artifact
+#: entirely, and :func:`adjudicate` leaves them untouched. The exemption is
+#: HONESTY-REQUIRED, not a convenience: rule 4's demotion clause states that
+#: "the current-state view proves no such thing", and stamping that sentence
+#: onto a verdict the current-state view never fed — the provider-schema
+#: checks decide from a captured ``terraform providers schema -json`` file and
+#: read no snapshot table at all — would fabricate a reason. Estate drift
+#: cannot make non-estate evidence uncertain, so there is nothing here to
+#: adjudicate. :func:`postpass` needs no twin of this set: it resolves each
+#: kind through :data:`gcp_grounding.provenance.VERDICT_KIND_CATEGORIES` and
+#: already leaves an unmapped kind alone.
+NON_ESTATE_KINDS: set[str] = set()
 
 #: How many drift verdicts are listed before the summary takes over. Comfortably
 #: above ``len(DRIFT_KINDS)``, which is the floor the round-robin fill needs in
@@ -523,6 +539,11 @@ def adjudicate(verdicts: Iterable[Verdict], read_set: Iterable[tuple[str, str]],
        see the category behind the kind.
     5. An ``unverified`` is unchanged. It is already the honest answer.
 
+    A verdict whose KIND is registered in :data:`NON_ESTATE_KINDS` is exempt
+    from all five: its evidence lies wholly outside the estate, so a demotion
+    clause about what the current-state view proves would be a fabricated
+    reason — see the registry's own comment.
+
     A snapshot that is not a :class:`
     ~gcp_grounding.reconciled.ReconciledSnapshot` has no provenance to
     adjudicate against, so the verdicts come back untouched.
@@ -539,6 +560,11 @@ def adjudicate(verdicts: Iterable[Verdict], read_set: Iterable[tuple[str, str]],
 def _adjudicate_one(verdict: Verdict, pairs: tuple[tuple[str, str], ...],
                     taints: tuple[tuple[str, str, str], ...], snapshot: Any,
                     policy: str) -> Verdict:
+    if verdict.kind in NON_ESTATE_KINDS:
+        # Evidence wholly outside the estate: every rule below reasons about
+        # what the current-state view can or cannot prove, and none of it
+        # applies to a verdict that view never fed. See NON_ESTATE_KINDS.
+        return verdict
     if verdict.status == "grounded":
         if not taints:
             return verdict                                          # rule 1, clean

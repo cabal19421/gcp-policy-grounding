@@ -1,0 +1,31 @@
+{
+  "resource": {
+    "google_compute_firewall": {
+      "allow_health_checks": {
+        "allow": [{"ports": ["8080"], "protocol": "tcp"}],
+        "direction": "INGRESS",
+        "name": "allow-lb-health-checks",
+        "network": "projects/acme-prod/global/networks/prod-vpc",
+        "priority": 1000,
+        "project": "acme-prod",
+        "src_ranges": ["130.211.0.0/22", "35.191.0.0/16"],
+        "target_tags": ["web"]
+      }
+    },
+    "google_project_iam_binding": {
+      "analysts": {
+        "members": ["group:data-eng@acme.example"],
+        "project": "acme-prod",
+        "role": "roles/bigquery.dataViewer"
+      }
+    },
+    "google_project_iam_custom_role": {
+      "usage_auditor": {
+        "permissions": ["bigquery.datasets.get", "bigquery.tables.get"],
+        "project": "acme-prod",
+        "role_id": "usageAuditor",
+        "title": "Acme Usage Auditor"
+      }
+    }
+  }
+}

@@ -14,6 +14,8 @@ Four subcommands, exposed both as the ``gcp-ground`` console script and as
                              [--terraform-dir PATH ...] [--precedence SPEC]
                              [--drift-policy annotate|block|abstain]
                              [--max-age DURATION] [--completeness SCOPE]
+                             [--provider-schema PATH ...]
+                             [--schema-policy block|annotate|off]
                              [--as-of ISO8601] [--target DOMAIN:KEY ...]
                              [--no-auto-baseline] [--config PATH] [--no-config]
                              [--state-explain [DOMAIN:KEY]]
@@ -111,6 +113,11 @@ THE STATE FLAGS, all optional and all defaulting to today's behaviour:
                                sidecar — the only way to license absence
                                reasoning over an estate table whose
                                ``.origins.json`` is missing
+``--provider-schema PATH``     a captured ``terraform providers schema -json``
+                               document to judge terraform attributes against
+                               (repeatable; the gate never runs terraform)
+``--schema-policy MODE``       what a provider-schema finding costs
+                               (``block``/``annotate``/``off``, default ``block``)
 ``--as-of ISO8601``            pin the clock (testing and CI reproducibility)
 ``--target DOMAIN:KEY``        which estate row this document is a proposal for
 ``--no-auto-baseline``         do not derive a current counterpart at all
@@ -425,7 +432,8 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from . import discovery, drift, engine, explain_state, freshness, gate, merge, provenance, redact, sources
+from . import (discovery, drift, engine, explain_state, freshness, gate, merge,
+               provenance, provider_schema, redact, sources)
 # Imported by NAME rather than as the module, because ``baseline`` is also the
 # name of a CLI flag and of more than one local here — a shadowed module is a
 # NameError waiting for the one branch nobody exercised.
@@ -489,8 +497,13 @@ _COMPLETENESS = tuple(scope for scope in provenance.SCOPES if scope != "uncaptur
 #: the vocabulary and has always been, so a run that names only a snapshot takes
 #: the pre-existing path and its output stays byte-identical. See
 #: :func:`_state_configured`.
+#: ``provider_schema`` and ``schema_policy`` are counted DELIBERATELY: the
+#: terraform proposal routes (`.tf` / `.tf.json` through the synthetic plan)
+#: exist only on the engine path, so an operator who configured schema judgment
+#: must land there — a schema configured on the plain path would judge nothing
+#: and say nothing.
 _STATE_OPTIONS = ("extra", "terraform_state", "terraform_plan", "terraform_dir",
-                  "origins", "completeness")
+                  "origins", "completeness", "provider_schema", "schema_policy")
 
 #: The verdict kinds :func:`gcp_grounding.sources.load_current` gives a
 #: configured source that contributed NOTHING — the incomplete-coverage signal
@@ -910,6 +923,23 @@ def _add_state_flags(verify: argparse.ArgumentParser) -> None:
              "override rather than an accident (default: unset, so the "
              "shape-based fallback in sources.load_source applies)")
     verify.add_argument(
+        "--provider-schema", metavar="PATH", action="append", default=None,
+        help=f"a captured 'terraform providers schema -json' document — raw "
+             f"output, or the gcp-provider-schema/1 wrapper — to judge every "
+             f"google_* terraform block's attributes against (repeatable, one "
+             f"per provider; default: ${sources.PROVIDER_SCHEMA_ENV}, "
+             f"{os.pathsep!r}-separated). The gate NEVER runs terraform: "
+             f"capture the file yourself, credential-free, where terraform "
+             f"init has already run")
+    verify.add_argument(
+        "--schema-policy", choices=provider_schema.SCHEMA_POLICIES, default=None,
+        help=f"what a provider-schema finding costs: 'block' keeps the honest "
+             f"statuses (ungrounded/contradicted fail the gate — what "
+             f"'terraform plan' would do to the same attribute), 'annotate' "
+             f"demotes them to warnings, 'off' ignores the captured schema "
+             f"(default: {provider_schema.DEFAULT_SCHEMA_POLICY}, falling "
+             f"back to ${sources.SCHEMA_POLICY_ENV})")
+    verify.add_argument(
         "--as-of", metavar="ISO8601", default=None,
         help=f"pin the clock every staleness answer is measured against, as an "
              f"AWARE ISO-8601 instant — a testing and CI-reproducibility aid, "
@@ -1211,14 +1241,16 @@ def _cli_layer(args: argparse.Namespace, start: str) -> dict[str, Any]:
     for flag, field in (("snapshot", "primary"), ("origins", "origins"),
                         ("precedence", "precedence"),
                         ("drift_policy", "drift_policy"), ("max_age", "max_age"),
-                        ("as_of", "now"), ("completeness", "completeness")):
+                        ("as_of", "now"), ("completeness", "completeness"),
+                        ("schema_policy", "schema_policy")):
         value = getattr(args, flag, None)
         if value:
             layer[field] = value
     for flag, field in (("merge_source", "extra"),
                         ("terraform_state", "terraform_state"),
                         ("terraform_plan", "terraform_plan"),
-                        ("terraform_dir", "terraform_dir")):
+                        ("terraform_dir", "terraform_dir"),
+                        ("provider_schema", "provider_schema")):
         value = getattr(args, flag, None)
         if value:
             layer[field] = tuple(value)
@@ -1324,6 +1356,28 @@ def _hints(settings: discovery.Settings, path: str) -> Hints:
 def _ground(args: argparse.Namespace, settings: discovery.Settings,
             snapshot: GcpSnapshot, notes: tuple[Verdict, ...], *, path: str,
             rules: Any, carried: Any) -> _Ground:
+    """Ground *path* under this run's resolved provider-schema runtime.
+
+    The activation happens HERE, around the one grounding call both modes
+    share, because :func:`gcp_grounding.tf_schema_checks.check_provider_schema`
+    runs deep inside ``ground_policy`` where no settings object can reach it:
+    without the activation the checks fall back to their ambient env+config
+    resolution and a ``--provider-schema`` FLAG would be silently ignored.
+    Restored in a ``finally`` so one in-process ``main`` call never leaks its
+    answer into the next (the test suite invokes ``main`` repeatedly).
+    """
+    previous = provider_schema.activate(
+        provider_schema.runtime_from_settings(settings))
+    try:
+        return _ground_routed(args, settings, snapshot, notes, path=path,
+                              rules=rules, carried=carried)
+    finally:
+        provider_schema.activate(previous)
+
+
+def _ground_routed(args: argparse.Namespace, settings: discovery.Settings,
+                   snapshot: GcpSnapshot, notes: tuple[Verdict, ...], *,
+                   path: str, rules: Any, carried: Any) -> _Ground:
     """Ground *path* on whichever route this run's configuration chose.
 
     NO STATE CONFIGURED is the pre-existing path, unchanged, so a run that names

@@ -84,7 +84,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Mapping
 
-from . import drift, freshness, merge, provenance, sources
+from . import drift, freshness, merge, provenance, provider_schema, sources
 from .baseline import TargetRef
 from .core.log import get_logger
 from .sources import SourceOptions
@@ -163,6 +163,8 @@ CONFIG_KEYS = {
     "drift": "drift_policy",
     "targets": "targets",
     "requirements": "requirements",
+    "provider_schema": "provider_schema",
+    "schema_policy": "schema_policy",
 }
 
 #: Key inside the ``terraform`` object → the settings field it supplies.
@@ -410,6 +412,10 @@ def parse_config(data: Any, *, path: str) -> tuple[Config | None, tuple[str, ...
         raw = data[key]
         if key == "targets":
             values[name] = _targets(raw, directory, problems)
+        elif key == "provider_schema":
+            # A path LIST like the terraform keys — one captured schema per
+            # provider — resolved against the config file's own directory.
+            values[name] = _path_list(raw, key, directory, problems)
         elif key in ("snapshot", "requirements"):
             values[name] = _one_path(raw, key, directory, problems)
         else:
@@ -456,6 +462,10 @@ def parse_config(data: Any, *, path: str) -> tuple[Config | None, tuple[str, ...
     if mode and mode not in drift.DRIFT_POLICIES:
         problems.append(f"'drift' {mode!r} is not one of "
                         f"{list(drift.DRIFT_POLICIES)}")
+    policy = values.get("schema_policy")
+    if policy and policy not in provider_schema.SCHEMA_POLICIES:
+        problems.append(f"'schema_policy' {policy!r} is not one of "
+                        f"{list(provider_schema.SCHEMA_POLICIES)}")
 
     if problems:
         # NEVER A PARTIAL CONFIG. Half a parsed file is a setting silently

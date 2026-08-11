@@ -101,6 +101,9 @@ EXPECTED_MODULES = frozenset({
     "gcp_grounding/org_checks.py",
     "gcp_grounding/sec_domains.py",
     "gcp_grounding/tf_claims.py",
+    # tf_schema_checks.py landed with the provider-schema capability and is
+    # WALKED like every other *_checks.py domain module.
+    "gcp_grounding/tf_schema_checks.py",
     "gcp_grounding/vpcsc_claims.py",
     "gcp_grounding/vpcsc_checks.py",
 })

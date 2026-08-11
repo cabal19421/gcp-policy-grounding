@@ -110,6 +110,9 @@ ENV_CASES = (
     ("drift_policy", sources.DRIFT_POLICY_ENV, "block", "abstain"),
     ("max_age", sources.MAX_AGE_ENV, "3d", "9d"),
     ("now", sources.NOW_ENV, CAPTURED_AT, NOW),
+    ("provider_schema", sources.PROVIDER_SCHEMA_ENV, "/env/provider-schema.json",
+     ("/e/provider-schema.json",)),
+    ("schema_policy", sources.SCHEMA_POLICY_ENV, "annotate", "off"),
 )
 
 

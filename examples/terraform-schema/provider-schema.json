@@ -1,0 +1,598 @@
+{
+ "format_version": "1.0",
+ "provider_schemas": {
+  "registry.terraform.io/hashicorp/google": {
+   "provider": {
+    "block": {
+     "attributes": {
+      "credentials": {
+       "optional": true,
+       "type": "string"
+      },
+      "project": {
+       "optional": true,
+       "type": "string"
+      },
+      "region": {
+       "optional": true,
+       "type": "string"
+      },
+      "zone": {
+       "optional": true,
+       "type": "string"
+      }
+     },
+     "description_kind": "plain"
+    },
+    "version": 0
+   },
+   "resource_schemas": {
+    "google_access_context_manager_service_perimeter": {
+     "block": {
+      "attributes": {
+       "create_time": {
+        "computed": true,
+        "type": "string"
+       },
+       "description": {
+        "optional": true,
+        "type": "string"
+       },
+       "name": {
+        "required": true,
+        "type": "string"
+       },
+       "parent": {
+        "required": true,
+        "type": "string"
+       },
+       "perimeter_type": {
+        "optional": true,
+        "type": "string"
+       },
+       "title": {
+        "required": true,
+        "type": "string"
+       },
+       "update_time": {
+        "computed": true,
+        "type": "string"
+       }
+      },
+      "block_types": {
+       "spec": {
+        "block": {
+         "attributes": {
+          "access_levels": {
+           "optional": true,
+           "type": [
+            "list",
+            "string"
+           ]
+          },
+          "resources": {
+           "optional": true,
+           "type": [
+            "list",
+            "string"
+           ]
+          },
+          "restricted_services": {
+           "optional": true,
+           "type": [
+            "list",
+            "string"
+           ]
+          }
+         },
+         "block_types": {}
+        },
+        "max_items": 1,
+        "nesting_mode": "list"
+       },
+       "status": {
+        "block": {
+         "attributes": {
+          "access_levels": {
+           "optional": true,
+           "type": [
+            "list",
+            "string"
+           ]
+          },
+          "resources": {
+           "optional": true,
+           "type": [
+            "list",
+            "string"
+           ]
+          },
+          "restricted_services": {
+           "optional": true,
+           "type": [
+            "list",
+            "string"
+           ]
+          }
+         },
+         "block_types": {}
+        },
+        "max_items": 1,
+        "nesting_mode": "list"
+       }
+      }
+     },
+     "version": 0
+    },
+    "google_compute_firewall": {
+     "block": {
+      "attributes": {
+       "creation_timestamp": {
+        "computed": true,
+        "type": "string"
+       },
+       "description": {
+        "optional": true,
+        "type": "string"
+       },
+       "destination_ranges": {
+        "computed": true,
+        "optional": true,
+        "type": [
+         "set",
+         "string"
+        ]
+       },
+       "direction": {
+        "computed": true,
+        "optional": true,
+        "type": "string"
+       },
+       "disabled": {
+        "optional": true,
+        "type": "bool"
+       },
+       "id": {
+        "computed": true,
+        "optional": true,
+        "type": "string"
+       },
+       "name": {
+        "required": true,
+        "type": "string"
+       },
+       "network": {
+        "required": true,
+        "type": "string"
+       },
+       "priority": {
+        "optional": true,
+        "type": "number"
+       },
+       "project": {
+        "computed": true,
+        "optional": true,
+        "type": "string"
+       },
+       "self_link": {
+        "computed": true,
+        "type": "string"
+       },
+       "source_ranges": {
+        "computed": true,
+        "optional": true,
+        "type": [
+         "set",
+         "string"
+        ]
+       },
+       "source_service_accounts": {
+        "optional": true,
+        "type": [
+         "set",
+         "string"
+        ]
+       },
+       "source_tags": {
+        "optional": true,
+        "type": [
+         "set",
+         "string"
+        ]
+       },
+       "target_service_accounts": {
+        "optional": true,
+        "type": [
+         "set",
+         "string"
+        ]
+       },
+       "target_tags": {
+        "optional": true,
+        "type": [
+         "set",
+         "string"
+        ]
+       }
+      },
+      "block_types": {
+       "allow": {
+        "block": {
+         "attributes": {
+          "ports": {
+           "optional": true,
+           "type": [
+            "list",
+            "string"
+           ]
+          },
+          "protocol": {
+           "required": true,
+           "type": "string"
+          }
+         },
+         "description_kind": "plain"
+        },
+        "nesting_mode": "set"
+       },
+       "deny": {
+        "block": {
+         "attributes": {
+          "ports": {
+           "optional": true,
+           "type": [
+            "list",
+            "string"
+           ]
+          },
+          "protocol": {
+           "required": true,
+           "type": "string"
+          }
+         },
+         "description_kind": "plain"
+        },
+        "nesting_mode": "set"
+       },
+       "log_config": {
+        "block": {
+         "attributes": {
+          "metadata": {
+           "required": true,
+           "type": "string"
+          }
+         },
+         "description_kind": "plain"
+        },
+        "max_items": 1,
+        "nesting_mode": "list"
+       },
+       "timeouts": {
+        "block": {
+         "attributes": {
+          "create": {
+           "optional": true,
+           "type": "string"
+          },
+          "delete": {
+           "optional": true,
+           "type": "string"
+          },
+          "update": {
+           "optional": true,
+           "type": "string"
+          }
+         },
+         "description_kind": "plain"
+        },
+        "nesting_mode": "single"
+       }
+      },
+      "description_kind": "markdown"
+     },
+     "version": 1
+    },
+    "google_compute_security_policy": {
+     "block": {
+      "attributes": {
+       "description": {
+        "optional": true,
+        "type": "string"
+       },
+       "fingerprint": {
+        "computed": true,
+        "type": "string"
+       },
+       "name": {
+        "required": true,
+        "type": "string"
+       },
+       "project": {
+        "computed": true,
+        "optional": true,
+        "type": "string"
+       },
+       "type": {
+        "computed": true,
+        "optional": true,
+        "type": "string"
+       }
+      },
+      "block_types": {
+       "rule": {
+        "block": {
+         "attributes": {
+          "action": {
+           "required": true,
+           "type": "string"
+          },
+          "description": {
+           "optional": true,
+           "type": "string"
+          },
+          "preview": {
+           "computed": true,
+           "optional": true,
+           "type": "bool"
+          },
+          "priority": {
+           "required": true,
+           "type": "number"
+          }
+         },
+         "block_types": {
+          "match": {
+           "block": {
+            "attributes": {
+             "versioned_expr": {
+              "optional": true,
+              "type": "string"
+             }
+            },
+            "block_types": {
+             "config": {
+              "block": {
+               "attributes": {
+                "src_ip_ranges": {
+                 "optional": true,
+                 "type": [
+                  "list",
+                  "string"
+                 ]
+                }
+               },
+               "block_types": {}
+              },
+              "max_items": 1,
+              "nesting_mode": "list"
+             },
+             "expr": {
+              "block": {
+               "attributes": {
+                "expression": {
+                 "required": true,
+                 "type": "string"
+                }
+               },
+               "block_types": {}
+              },
+              "max_items": 1,
+              "nesting_mode": "list"
+             }
+            }
+           },
+           "max_items": 1,
+           "nesting_mode": "list"
+          }
+         }
+        },
+        "nesting_mode": "set"
+       }
+      }
+     },
+     "version": 0
+    },
+    "google_org_policy_policy": {
+     "block": {
+      "attributes": {
+       "etag": {
+        "computed": true,
+        "type": "string"
+       },
+       "name": {
+        "required": true,
+        "type": "string"
+       },
+       "parent": {
+        "required": true,
+        "type": "string"
+       }
+      },
+      "block_types": {
+       "spec": {
+        "block": {
+         "attributes": {
+          "inherit_from_parent": {
+           "optional": true,
+           "type": "bool"
+          },
+          "reset": {
+           "optional": true,
+           "type": "bool"
+          }
+         },
+         "block_types": {
+          "rules": {
+           "block": {
+            "attributes": {
+             "allow_all": {
+              "optional": true,
+              "type": "string"
+             },
+             "deny_all": {
+              "optional": true,
+              "type": "string"
+             },
+             "enforce": {
+              "optional": true,
+              "type": "string"
+             }
+            },
+            "block_types": {
+             "condition": {
+              "block": {
+               "attributes": {
+                "expression": {
+                 "optional": true,
+                 "type": "string"
+                }
+               },
+               "block_types": {}
+              },
+              "max_items": 1,
+              "nesting_mode": "list"
+             },
+             "values": {
+              "block": {
+               "attributes": {
+                "allowed_values": {
+                 "optional": true,
+                 "type": [
+                  "list",
+                  "string"
+                 ]
+                },
+                "denied_values": {
+                 "optional": true,
+                 "type": [
+                  "list",
+                  "string"
+                 ]
+                }
+               },
+               "block_types": {}
+              },
+              "max_items": 1,
+              "nesting_mode": "list"
+             }
+            }
+           },
+           "nesting_mode": "list"
+          }
+         }
+        },
+        "max_items": 1,
+        "nesting_mode": "list"
+       }
+      }
+     },
+     "version": 0
+    },
+    "google_project_iam_binding": {
+     "block": {
+      "attributes": {
+       "etag": {
+        "computed": true,
+        "type": "string"
+       },
+       "id": {
+        "computed": true,
+        "optional": true,
+        "type": "string"
+       },
+       "members": {
+        "required": true,
+        "type": [
+         "set",
+         "string"
+        ]
+       },
+       "project": {
+        "required": true,
+        "type": "string"
+       },
+       "role": {
+        "required": true,
+        "type": "string"
+       }
+      },
+      "block_types": {
+       "condition": {
+        "block": {
+         "attributes": {
+          "description": {
+           "optional": true,
+           "type": "string"
+          },
+          "expression": {
+           "required": true,
+           "type": "string"
+          },
+          "title": {
+           "required": true,
+           "type": "string"
+          }
+         },
+         "description_kind": "plain"
+        },
+        "max_items": 1,
+        "nesting_mode": "list"
+       }
+      },
+      "description_kind": "markdown"
+     },
+     "version": 0
+    },
+    "google_project_iam_custom_role": {
+     "block": {
+      "attributes": {
+       "deleted": {
+        "computed": true,
+        "type": "bool"
+       },
+       "description": {
+        "optional": true,
+        "type": "string"
+       },
+       "id": {
+        "computed": true,
+        "optional": true,
+        "type": "string"
+       },
+       "name": {
+        "computed": true,
+        "type": "string"
+       },
+       "permissions": {
+        "required": true,
+        "type": [
+         "set",
+         "string"
+        ]
+       },
+       "project": {
+        "computed": true,
+        "optional": true,
+        "type": "string"
+       },
+       "role_id": {
+        "required": true,
+        "type": "string"
+       },
+       "stage": {
+        "optional": true,
+        "type": "string"
+       },
+       "title": {
+        "required": true,
+        "type": "string"
+       }
+      },
+      "description_kind": "markdown"
+     },
+     "version": 0
+    }
+   }
+  }
+ }
+}

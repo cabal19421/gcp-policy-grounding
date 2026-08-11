@@ -91,6 +91,7 @@ PROVIDER_MODULES = (
     "gcp_grounding.iam_deny", "gcp_grounding.iam_checks",
     "gcp_grounding.iam_scope",
     "gcp_grounding.org_checks",
+    "gcp_grounding.tf_schema_checks",
 )
 
 

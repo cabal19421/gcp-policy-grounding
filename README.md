@@ -39,6 +39,7 @@ degrade to explicit `unverified` when not.
 | **Cloud Armor** | security-policy JSON, terraform | priority-order bypass; default-rule removal; match-expression grounding over the offline-decidable subset |
 | **VPC Service Controls** | perimeter / access-level JSON, terraform | perimeter shrink; restricted-service removal; ingress/egress widening (`ANY_IDENTITY`, wildcards); dry-run flips; ghost access levels |
 | **Custom roles** | role JSON, terraform | every included permission must exist in the estate's enumeration; a predefined→custom swap is scope-diffed against the binding's current grant (extras drawn as warnings, never blocks) |
+| **Provider schema** (terraform) | `.tf` / `.tf.json` / plan JSON, plus a locally captured `terraform providers schema -json` | every `google_*` block's attributes and nested blocks must exist in the captured provider's schema (did-you-mean on a miss); attribute-vs-block and scalar-vs-list shape contradictions; `dynamic` blocks, computed attributes and resource types absent from the capture abstain by name (a type may live in an uncaptured provider); strictness via `--schema-policy` |
 | **Shell commands** | `gcloud` `gsutil` `bq` `terraform` `kubectl` `curl` text | state-mutation classification (audit via `scan-command`, blocking via the hook's `--bash-policy`) |
 
 Every surface gets the same four-bucket honesty contract, and every domain can
@@ -146,6 +147,7 @@ Drop one `.gcp-grounding.json` at the root of the repo:
 {
   "schema": "gcp-grounding-config/1",
   "snapshot": "estate/api-snapshot.json",
+  "provider_schema": "estate/provider-schema.json",
   "terraform": {
     "state": ["infra/prod/terraform.tfstate"],
     "plan": ["infra/prod/plan.json"],
@@ -172,6 +174,7 @@ The same settings as flags, when you would rather be explicit:
 ```bash
 gcp-ground verify-policy policies/prod-iam.json \
   --snapshot estate/api-snapshot.json \
+  --provider-schema estate/provider-schema.json \
   --terraform-state infra/prod/terraform.tfstate \
   --terraform-plan infra/prod/plan.json \
   --terraform-dir infra/prod \
@@ -184,6 +187,7 @@ and the environment variables, for CI, where there is no file to edit:
 
 ```bash
 export GCP_GROUNDING_SNAPSHOT=estate/api-snapshot.json
+export GCP_GROUNDING_PROVIDER_SCHEMA=estate/provider-schema.json
 export GCP_GROUNDING_TF_STATE=infra/prod/terraform.tfstate
 export GCP_GROUNDING_TF_PLAN=infra/prod/plan.json
 export GCP_GROUNDING_TF_DIR=infra/prod
@@ -459,6 +463,92 @@ at evaluation time), and comparisons against terraform-managed resources work.
 What you give up is hallucination-blocking and absence reasoning — the tool
 will say so honestly (`PASSED — NOTHING VERIFIED`) rather than pretend.
 
+## The provider schema: judging against the provider that actuates
+
+The estate snapshot knows which *names* are real — roles, permissions,
+principals, constraints. It knows nothing about the *provider's* vocabulary:
+whether `google_compute_firewall` spells its source filter `source_ranges` or
+`src_ranges` is a fact about the terraform provider build pinned in your
+checkout, and the tool that enforces it is `terraform plan` — at plan time, in
+CI, after the push. The gate closes that gap from a file: **terraform tells
+you at plan time, in CI, after the push; the gate tells you at write time,
+from a file — in the same report as the rule's ports and ranges.**
+
+**What you supply.** One local command, no credentials, run in the checkout
+where `terraform init` has already run (the schema is read out of the provider
+binary init installed — nothing is fetched):
+
+```bash
+terraform providers schema -json > provider-schema.json
+```
+
+The gate itself never runs terraform and never touches the network — this
+feature is consumption-only, which is why the capture is yours. The division
+of labour:
+
+|                 | capture (yours)                        | check (the gate's)                        |
+| --------------- | -------------------------------------- | ----------------------------------------- |
+| when it runs    | once per provider bump — refresh when `.terraform.lock.hcl` changes | every `verify-policy` run, hook included |
+| what it needs   | an init'd checkout — local, credential-free | the captured file — no terraform binary, no network |
+| what it yields  | `provider-schema.json`                 | `[tf_attribute]` / `[tf_block]` / `[tf_resource_type]` verdicts |
+
+**The version, honestly.** The raw `terraform providers schema -json` output
+is keyed by provider *address* and carries no provider *version*, so the gate
+records the version as unknown: messages say "the captured provider schema"
+and never invent a release number, and freshness keys on the file's own
+modification time. To put on record what you actually know, wrap the same
+output in the `gcp-provider-schema/1` envelope — one line:
+
+```bash
+terraform providers schema -json | python3 -c 'import json,sys,datetime as d; print(json.dumps({"schema":"gcp-provider-schema/1","captured_at":d.datetime.now(d.timezone.utc).isoformat(),"raw":json.load(sys.stdin)}))' > provider-schema.json
+```
+
+`captured_at` then drives freshness instead of the mtime, and an optional
+`provider_versions` map (copy the pins from `.terraform.lock.hcl`) is quoted
+in findings when present — only where truly known, never guessed. The
+wrapper's own keys are parsed strictly (a typo'd `captured_at` must not
+silently disarm the freshness check); the raw terraform shape inside it is
+read tolerantly, because that format is terraform's to evolve.
+
+**Configurability.** Off by absence: configure nothing and nothing changes,
+byte for byte. The schema rides the standard three layers —
+`--provider-schema PATH` (repeatable, one file per provider, so `google` and
+`google-beta` can each contribute), `GCP_GROUNDING_PROVIDER_SCHEMA`, and the
+`provider_schema` key of `.gcp-grounding.json` — and `--state-explain` reports
+which layer supplied it. Strictness is `--schema-policy` (env
+`GCP_GROUNDING_SCHEMA_POLICY`, config key `schema_policy`):
+
+- `block` — the default: findings keep their honest statuses, so an unknown
+  attribute (`ungrounded`) or a shape mismatch (`contradicted`) fails the
+  gate. The default is `block` because `terraform plan` would hard-fail the
+  same attribute anyway — refusing at write time blocks nothing that could
+  ever have applied;
+- `annotate` — the same findings demoted to `unverified` warnings, for
+  hook-side gentleness: an `unverified` never blocks and is silent in hook
+  mode unless `--abstain-notes` is on. The intended pattern is
+  hook-annotates-while-CI-blocks: export
+  `GCP_GROUNDING_SCHEMA_POLICY=annotate` where the hook runs, let CI run with
+  the `block` default;
+- `off` — the captured schema is ignored.
+
+A schema past the freshness ceiling (`--max-age`, default 7 days) demotes to
+loud abstention like any other stale source: every finding it would have made
+becomes an `unverified` naming the age and the recapture command, because a
+vocabulary nobody recaptured cannot block. Configuring a policy while
+supplying no schema is the one loud non-finding: the run abstains by name
+("N google_* resource block(s) were NOT judged against any provider schema")
+rather than passing in a silence indistinguishable from coverage.
+
+**What the schema cannot express abstains by name.** A `dynamic` block is
+expanded at plan time, so what it generates is not in the configuration — not
+judged, said so. A value written under a purely *computed* attribute is the
+provider's territory — named, not guessed (on a real plan document, computed
+attributes are the provider's own output and are read silently). And what the
+schema cannot even see — `conflicts_with`, `exactly_one_of`, server-side
+validation of *values* — is never simulated: the captured schema decides names
+and shapes, nothing else, and the honesty contract holds at that boundary
+exactly as it does at every other.
+
 ## Authoring promises: what the compiler proves, what you review
 
 Writing a promise — by hand, or drafted by the optional LLM assist — does not
@@ -595,6 +685,9 @@ no network. Run from the repo root after the Development setup above.
 | 2b | The same swap, but the extra permission is `iam.serviceAccounts.actAs` (step 8) | `examples/terraform-roles/proposal_b.tf.json` | DENIED — the permission promise VIOLATED, custom-role block named |
 | 3 | Masked deny removed — the dormant allow wakes up world-open (step 9) | `examples/terraform-masked/proposal.tf.json` | DENIED — exposure + shadow verdicts |
 | 3b | The benign counterpart: deleting the dead allow instead (step 9) | `examples/terraform-masked/cleanup.tf.json` | DENIED — the restated deny still reads as killing the allow the state carries; deletion-awareness is the parked pair tier's territory |
+| 4 | The attribute the provider doesn't know: `src_ranges` for `source_ranges` (step 10) | `examples/terraform-schema/proposal_typo.tf.json` | DENIED — `[tf_attribute]` ungrounded, with the did-you-mean naming `source_ranges` |
+| 4b | Version skew: an attribute absent from the captured provider schema (step 10) | `examples/terraform-schema/proposal_newer.tf.json` | DENIED — same finding, carrying the recapture guidance instead of a suggestion |
+| 4c | The clean counterpart (step 10) | `examples/terraform-schema/proposal_ok.tf.json` | APPROVED — every attribute is in the captured schema, so the family stays silent |
 
 Steps 0–6 below are the non-terraform acts: the acceptance suite, compiling
 the promises, the REST attack, the hallucination did-you-mean, shell-command
@@ -900,6 +993,114 @@ pass. The abstention noise is the usual fixture-snapshot taste — staleness,
 the two provenance notes, the network-existence abstention — plus one honest
 *"no offline check is wired for claim kind 'firewall_rule'"* on the deny,
 none of them deciding anything here.
+
+### 10. Scenario four: the attribute the provider doesn't know
+
+An agent renames a firewall's source filter to `src_ranges`; a colleague uses
+an attribute their newer provider documents and this checkout's pinned
+provider has never heard of. Both changes ground clean against the estate
+snapshot — roles, members and permissions all real — and both would die at
+`terraform plan`. `examples/terraform-schema/` holds the pieces:
+`provider-schema.json` is a captured `terraform providers schema -json` for
+the `google` provider (the three resource types this scenario uses,
+hand-authored here faithfully to the real shape; in your own repo, capture it
+from the init'd checkout with `terraform providers schema -json >
+provider-schema.json` and refresh it when `.terraform.lock.hcl` changes),
+`proposal_ok.tf.json` is a clean change (a health-check firewall rule, a
+binding, a custom role), `proposal_typo.tf.json` is the same change with
+`src_ranges` for `source_ranges`, and `proposal_newer.tf.json` adds a `params`
+block the captured schema does not define. It is a raw capture, so the
+provider version is honestly unknown — the findings say "the captured
+provider schema" and name no release:
+
+```bash
+# 10a. The typo — EXPECTED TO EXIT 1: the captured provider cannot accept it,
+#      and the did-you-mean names the real attribute.
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-schema/proposal_typo.tf.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --provider-schema examples/terraform-schema/provider-schema.json \
+    --explain
+
+# 10b. The version skew — EXPECTED TO EXIT 1 TOO, with the recapture guidance
+#      instead of a suggestion: nothing in the captured schema is close.
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-schema/proposal_newer.tf.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --provider-schema examples/terraform-schema/provider-schema.json \
+    --explain
+
+# 10c. The clean counterpart — EXPECTED TO EXIT 0.
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-schema/proposal_ok.tf.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --provider-schema examples/terraform-schema/provider-schema.json \
+    --explain
+```
+
+**10a is DENIED (exit 1) on the typo alone**, and the recap — the last lines
+on your terminal — is the finding:
+
+```text
+decision recap: DENIED (exit 1) — because:
+  ✗ [tf_attribute] google_compute_firewall.allow_health_checks: 'src_ranges'
+      is not an attribute or nested block of google_compute_firewall in the
+      captured provider schema — 'terraform plan' under the provider this
+      schema was captured from would refuse it
+```
+
+with the report line above it carrying the remediation: `(did you mean:
+source_ranges?)`. Note the honest side-effect in the abstentions: with
+`source_ranges` misspelled the rule *has* no source filter, so
+`[firewall_exposure]` abstains on "an illegal GCP shape" rather than guessing
+what the typo meant.
+
+**10b is DENIED (exit 1) the same way**, but nothing in the schema is within
+edit distance of `params`, so instead of a suggestion the finding carries the
+version-skew guidance:
+
+```text
+  ✗ [tf_attribute] google_compute_firewall.allow_health_checks: 'params' is
+      not an attribute or nested block of google_compute_firewall in the
+      captured provider schema — 'terraform plan' under the provider this
+      schema was captured from would refuse it; if 'params' arrived in a
+      provider NEWER than the captured schema, recapture it where terraform
+      init has run (terraform providers schema -json > provider-schema.json)
+      and re-judge
+```
+
+— the gate cannot tell a hallucination from tomorrow's provider, and does not
+pretend to: it says the *captured* provider refuses it, and names the one
+command that re-decides the question against a newer capture.
+
+**10c is APPROVED (exit 0)**: every attribute and nested block resolves in the
+captured schema, so the family adds nothing — `decision recap: APPROVED (exit
+0) — grounded=8 unchecked=6` — and the abstentions are the usual
+fixture-snapshot taste (staleness, unqueried baselines, the network-existence
+abstention).
+
+The fourth run is the one WITHOUT a schema. Configure nothing at all and the
+family is byte-silent (off-by-absence: the report only claims what it
+checked); configure the *policy* while supplying no schema and the gate
+abstains by name instead of passing in silence:
+
+```bash
+# 10d. No schema supplied — EXPECTED TO EXIT 0, with the honest abstention.
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-schema/proposal_ok.tf.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --schema-policy block
+```
+
+```text
+  ? [tf_schema] a schema policy is configured ('block') but NO provider schema
+      is supplied — 3 google_* resource block(s) were NOT judged against any
+      provider schema. Capture one, locally and credential-free, where
+      terraform init has already run (terraform providers schema -json >
+      provider-schema.json), then name it with --provider-schema,
+      $GCP_GROUNDING_PROVIDER_SCHEMA or the 'provider_schema' key in
+      .gcp-grounding.json
+```
 
 In production the five flags collapse into a `.gcp-grounding.json` config file
 discovered next to the proposal (see "Two overlapping ways to get the current
