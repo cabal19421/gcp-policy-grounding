@@ -59,9 +59,13 @@ PENDING_REMOVAL_IDS = frozenset({
 PENDING_REMOVAL_MAX = 7
 
 #: The measured starting deficit. NO exemption: anything off it must be covered.
+#: ``secreq`` retired here — ``RM-SECREQ-RULE-EVALUATOR`` covers it — and
+#: ``tf_block`` took its place, so the deficit did not grow: the terraform
+#: blocking family owns no ``Removal`` yet, exactly as its two sibling
+#: terraform families do not.
 UNCOVERED_FAMILIES = frozenset({
-    "benign", "degradation", "evasion", "orgpolicy", "plumbing", "secreq",
-    "sequence", "snapshot", "sources", "tf_benign", "tf_plumbing"})
+    "benign", "degradation", "evasion", "orgpolicy", "plumbing", "sequence",
+    "snapshot", "sources", "tf_benign", "tf_block", "tf_plumbing"})
 UNCOVERED_CAPABILITIES = frozenset({
     "armor", "iam_existence", "org_constraint_value", "org_enforcement",
     "tf_claims"})
