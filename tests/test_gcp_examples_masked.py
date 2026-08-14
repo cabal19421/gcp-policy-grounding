@@ -25,8 +25,17 @@ module pins three things:
   kill-report the base drew — a true sentence about today's estate (it IS the
   mask), conservatively mis-attributed to the document that restates the deny;
 * the README's step-9 invocations — four flags each, no ``--requirements``
-  (nothing here is a compiled promise; every finding is a built-in estate
-  check), each exiting 1 with the narrative the README quotes.
+  (nothing in the original arc is a compiled promise; every 9a-9c finding is a
+  built-in estate check), each exiting 1 with the narrative the README quotes;
+* the CONDITIONAL-APPROVAL ARM (9d-9f) — the deny applied-gone
+  (``terraform-after-removal.tfstate``), the scenario's own one-promise corpus
+  (``requirements.md``: the woken allow may admit sources only within the two
+  audited partner ranges, a per-row subset obligation over the union of the
+  two blocks), and the two extra runs: ``narrowed.tf.json`` (exactly the two
+  ranges) APPROVES with the promise judged ``holds`` — a grounded subset
+  judgment, not an abstention — while ``narrowed_extra.tf.json`` (the two
+  ranges plus one unaudited /28) is DENIED with the promise refutation naming
+  the smuggled range, both built-ins staying green on both runs.
 
 Everything is in-process (no subprocess), and environment-honest: without z3
 neither the exposure nor the shadow check decides anything, so every denial
@@ -57,6 +66,22 @@ BASE = EXAMPLE / "base.tf.json"
 PROPOSAL = EXAMPLE / "proposal.tf.json"
 CLEANUP = EXAMPLE / "cleanup.tf.json"
 STATE = EXAMPLE / "terraform.tfstate"
+
+# The conditional-approval arm: the deny applied-gone, and the two remediation
+# candidates judged with the scenario's own corpus in force.
+NARROWED = EXAMPLE / "narrowed.tf.json"
+NARROWED_EXTRA = EXAMPLE / "narrowed_extra.tf.json"
+STATE_AFTER = EXAMPLE / "terraform-after-removal.tfstate"
+CORPUS = EXAMPLE / "requirements.md"
+
+PROMISE_ID = "masked-allow-only-known-domains"
+#: The two audited partner ranges — the "two known domains", modeled as CIDR
+#: blocks (private ones: a public source on tcp/3389 would rightly draw the
+#: built-in exposure finding regardless of any promise).
+PARTNER_A = "10.198.51.0/24"
+PARTNER_B = "10.203.113.0/26"
+#: The smuggled range: unaudited, private, one octet off partner A's block.
+SMUGGLED = "10.198.52.0/28"
 
 SNAPSHOT = FIXTURES / "agentic_snapshot.json"
 
@@ -297,3 +322,119 @@ def test_the_readme_cleanup_invocation_denies_on_the_kill_report_alone(capsys):
     assert "[firewall_shadow]" in recap and KILL_REPORT in recap
     assert "[firewall_exposure]" not in err, \
         "a deny exposes nothing on its own"
+
+
+# -- the conditional-approval arm (9d-9f) ---------------------------------------
+
+
+def test_the_narrowed_proposal_is_the_accident_with_exactly_the_two_ranges():
+    """The remediation candidate differs from the accident's shape by exactly
+    the source-range narrowing — same rule, same flow, same priority."""
+    expected = deepcopy(json.loads(PROPOSAL.read_text(encoding="utf-8")))
+    expected["resource"]["google_compute_firewall"]["allow_rdp_broad"][
+        "source_ranges"] = [PARTNER_A, PARTNER_B]
+    narrowed = json.loads(NARROWED.read_text(encoding="utf-8"))
+    assert narrowed == expected, (
+        "narrowed.tf.json must be proposal.tf.json with source_ranges set to "
+        "exactly the two audited partner ranges — nothing more, nothing less")
+
+
+def test_the_smuggle_is_the_narrowed_proposal_plus_exactly_the_extra_range():
+    expected = deepcopy(json.loads(NARROWED.read_text(encoding="utf-8")))
+    expected["resource"]["google_compute_firewall"]["allow_rdp_broad"][
+        "source_ranges"] = [PARTNER_A, PARTNER_B, SMUGGLED]
+    extra = json.loads(NARROWED_EXTRA.read_text(encoding="utf-8"))
+    assert extra == expected, (
+        "narrowed_extra.tf.json must be narrowed.tf.json plus exactly the one "
+        "unaudited /28 — nothing more, nothing less")
+
+
+def test_the_after_removal_state_is_the_state_minus_exactly_the_deny():
+    """The post-accident state: the deny applied-gone, the woken allow still
+    world-open exactly as ``terraform.tfstate`` carried it, serial advanced on
+    the same lineage — one apply later, nothing else touched."""
+    before = json.loads(STATE.read_text(encoding="utf-8"))
+    after = json.loads(STATE_AFTER.read_text(encoding="utf-8"))
+    assert after["version"] == 4
+    assert after["lineage"] == before["lineage"]
+    assert after["serial"] > before["serial"]
+    expected_resources = [r for r in before["resources"]
+                          if r["name"] != "deny_rdp"]
+    assert after["resources"] == expected_resources, (
+        "terraform-after-removal.tfstate must be terraform.tfstate minus "
+        "exactly the deny resource — the allow stays world-open as applied")
+
+
+def test_the_corpus_is_the_one_promise_over_the_two_partner_ranges():
+    text = CORPUS.read_text(encoding="utf-8")
+    assert f"id: {PROMISE_ID}" in text
+    assert PARTNER_A in text and PARTNER_B in text
+    # The subset obligation quantifies over the proposal's own rows and is
+    # scoped to the one previously masked rule.
+    assert "exists r in proposed_firewall_rules" in text
+    assert f'cmp eq field r.name str "{ALLOW_NAME}"' in text
+
+
+@pytest.fixture
+def compiled(tmp_path, capsys):
+    """The scenario's own corpus, compiled like the README's step 9d. Exit 0:
+    nothing in it is booby-trapped."""
+    out = tmp_path / "compiled-masked"
+    assert main(["compile-requirements", str(EXAMPLE), "--snapshot",
+                 str(SNAPSHOT), "--out", str(out)]) == 0
+    capsys.readouterr()
+    return out
+
+
+def _verify_arm(capsys, proposal: Path, compiled) -> tuple[int, str, str]:
+    return invoke(
+        capsys, "verify-policy",
+        "--proposal", str(proposal),
+        "--snapshot", str(SNAPSHOT),
+        "--terraform-state", str(STATE_AFTER),
+        "--requirements", str(compiled),
+        "--explain")
+
+
+@_needs_z3
+def test_the_readme_narrowed_invocation_approves_on_a_grounded_judgment(
+        compiled, capsys):
+    """APPROVED, and the promise verdict is a grounded subset judgment — not
+    an abstention that defaults to pass — with both built-ins green beside it:
+    exposure (private sources only) and the pair tier, which resolves a
+    baseline target here, unlike the 9a-9c shape."""
+    code, out, err = _verify_arm(capsys, NARROWED, compiled)
+    assert code == 0
+    assert "PASSED" in out
+    assert "decision: APPROVED (exit 0)" in err
+    assert f"holds     {PROMISE_ID}" in err
+    assert (f"[sec:vpc_firewall] {PROMISE_ID}: the obligation holds over "
+            f"the document — grounded") in out
+    assert "no public source reaches a sensitive port" in out
+    assert "the new rule set allows no packet the old set denied" in out
+    assert "refuted by" not in err
+
+
+@_needs_z3
+def test_the_readme_smuggle_invocation_denies_naming_the_range(
+        compiled, capsys):
+    """DENIED on the promise ALONE: the /28 is private (no exposure) and the
+    new set still narrows the world-open state (pair grounds), so only the
+    subset obligation refuses — naming the smuggled range and the block."""
+    code, out, err = _verify_arm(capsys, NARROWED_EXTRA, compiled)
+    assert code == 1
+    assert "FAILED" in out
+    assert "decision: DENIED (exit 1)" in err
+    assert f"VIOLATED  {PROMISE_ID}" in err
+    # Both built-ins stay green: the promise is the only blocker.
+    assert "no public source reaches a sensitive port" in out
+    assert "the new rule set allows no packet the old set denied" in out
+    # The recap — the last lines a terminal shows — quotes the offending row:
+    # the range is a constant of the document, not a solver-minted witness,
+    # so it is pinned verbatim.
+    recap = err[err.index("decision recap:"):]
+    assert "DENIED (exit 1)" in recap
+    assert f"[sec:vpc_firewall] {PROMISE_ID}: refuted by " \
+           "proposed_firewall_rules[" in recap
+    assert f"({ALLOW_ADDRESS})" in recap
+    assert f"source_range={SMUGGLED!r}" in recap

@@ -726,6 +726,8 @@ no network. Run from the repo root after the Development setup above.
 | 2b | The same swap, but the extra permission is `iam.serviceAccounts.actAs` (step 8) | `examples/terraform-roles/proposal_b.tf.json` | DENIED — the permission promise VIOLATED, custom-role block named |
 | 3 | Masked deny removed — the dormant allow wakes up world-open (step 9) | `examples/terraform-masked/proposal.tf.json` | DENIED — exposure + shadow verdicts |
 | 3b | The benign counterpart: deleting the dead allow instead (step 9) | `examples/terraform-masked/cleanup.tf.json` | DENIED — the restated deny still reads as killing the allow the state carries; deletion-awareness needs the pair tier's old-set-versus-new-set comparison, and this shape derives no baseline target for it to run against |
+| 3c | Conditional approval: the deny's removal has applied, and the woken allow is narrowed to exactly the two audited partner ranges (step 9) | `examples/terraform-masked/narrowed.tf.json` | APPROVED — `masked-allow-only-known-domains` holds (the subset obligation grounds), with the exposure and pair checks green beside it |
+| 3d | The smuggle: the two audited ranges plus one unaudited /28 (step 9) | `examples/terraform-masked/narrowed_extra.tf.json` | DENIED — `masked-allow-only-known-domains` VIOLATED, the refutation naming `source_range='10.198.52.0/28'`; both built-ins pass, only the promise catches it |
 | 4 | The attribute the provider doesn't know: `src_ranges` for `source_ranges` (step 10) | `examples/terraform-schema/proposal_typo.tf.json` | DENIED — `[tf_attribute]` ungrounded, with the did-you-mean naming `source_ranges` |
 | 4b | Version skew: an attribute absent from the captured provider schema (step 10) | `examples/terraform-schema/proposal_newer.tf.json` | DENIED — same finding, carrying the recapture guidance instead of a suggestion |
 | 4c | The clean counterpart (step 10) | `examples/terraform-schema/proposal_ok.tf.json` | APPROVED — every attribute is in the captured schema, so the family stays silent |
@@ -975,9 +977,11 @@ refactor accidentally drops the deny block, and the dormant rule wakes up
 world-open. `examples/terraform-masked/` holds the pieces: `base.tf.json`
 declares the pair exactly as `terraform.tfstate` carries it,
 `proposal.tf.json` is the accident (base minus the deny block) and
-`cleanup.tf.json` is the intended fix (base minus the dead allow). No promise
-corpus this time — every verdict below comes from the built-in estate checks,
-so there is no compile step and no `--requirements` flag:
+`cleanup.tf.json` is the intended fix (base minus the dead allow). The three
+runs of the original arc use no promise corpus — every 9a–9c verdict comes
+from the built-in estate checks, so they carry no compile step and no
+`--requirements` flag (the conditional-approval arm at 9d–9f below adds the
+scenario's own corpus for its two extra runs):
 
 ```bash
 # 9a. The current state itself — EXPECTED TO EXIT 1: a masked pair is
@@ -1055,6 +1059,100 @@ pass. The abstention noise is the usual fixture-snapshot taste — staleness,
 the two provenance notes, the network-existence abstention — plus one honest
 *"no offline check is wired for claim kind 'firewall_rule'"* on the deny,
 none of them deciding anything here.
+
+**The conditional-approval arm (9d–9f): the deny is coming out anyway — on
+what condition may the woken allow stay?** The incident review accepts the
+accident as fact: `terraform-after-removal.tfstate` is the post-accident state
+(serial 13, same lineage — the deny applied-gone, the woken allow world-open),
+and the remediation question is what may replace the world-open text. The
+review's condition: the allow may admit **only the two known domains**. A GCP
+firewall has no DNS-domain concept, so the two domains are modeled as the two
+audited partner networks' CIDR blocks — `10.198.51.0/24` and `10.203.113.0/26`,
+private ranges reached over the partner interconnect (deliberately private:
+tcp/3389 open to a genuinely public range would rightly draw the built-in
+exposure finding no matter what any promise says). That condition is a subset
+relation — the rule's `source_ranges` must sit inside the union of the two
+blocks — and it compiles to a z3-checked promise in the scenario's own
+one-promise corpus, `requirements.md` in the same directory, scenario-two
+style (compiled separately from step 1's corpus; the artifacts are not
+committed). The corpus states its own honesties: subset is spelled per range
+row as "contains the partner block's base address AND carries a mask at least
+as specific" — sound in the refuting direction (a range reaching beyond either
+block always refutes; `0.0.0.0/0`'s zero mask fails the unsigned mask compare,
+so the world-open shape itself is refuted wherever this corpus is in force)
+and exact for base-anchored subranges, while a subset not anchored at a
+partner base (say `10.198.51.128/25`) is conservatively refuted rather than
+admitted. The 9a–9c commands above take no `--requirements` and their
+documented outputs are unchanged.
+
+```bash
+# 9d. Compile the scenario corpus — EXPECTED TO EXIT 0: the one promise
+#     grounds and admits (nothing here is booby-trapped).
+.venv/bin/gcp-ground compile-requirements examples/terraform-masked \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json --out demo/compiled-masked
+
+# 9e. The remediation — EXPECTED TO EXIT 0: the allow narrowed to exactly
+#     the two audited partner ranges, judged with the promise in force.
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-masked/narrowed.tf.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --terraform-state examples/terraform-masked/terraform-after-removal.tfstate \
+    --requirements demo/compiled-masked \
+    --explain
+
+# 9f. The smuggle — EXPECTED TO EXIT 1: the two audited ranges PLUS one
+#     unaudited /28 that reads like a typo of partner A's block.
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-masked/narrowed_extra.tf.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --terraform-state examples/terraform-masked/terraform-after-removal.tfstate \
+    --requirements demo/compiled-masked \
+    --explain
+```
+
+**9e — the remediation is APPROVED (exit 0), and the approval is a judgment,
+not an absence of findings.** The narrative carries `promises in force
+(1 enforcing, 0 not — from demo/compiled-masked)` with a `holds` stanza
+quoting the sentence and the compiled subset rule, and the check listing shows
+all three deciders green:
+
+```text
+✓ [firewall_exposure] google_compute_firewall.allow_rdp_broad: no public
+    source reaches a sensitive port
+✓ [firewall_pair] examples/terraform-masked/narrowed.tf.json: the new rule
+    set allows no packet the old set denied
+✓ [sec:vpc_firewall] masked-allow-only-known-domains: the obligation holds
+    over the document — grounded
+```
+
+Note the pair tier RUNNING here, unlike 9a–9c: with the post-accident state
+holding exactly the one rule, the document's block resolves a baseline target
+(`[tf-address] resolved`) and the old-set-versus-new-set comparison confirms
+the narrowing from the other direction. The abstention taste is the usual
+fixture-snapshot noise — staleness, the two provenance notes, the
+network-existence abstention — none of it deciding anything. (The `holds`
+stanza also reprints the promise's pinned compliant/violating witness pair;
+those are compile-time solver models, masked `(…)` here as ever — nothing
+should pin them.)
+
+**9f — the smuggle is DENIED (exit 1), and the promise is the only thing that
+catches it.** The extra `10.198.52.0/28` is private, so the exposure check
+grounds; the new set is still a strict narrowing of the world-open state the
+accident left behind, so the pair check grounds too. Only the subset
+obligation refuses, and the refutation witness names the offending range and
+the block to edit:
+
+```text
+decision recap: DENIED (exit 1) — because:
+  ⚠ [sec:vpc_firewall] masked-allow-only-known-domains: refuted by
+      proposed_firewall_rules[1] (google_compute_firewall.allow_rdp_broad)
+      action='allow' direction='INGRESS' … name='allow-rdp-broad' …
+      source_range='10.198.52.0/28' source_range_mask='255.255.255.240' …
+```
+
+(the elided fields are the row's remaining constants — unlike a solver-minted
+witness address, everything in this refutation is quoted from the document
+itself, which is why the offending range can be named verbatim)
 
 ### 10. Scenario four: the attribute the provider doesn't know
 
