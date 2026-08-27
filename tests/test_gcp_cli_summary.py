@@ -291,6 +291,219 @@ def test_an_unreadable_proposal_costs_the_census_and_nothing_else(
     assert row(err, "result").startswith("APPROVED")
 
 
+# -- the proposed change, in English -------------------------------------------
+#
+# The sentences are read back off the rows the run's own proposal-tier
+# collection extractors produced — the rows a refuted promise's witness message
+# quotes. So the assertions here are about the JOIN in both directions: a
+# sentence names a block the proposal block above listed, and a block whose rows
+# the run never read gets no sentence claiming otherwise.
+
+
+def sentences(err: str) -> list[str]:
+    """The English lines under the ``proposed change`` row, indent stripped."""
+    lines = section(err).splitlines()
+    start = next(i for i, line in enumerate(lines)
+                 if line.strip().startswith("proposed change"))
+    out = []
+    for line in lines[start + 1:]:
+        if line.strip().startswith("result"):
+            break
+        out.append(line.strip())
+    return out
+
+
+def test_an_iam_binding_block_reads_as_the_grant_it_makes(capsys):
+    """One line per binding block, naming the role, the members and the block —
+    the same address the recap's findings use, so the two join by eye."""
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(TF_PROPOSAL), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--explain")
+    assert ("google_project_iam_binding.contractor_owner: grants roles/owner "
+            "to user:mallory@outsider.example") in sentences(err)
+
+
+def test_a_firewall_block_reads_as_what_it_opens(capsys):
+    """Direction, protocol/port, ranges and network — the fields the
+    ``proposed_firewall_rules`` rows carry and nothing else. A deny rule opens
+    nothing, and says so."""
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(TF_PROPOSAL), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--explain")
+    said = sentences(err)
+    assert ("google_compute_firewall.allow_ssh_world: opens INGRESS tcp/22 "
+            "from 0.0.0.0/0 on projects/acme-prod/global/networks/prod-vpc"
+            ) in said
+    assert ("google_compute_firewall.deny_rdp: denies INGRESS tcp/3389 "
+            "from 0.0.0.0/0 on projects/acme-prod/global/networks/prod-vpc"
+            ) in said
+
+
+def test_a_rest_policys_members_are_joined_and_its_condition_noted(capsys):
+    """A REST allow policy has no block address to name, so its bindings are
+    grouped by the role and condition its rows carry: the members of one binding
+    join into one line, and a gated binding says when it applies."""
+    _code, _out, err = invoke(capsys, "verify-policy", str(GOOD),
+                              "--snapshot", str(SNAPSHOT), "--explain")
+    said = sentences(err)
+    assert ("grants roles/bigquery.dataViewer to group:data-eng@acme.example, "
+            "user:alice@acme.example") in said
+    gated = [line for line in said if "roles/storage.objectViewer" in line]
+    assert gated == ['grants roles/storage.objectViewer to serviceAccount:'
+                     'etl-runner@acme-prod.iam.gserviceaccount.com when '
+                     'request.time < timestamp("2027-01-01T00:00:00Z")']
+
+
+def test_a_deny_policy_names_its_permissions_principals_and_carve_outs(capsys):
+    """The deny shape: what is denied, to whom, and who is exempted — the
+    exemption read from the ``deny_rule_exceptions`` rows, joined to the rule by
+    the same (block, rule index) the two collections share."""
+    plan = EXAMPLES / "terraform-denypolicy" / "plan_threading.json"
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal", str(plan),
+                              "--snapshot",
+                              str(EXAMPLES / "terraform-denypolicy" /
+                                  "snapshot.json"), "--explain")
+    said = [line for line in sentences(err) if "deny policy" in line]
+    assert len(said) == 1
+    assert said[0].startswith(
+        "google_iam_deny_policy.guard_token_mint: creates a deny policy "
+        "denying iam.serviceAccounts.getAccessToken, "
+        "iam.serviceAccounts.getOpenIdToken to principalSet://goog/public:all")
+    assert ", excepting principal://iam.googleapis.com/projects/-/" \
+           "serviceAccounts/payroll-ci@acme-pay-prod.iam.gserviceaccount.com" \
+           in said[0]
+
+
+def test_a_removed_deny_policy_reads_as_a_deletion(capsys):
+    """The removal arc leads with the plan's own change action. Its planned
+    values are gone by design, so reporting the block as unreadable — or as
+    creating the denial it is taking away — would both be wrong."""
+    plan = EXAMPLES / "terraform-denypolicy" / "plan_remove_deny.json"
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal", str(plan),
+                              "--snapshot",
+                              str(EXAMPLES / "terraform-denypolicy" /
+                                  "snapshot.json"), "--explain")
+    assert sentences(err) == [
+        "google_iam_deny_policy.guard_token_mint: deletes the deny policy"]
+
+
+def test_a_conditional_deny_rule_says_it_is_conditional(capsys):
+    """``has_condition`` on the rows becomes ", conditionally" — a denial that
+    only sometimes applies must not read as one that always does."""
+    policy = POLICIES / "deny_policy_conditional.json"
+    _code, _out, err = invoke(capsys, "verify-policy", str(policy),
+                              "--snapshot", str(SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        "creates a deny policy denying iam.serviceAccounts.getAccessToken to "
+        "principalSet://goog/public:all, conditionally"]
+
+
+def test_an_org_policy_block_names_the_constraint_and_what_it_sets(capsys):
+    """A terraform Org Policy block's rows carry the constraint and the enforce
+    boolean, so the line says both — the flipped control the demo is about."""
+    proposal = EXAMPLES / "terraform-orgpolicy" / \
+        "proposal_serial_and_publicip.tf.json"
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(proposal), "--snapshot",
+                              str(EXAMPLES / "terraform-orgpolicy" /
+                                  "snapshot.json"), "--explain")
+    assert ("google_org_policy_policy.serial_port_disabled: sets "
+            "constraints/compute.disableSerialPortAccess enforce=false"
+            ) in sentences(err)
+
+
+def test_a_rest_org_policy_carries_its_node_polarity_and_reset(capsys, tmp_path):
+    """A REST Org Policy is read from its own ``constraint_enforcement`` claims,
+    which — unlike the terraform rows — keep the hierarchy node, the allowed and
+    denied lists and the reset switch apart."""
+    listed = tmp_path / "values.json"
+    listed.write_text(json.dumps({
+        "name": "organizations/123456789012/policies/compute.vmExternalIpAccess",
+        "spec": {"rules": [{"values": {
+            "allowedValues": ["projects/acme-prod/zones/z/instances/legacy"],
+            "deniedValues": ["projects/acme-prod/zones/z/instances/retired"]}}]},
+    }), encoding="utf-8")
+    _code, _out, err = invoke(capsys, "verify-policy", str(listed), "--snapshot",
+                              str(SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        "spec.rules[0]: allows value projects/acme-prod/zones/z/instances/"
+        "legacy for constraints/compute.vmExternalIpAccess at "
+        "organizations/123456789012",
+        "spec.rules[0]: denies value projects/acme-prod/zones/z/instances/"
+        "retired for constraints/compute.vmExternalIpAccess at "
+        "organizations/123456789012",
+    ]
+
+    reset = tmp_path / "reset.json"
+    reset.write_text(json.dumps({
+        "name": "folders/665544332211/policies/"
+                "iam.disableServiceAccountKeyCreation",
+        "spec": {"reset": True},
+    }), encoding="utf-8")
+    _code, _out, err = invoke(capsys, "verify-policy", str(reset), "--snapshot",
+                              str(SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        "spec: resets constraints/iam.disableServiceAccountKeyCreation at "
+        "folders/665544332211 to the managed default"]
+
+
+def test_a_custom_role_block_counts_the_permissions_it_defines(capsys):
+    """The custom-role shape: the role's full name — the one value the rows
+    carry that the claims do not — and how many permissions it grants."""
+    proposal = EXAMPLES / "terraform-roles" / "proposal_a.tf.json"
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(proposal), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--explain")
+    assert ("google_project_iam_custom_role.data_viewer_scoped: defines custom "
+            "role projects/acme-prod/roles/dataViewerScoped with 4 permissions "
+            "(bigquery.datasets.get, bigquery.jobs.create, bigquery.tables.get,"
+            " bigquery.tables.getData)") in sentences(err)
+
+
+def test_a_block_whose_rows_were_never_read_says_so(capsys):
+    """A block of a shape this list speaks about that yielded no row says it
+    could not be read — the collection abstained over it, and the abstention is
+    a verdict above. Inventing a sentence for it is the failure mode."""
+    plan = EXAMPLES / "terraform-denypolicy" / "plan_reset_payments.json"
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal", str(plan),
+                              "--snapshot",
+                              str(EXAMPLES / "terraform-denypolicy" /
+                                  "snapshot.json"), "--explain")
+    assert ("google_org_policy_policy.payments_default_sweep: could not be "
+            "read — judged as a named abstention above") in sentences(err)
+
+
+def test_a_collection_the_run_never_extracted_contributes_nothing(capsys):
+    """The perimeter and the Cloud Armor policy of the demo proposal are listed
+    in the proposal block above and have no row shape here: they contribute no
+    sentence AND no apology line, because there is no collection whose rows they
+    would have been."""
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(TF_PROPOSAL), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--explain")
+    said = sentences(err)
+    assert [line for line in said if "google_compute_security_policy" in line] == []
+    assert [line for line in said
+            if "google_access_context_manager" in line] == []
+    assert "could not be read" not in "\n".join(said)
+
+
+def test_the_sentences_are_ordered_by_block_and_bounded(capsys):
+    """Deterministic order by block address, and the decision block's own
+    elision shape past the cap — the rest is counted, never dropped in
+    silence."""
+    proposal = EXAMPLES / "terraform-orgpolicy" / \
+        "proposal_serial_and_publicip.tf.json"
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(proposal), "--snapshot",
+                              str(EXAMPLES / "terraform-orgpolicy" /
+                                  "snapshot.json"), "--explain")
+    said = sentences(err)
+    assert len(said) == 9                       # eight blocks, then the count
+    assert said[:-1] == sorted(said[:-1])
+    assert said[-1] == "+5 more"
+
+
 # -- the result row ------------------------------------------------------------
 
 
