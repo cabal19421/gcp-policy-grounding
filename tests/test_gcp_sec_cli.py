@@ -735,7 +735,12 @@ def test_explain_without_requirements_has_no_sec_block(capsys):
     code, _, err = invoke(capsys, "verify-policy", str(GOOD),
                           "--snapshot", str(SNAPSHOT), "--explain")
     assert code == 0
-    assert "promises in force" not in err
+    # The BLOCK's own header, parenthesis and all — `sec_evidence.explain_lines`
+    # opens with "promises in force (N enforcing, ...)". The closing summary
+    # restates the same field as a labelled row ("promises in force : none
+    # loaded"), so the bare phrase no longer tells the two apart.
+    assert "promises in force (" not in err
+    assert "(no compiled requirements were loaded)" not in err
 
 
 #: The agentic corpus and fixtures behind the end-to-end narrative test: A10

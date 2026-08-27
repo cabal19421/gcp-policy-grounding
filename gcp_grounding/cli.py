@@ -331,6 +331,15 @@ top to bottom as one story ending in the report itself. A document the
 narrative cannot read or summarize costs the proposal block its summary and
 nothing else — the explain path never crashes a run.
 
+AFTER the decision recap, and in NORMAL MODE ONLY, ``--explain`` closes with a
+``summary — what just happened:`` block: the terraform state file, the compiled
+promises in force, the captured provider schema, the proposed document with its
+census, and the result. Each input row names the settings layer that supplied it
+in the same ``[cli]``/``[env]``/``[config]``/``[auto]``/``[default]`` spelling
+``--state-explain`` prints, and the result row comes LAST so the decision is
+still the terminal's final word. Hook stderr is unchanged, and so is every byte
+of a run without ``--explain``.
+
 ``--format json`` emits :func:`gcp_grounding.sec_evidence.sec_document` instead
 of :meth:`~gcp_grounding.report.PolicyReport.to_dict` whenever a requirements
 source was CONFIGURED — even if it resolved to zero rules — so a consumer that
@@ -430,7 +439,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from . import (discovery, drift, engine, explain_state, freshness, gate, merge,
                provenance, provider_schema, redact, sources)
@@ -1095,7 +1104,13 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
         # where stdout is block-buffered and would otherwise drain at exit,
         # AFTER this stderr write, burying the recap mid-stream.
         sys.stdout.flush()
-        print("\n".join(_decision_recap_lines(ground.report, hook=False)),
+        # The closing summary follows the recap and ends on the result row, so
+        # the decision remains the terminal's last word. Normal mode only —
+        # hook stderr is unchanged.
+        print("\n".join(_decision_recap_lines(ground.report, hook=False)
+                        + _summary_section_lines(args.file, ground.report,
+                                                 settings, source, rules,
+                                                 carried)),
               file=sys.stderr)
     return EXIT_OK if ground.report.ok else EXIT_FAILED
 
@@ -3121,6 +3136,268 @@ def _decision_recap_lines(report: GroundingReport, *, hook: bool) -> list[str]:
         for verdict in report.by_status(status):
             lines.append(f"  {marks[status]} [{verdict.kind}] {verdict.message}")
     lines.append("(the full narrative is above, before the report)")
+    return lines
+
+
+# -- --explain: the closing summary --------------------------------------------
+
+
+#: The summary section's header line.
+_SUMMARY_HEADER = "summary — what just happened:"
+
+#: The summary's label column, in print order. The widest label sets the
+#: column, so every value starts in the same one and the block reads down.
+_SUMMARY_LABELS = ("terraform state on disk", "promises in force", "provider",
+                   "proposed change", "result")
+
+#: The label column's width, DERIVED from the labels rather than typed twice.
+_SUMMARY_WIDTH = max(len(label) for label in _SUMMARY_LABELS)
+
+#: How many ids a summary list spells out before it counts the rest — the
+#: decision block's cap, reused so the two surfaces elide alike.
+_SUMMARY_ID_CAP = _UNDECIDED_LINE_CAP
+
+#: The verdict-kind prefix the compiled-requirements layer stamps on every
+#: promise verdict (``sec:iam``, ``sec:vpc_firewall``, ...). It is what tells a
+#: refuted PROMISE apart from a built-in finding, and the summary must never
+#: report one as the other.
+_SEC_KIND_PREFIX = "sec:"
+
+
+def _summary_row(label: str, value: str) -> str:
+    """One ``label : value`` row in the summary's fixed column."""
+    return f"  {label.ljust(_SUMMARY_WIDTH)} : {value}"
+
+
+def _capped_ids(ids: Sequence[str]) -> str:
+    """``(a, b, c, +2 more)`` — an id list bounded at :data:`_SUMMARY_ID_CAP`.
+
+    Empty for an empty list, so a caller can concatenate it onto a sentence
+    without a dangling pair of parentheses.
+    """
+    shown = list(ids)[:_SUMMARY_ID_CAP]
+    if not shown:
+        return ""
+    rest = len(ids) - len(shown)
+    tail = f", +{rest} more" if rest > 0 else ""
+    return f" ({', '.join(shown)}{tail})"
+
+
+def _layered(values: Sequence[str], layer: str) -> str:
+    """``path1, path2 [cli]`` — the values with the settings layer that
+    supplied them, in the same ``[origin]`` spelling ``--state-explain``
+    prints."""
+    return f"{', '.join(values)} [{layer}]"
+
+
+def _state_summary(settings: discovery.Settings) -> str:
+    """The ``terraform state on disk`` value: the configured state file(s) with
+    their origin layer, or the plain no-source answer."""
+    paths = tuple(getattr(settings.options, "terraform_state", ()) or ())
+    if not paths:
+        return "none configured"
+    return _layered(paths, settings.origin_of("terraform_state"))
+
+
+def _promise_summary(settings: discovery.Settings, source: str | None,
+                     rules, carried) -> str:
+    """The ``promises in force`` value: how many compiled promises enforce, how
+    many do not, where they came from, and a bounded list of the enforcing ids.
+
+    The two counts are derived exactly as :func:`_requirements_notice` derives
+    them — the enforcing ids are the registered rules', and a promise that never
+    compiled exists only as a carry verdict — so the summary cannot claim a
+    promise is enforcing that the notice above called stalled.
+    """
+    if source is None:
+        return "none loaded"
+    enforcing = [rule.promise.id for rule in rules]
+    registered = set(enforcing)
+    stalled = {verdict.target for verdict in carried
+               if verdict.target not in registered}
+    return (f"{len(enforcing)} enforcing, {len(stalled)} not — from "
+            f"{_layered((source,), settings.origin_of('requirements'))}"
+            f"{_capped_ids(sorted(enforcing))}")
+
+
+def _provider_summary(settings: discovery.Settings) -> str:
+    """The ``provider`` value: the captured schema this run judged resource
+    shapes against, or the plain no-schema answer.
+
+    The runtime is :func:`gcp_grounding.provider_schema.runtime_from_settings`
+    and the schemas come back through ``load_cached`` — the SAME resolution and
+    the same cached load :func:`_ground` activates for
+    :func:`gcp_grounding.tf_schema_checks.check_provider_schema`, so the line
+    names the file the checks actually read. A path that would not load says so
+    rather than being counted as a schema in force.
+    """
+    runtime = provider_schema.runtime_from_settings(settings)
+    if not runtime.paths:
+        return "no schema configured — resource shapes not checked"
+    layer = settings.origin_of("provider_schema")
+    clauses: list[str] = []
+    for path in runtime.paths:
+        schema, _problems = provider_schema.load_cached(path)
+        if schema is None:
+            clauses.append(f"{path} [{layer}] — could not be read, so resource "
+                           f"shapes were not checked")
+            continue
+        providers = ", ".join(address.rsplit("/", 1)[-1]
+                              for address in schema.providers) or "no provider"
+        types = len(schema.resource_types())
+        noun = "resource type" if types == 1 else "resource types"
+        clauses.append(f"{path} [{layer}] — {providers}, {types} {noun}")
+    value = "; ".join(clauses)
+    if runtime.effective_policy == "off":
+        value += " (schema policy 'off' — resource shapes were not checked)"
+    return value
+
+
+def _census_clause(path: str) -> str:
+    """The proposed document's kind, plus — for the terraform kinds — its block
+    count by resource type.
+
+    THE CENSUS IS THE ONE THE RUN ALREADY PERFORMED: the resource types come
+    back from :func:`gcp_grounding.gate.read_hcl`, gate's ``.tf.json`` entry
+    walk and — for a rendered plan — the claim extractor's own resource walk,
+    which are the readers the grounding pass itself graded through. A document
+    whose census cannot be taken gets its kind and nothing else; an invented
+    count would be a claim about a file nobody read.
+    """
+    raw_hcl = gate.terraform_route(path)
+    if raw_hcl is not None:
+        name, _summary = _terraform_summary(path, raw=raw_hcl)
+        return _with_census(name, _terraform_types(path, raw=raw_hcl))
+    doc, error = _read_json(path)
+    if error is not None:
+        return error
+    kind = detect_kind(doc)
+    name = _KIND_NAMES.get(kind, "not a recognized policy document kind")
+    if kind != "tf_plan":
+        return name
+    return _with_census(name, _plan_types(doc))
+
+
+def _with_census(name: str, types: Sequence[str]) -> str:
+    """*name* followed by ``2 google_compute_firewall, 1 …`` — biggest group
+    first, ties by type name; nothing at all when the census came back empty.
+
+    Bounded at :data:`_SUMMARY_ID_CAP` types so the row stays one line. The
+    elision names the types it dropped, never the blocks: *name* already
+    carries the total, so a reader adding the shown counts can see what is
+    missing rather than being told a smaller total.
+    """
+    if not types:
+        return name
+    counted = Counter(types)
+    ordered = sorted(counted.items(), key=lambda kv: (-kv[1], kv[0]))
+    shown, rest = ordered[:_SUMMARY_ID_CAP], len(ordered) - _SUMMARY_ID_CAP
+    census = ", ".join(f"{count} {rtype}" for rtype, count in shown)
+    if rest > 0:
+        census += f", +{rest} more type(s)"
+    return f"{name}: {census}"
+
+
+def _terraform_types(path: str, *, raw: bool) -> tuple[str, ...]:
+    """Every resource TYPE in a terraform configuration, one per block.
+
+    Tolerant exactly like :func:`_terraform_summary`, whose readers these are:
+    an unreadable configuration costs the census and nothing else.
+    """
+    try:
+        if raw:
+            triples, _unresolved, _note = gate.read_hcl(path)
+            if triples is None:
+                return ()
+            return tuple(rtype for _address, rtype, _values in triples)
+        doc, error = _read_json(path)
+        if error is not None:
+            return ()
+        return tuple(rtype for rtype, _name, _body in gate._tf_json_entries(doc))
+    except Exception:
+        logger.debug("--explain: the terraform census failed", exc_info=True)
+        return ()
+
+
+def _plan_types(doc: Any) -> tuple[str, ...]:
+    """Every google resource type a terraform plan carries, one per block.
+
+    THE WALK IS THE EXTRACTOR'S OWN — ``tf_claims._google_resources``, which
+    reads ``planned_values`` first and then ``resource_changes`` for addresses
+    it has not seen. That is the list the run extracted its claims from, so the
+    census counts the blocks that were actually graded rather than a second
+    reading of the file that could disagree with them. Resolved dynamically
+    like :func:`gcp_grounding.preflight._tf_plan_extractor`: without the module
+    the run extracted nothing, and the census is correspondingly empty.
+    """
+    if not isinstance(doc, Mapping):
+        return ()
+    try:
+        tf_claims = importlib.import_module("gcp_grounding.tf_claims")
+    except ImportError:
+        logger.debug("--explain: the tf-plan census is unavailable", exc_info=True)
+        return ()
+    return tuple(rtype for _address, rtype, _values
+                 in tf_claims._google_resources(doc))
+
+
+def _result_lines(report: GroundingReport) -> list[str]:
+    """The ``result`` row and, on a denial, WHAT denied it.
+
+    The two reasons are kept apart on purpose: a refuted promise is a
+    user-authored sentence that the change contradicts, and a built-in finding
+    is one of this tool's own checks. They are told apart by the verdict kind's
+    :data:`_SEC_KIND_PREFIX`, so neither can ever be reported as the other, and
+    a promise id is only ever read off a promise verdict's target.
+    """
+    if report.ok:
+        counts = report.counts()
+        unchecked = counts["unverified"]
+        qualifier = f" — {unchecked} unchecked" if unchecked else ""
+        return [_summary_row("result",
+                             f"APPROVED{qualifier} (exit {EXIT_OK})")]
+    deciding = [verdict for status in _FINDING_STATUSES
+                for verdict in report.by_status(status)]
+    promises = [v.target for v in deciding if v.kind.startswith(_SEC_KIND_PREFIX)]
+    builtin = [v for v in deciding if not v.kind.startswith(_SEC_KIND_PREFIX)]
+    lines = [_summary_row("result", f"DENIED (exit {EXIT_FAILED})")]
+    if promises:
+        lines.append(f"    it violated these promises: {', '.join(promises)}")
+    if builtin:
+        kinds = ", ".join(sorted({verdict.kind for verdict in builtin}))
+        noun = "finding" if len(builtin) == 1 else "findings"
+        lines.append(f"    blocked by {len(builtin)} built-in {noun}: [{kinds}]")
+    return lines
+
+
+def _summary_section_lines(path: str, report: GroundingReport,
+                           settings: discovery.Settings, source: str | None,
+                           rules, carried) -> list[str]:
+    """The closing ``summary — what just happened:`` block.
+
+    NORMAL MODE ONLY, and printed after the decision recap: hook mode's stderr
+    is agent-visible and stays as it was, and every non-``--explain`` byte is
+    unchanged because nothing here runs unless ``--explain`` was given.
+
+    The result row comes LAST so the decision is still the final thing on the
+    terminal — the ordering requirement the recap exists for. Every other row
+    names the layer that supplied its input, in the ``[cli]``/``[env]``/
+    ``[config]``/``[auto]``/``[default]`` spelling ``--state-explain`` uses,
+    read from :meth:`gcp_grounding.discovery.Settings.origin_of` rather than
+    re-derived here.
+    """
+    lines = ["", _SUMMARY_HEADER,
+             _summary_row("terraform state on disk", _state_summary(settings)),
+             _summary_row("promises in force",
+                          _promise_summary(settings, source, rules, carried)),
+             _summary_row("provider", _provider_summary(settings))]
+    try:
+        census = _census_clause(path)
+    except Exception:
+        logger.debug("--explain: the proposal census failed", exc_info=True)
+        census = "the document could not be summarized"
+    lines.append(_summary_row("proposed change", f"{path} — {census}"))
+    lines.extend(_result_lines(report))
     return lines
 
 

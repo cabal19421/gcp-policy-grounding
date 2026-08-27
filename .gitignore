@@ -10,14 +10,12 @@ designs/
 demo/
 
 # Agent tooling — the published project is agent-agnostic; no agent-vendor
-# specific file is tracked. The globs are deliberately broad: any file whose
-# name references that tooling stays untracked.
-.claude/
-.claude*
-CLAUDE.md
-CLAUDE.local.md
+# specific file is tracked. The globs below are character-class spellings so
+# this file names no vendor either; they are deliberately broad and match any
+# case, so any file whose name references that tooling stays untracked.
 .mcp.json
-*[Cc]laude*
-*[Aa]nthropic*
-*CLAUDE*
-*ANTHROPIC*
+*[Cc][Ll][Aa][Uu][Dd][Ee]*
+*[Aa][Nn][Tt][Hh][Rr][Oo][Pp][Ii][Cc]*
+.[Cc][Ll][Aa][Uu][Dd][Ee]*/
+.[Aa][Nn][Tt][Hh][Rr][Oo][Pp][Ii][Cc]*/
+TASK.md

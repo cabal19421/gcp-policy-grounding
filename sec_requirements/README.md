@@ -134,7 +134,7 @@ installed. Any collection registered by neither the base compiler nor the domain
 layer is unregistered, and a promise naming it is `unverified` naming the
 collection — never a false pass.
 
-## The honesty contract
+## The no-guessing contract
 
 The compiler never guesses. A sentence the term language cannot express becomes a
 promise with `status: unverified` and the exact sentence quoted — not an
@@ -142,5 +142,5 @@ approximate translation and not a silent drop. The same is true when a `vocab:`
 value fails to ground, when a promise names an unregistered collection, when a
 required snapshot category was not captured, when an encoding (e.g. a `cel`
 condition) is unsupported, or when z3 is not installed. The gate's only verdict
-channels are the four honest buckets, and every uncertain path lands in
+channels are the four buckets, and every uncertain path lands in
 `unverified` naming its reason.
