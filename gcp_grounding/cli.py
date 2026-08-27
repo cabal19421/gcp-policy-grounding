@@ -446,6 +446,7 @@ import importlib
 from collections import Counter
 import importlib.util
 import inspect
+import ipaddress
 import json
 import os
 import sys
@@ -3546,9 +3547,17 @@ def _plan_types(doc: Any) -> tuple[str, ...]:
 # The ONE thing read from the document directly is a plan's change action
 # (:func:`_plan_actions`), because no row carries it: rows describe the state a
 # block proposes, and whether that block is being created, updated or deleted is
-# stated only by ``resource_changes``. A delete states it and nothing else —
-# there are no planned values to build a row from — which is exactly the case
-# the action exists to describe.
+# stated only by ``resource_changes``.
+#
+# A create IS its rows: the block's planned values are the whole of what it
+# does. A delete and an update are not, so both are told from the state the
+# change is leaving behind — read the way
+# :func:`gcp_grounding.iam_deny_checks.check_deny_wake_plan` reads it, off the
+# entry's own ``change.before``, and then through the SAME collection extractors
+# over a synthetic one-resource plan carrying those values
+# (:func:`_before_reading`). No attribute is parsed here either way: a deletion
+# can only say what a collection read, and an update's delta is the difference
+# between two sets of rows, field by field.
 #
 # Where the extraction is poorer than the English would like, the sentence is
 # poorer too. A terraform Org Policy's rows carry no hierarchy node and merge
@@ -3590,10 +3599,37 @@ _TF_BLOCK_NOUNS = {
     "google_compute_firewall": "the firewall rule",
 }
 
+#: Terraform resource type → the collections whose rows speak for a block of it.
+#: A change story is only ever "could not be read" because one of THESE
+#: abstained: every other collection abstains over every block of another shape
+#: ("the plan carries no IAM binding resources"), which says nothing about this
+#: one and must not be reported as a failure to read it.
+_TF_BLOCK_COLLECTIONS = {
+    "google_project_iam_binding": ("iam_bindings",),
+    "google_project_iam_member": ("iam_bindings",),
+    "google_project_iam_policy": ("iam_bindings",),
+    "google_project_iam_custom_role": ("proposed_role_permissions",),
+    "google_org_policy_policy": ("org_policy_rules",),
+    "google_iam_deny_policy": ("deny_rules", "deny_rule_exceptions"),
+    "google_compute_firewall": ("proposed_firewall_rules",),
+}
+
 #: The plan change actions, in the English the sentences lead with. An action
 #: outside this table (``read``, ``no-op``, a replacement pair) leads with
 #: nothing, because "creates" would be a claim about a change nobody read.
 _CHANGE_VERBS = {"create": "creates", "update": "updates", "delete": "deletes"}
+
+#: The change actions told from the state they leave behind, rather than from
+#: the rows the run graded.
+_BEFORE_ACTIONS = ("delete", "update")
+
+#: The verb a deleted block of each type takes. A binding is REMOVED from the
+#: policy it sits in; a policy, a role or a rule is DELETED outright.
+_DELETE_VERBS = {
+    "google_project_iam_binding": "removes",
+    "google_project_iam_member": "removes",
+    "google_project_iam_policy": "removes",
+}
 
 #: How much of a condition expression a sentence carries before it elides.
 _CONDITION_CAP = 60
@@ -3635,28 +3671,42 @@ def _graded_document(path: str) -> tuple[Any, str | None]:
     return doc, detect_kind(doc)
 
 
-def _collection_rows(sec_rules: Any, ctx: Any, name: str) -> tuple:
-    """The records collection *name* yields for *ctx* — empty when this checkout
-    registered no extractor for it, or when the extractor abstained.
+def _collection_reading(sec_rules: Any, ctx: Any,
+                        name: str) -> tuple[tuple, str | None]:
+    """(the records collection *name* yields for *ctx*, why it read none).
 
-    An abstention contributes NO sentence: the collection was not extracted over
-    this document, and a sentence would be about rows nobody read. The
-    extractors are the registered ones and are called exactly as
+    The reason is the extractor's OWN missing_reason — the abstention the
+    verdicts above carry — and keeping it is what tells "this document has no
+    rule of that shape" apart from "the rule was there and nobody could read
+    it". The change story below may only describe a before state a collection
+    really read, and only that difference says which of the two it is.
+
+    The extractors are the registered ones and are called exactly as
     :meth:`gcp_grounding.sec_rules.CompiledRule._collect` calls them, so they
     cannot raise here either — :func:`gcp_grounding.sec_domains._guarded` turns
     every failure into a missing_reason.
     """
     extractor = sec_rules.EXTRACTORS.get(name)
     if extractor is None:
-        return ()
+        return (), f"this checkout registered no {name} extractor"
     try:
-        records, _missing, _empty = sec_rules._normalize_extraction(
+        records, missing, _empty = sec_rules._normalize_extraction(
             name, extractor(ctx))
     except Exception:  # noqa: BLE001 — the narrative never crashes a graded run
         logger.debug("--explain: the %s rows were not available", name,
                      exc_info=True)
-        return ()
-    return records
+        return (), f"the {name} rows were not available"
+    return records, missing
+
+
+def _collection_rows(sec_rules: Any, ctx: Any, name: str) -> tuple:
+    """The records collection *name* yields for *ctx* — empty when this checkout
+    registered no extractor for it, or when the extractor abstained.
+
+    An abstention contributes NO sentence: the collection was not extracted over
+    this document, and a sentence would be about rows nobody read.
+    """
+    return _collection_reading(sec_rules, ctx, name)[0]
 
 
 def _address_of(record: Mapping[str, Any]) -> str:
@@ -3698,13 +3748,20 @@ def _capped_text(text: str) -> str:
     return text if len(text) <= _CONDITION_CAP else f"{text[:_CONDITION_CAP]}…"
 
 
-def _iam_sentences(records: Sequence[Mapping[str, Any]]) -> list[tuple[str, str]]:
+def _iam_sentences(records: Sequence[Mapping[str, Any]]
+                   ) -> list[tuple[str, str, str]]:
     """``grants <role> to <members>`` — one line per binding block, the members
     of the block's rows joined and its condition noted when the rows carry one.
 
     The rows are one per (binding, member), so the grouping key is the binding:
     its block address where the terraform arm threaded one, and the role plus
     condition over a REST policy, whose rows carry no address to group by.
+
+    Like every shape here it yields ``(address, sentence, clause)``: the
+    sentence for a block being made, and beside it the same content as a
+    PARTICIPLE clause the change story hangs off a noun ("removes the IAM
+    binding *granting* …"). The clause carries its own leading separator, so a
+    caller appends it to a noun and never has to know whether it is empty.
     """
     def key(record):
         return (_address_of(record), record.get("role", ""),
@@ -3713,17 +3770,17 @@ def _iam_sentences(records: Sequence[Mapping[str, Any]]) -> list[tuple[str, str]
     sentences = []
     for (address, role, condition, gated), rows in _grouped(records, key).items():
         members = _capped_list(_distinct(r.get("member", "") for r in rows))
-        text = f"grants {role or '(no role)'} to {members or '(no members)'}"
+        body = f"{role or '(no role)'} to {members or '(no members)'}"
         if condition:
-            text += f" when {_capped_text(condition)}"
+            body += f" when {_capped_text(condition)}"
         elif gated:
-            text += " when a condition the rows do not carry"
-        sentences.append((address, text))
+            body += " when a condition the rows do not carry"
+        sentences.append((address, f"grants {body}", f" granting {body}"))
     return sentences
 
 
 def _org_sentences(records: Sequence[Mapping[str, Any]], document: Any,
-                   kind: str | None) -> list[tuple[str, str]]:
+                   kind: str | None) -> list[tuple[str, str, str]]:
     """The Org Policy lines: what the document sets, for which constraint, and —
     where the extraction carries it — at which node.
 
@@ -3741,15 +3798,14 @@ def _org_sentences(records: Sequence[Mapping[str, Any]], document: Any,
         address = _address_of(record)
         constraint = f"constraints/{record.get('constraint', '')}"
         if record.get("is_list"):
-            sentences.append((address,
-                              f"sets {constraint} to value {record.get('value')}"))
+            body = f"{constraint} to value {record.get('value')}"
         else:
-            sentences.append((address, f"sets {constraint} enforce="
-                                       f"{str(record.get('enforce')).lower()}"))
+            body = f"{constraint} enforce={str(record.get('enforce')).lower()}"
+        sentences.append((address, f"sets {body}", f" setting {body}"))
     return sentences
 
 
-def _rest_org_sentences(document: Any) -> list[tuple[str, str]]:
+def _rest_org_sentences(document: Any) -> list[tuple[str, str, str]]:
     """The Org Policy lines of a REST document, from its enforcement claims."""
     try:
         claims = org_policy_claims(document)
@@ -3766,23 +3822,25 @@ def _rest_org_sentences(document: Any) -> list[tuple[str, str]]:
         where = f" at {node}" if node else ""
         constraint = claim.value
         if payload.get("reset") is True:
-            sentences.append((claim.location, f"resets {constraint}{where} to "
-                                              "the managed default"))
+            body = f"{constraint}{where} to the managed default"
+            sentences.append((claim.location, f"resets {body}",
+                              f" resetting {body}"))
             continue
         if payload.get("enforce") is not None:
-            sentences.append((claim.location,
-                              f"sets {constraint} enforce="
-                              f"{str(payload['enforce']).lower()}{where}"))
-        for field, word in (("allowed_values", "allows"),
-                            ("denied_values", "denies")):
+            body = (f"{constraint} enforce="
+                    f"{str(payload['enforce']).lower()}{where}")
+            sentences.append((claim.location, f"sets {body}", f" setting {body}"))
+        for field, word, doing in (("allowed_values", "allows", "allowing"),
+                                   ("denied_values", "denies", "denying")):
             for value in payload.get(field) or ():
-                sentences.append((claim.location,
-                                  f"{word} value {value} for "
-                                  f"{constraint}{where}"))
+                body = f"value {value} for {constraint}{where}"
+                sentences.append((claim.location, f"{word} {body}",
+                                  f" {doing} {body}"))
     return sentences
 
 
-def _role_sentences(records: Sequence[Mapping[str, Any]]) -> list[tuple[str, str]]:
+def _role_sentences(records: Sequence[Mapping[str, Any]]
+                    ) -> list[tuple[str, str, str]]:
     """``defines custom role <role> with N permissions (…)`` — one line per
     custom-role block, over the permission rows it yielded."""
     def key(record):
@@ -3792,25 +3850,27 @@ def _role_sentences(records: Sequence[Mapping[str, Any]]) -> list[tuple[str, str
     for (address, role), rows in _grouped(records, key).items():
         permissions = _distinct(r.get("permission", "") for r in rows)
         noun = "permission" if len(permissions) == 1 else "permissions"
-        sentences.append((address, f"defines custom role {role} with "
-                                   f"{len(permissions)} {noun}"
-                                   f"{_capped_ids(permissions)}"))
+        listed = _capped_ids(permissions)
+        sentences.append((address,
+                          f"defines custom role {role} with "
+                          f"{len(permissions)} {noun}{listed}",
+                          f" {role} and its {len(permissions)} {noun}{listed}"))
     return sentences
 
 
 def _deny_sentences(records: Sequence[Mapping[str, Any]],
                     exceptions: Sequence[Mapping[str, Any]],
-                    actions: Mapping[str, str]) -> list[tuple[str, str]]:
+                    actions: Mapping[str, str]) -> list[tuple[str, str, str]]:
     """``creates a deny policy denying <permissions> to <principals>`` — one
     line per deny rule, with the exempted principals and the condition noted.
 
-    The verb is the plan's own change action where the document carries one, so
-    a plan that removes a guardrail reads "deletes" rather than announcing the
-    denial it is taking away as though it were being made. A document that
-    states no action at all — a REST deny policy, or the synthetic plan a
-    terraform configuration is read as — is proposing the policy, so it reads
-    "creates"; an action outside :data:`_CHANGE_VERBS` leads with no verb rather
-    than one the plan does not support.
+    A document that states no action at all — a REST deny policy, or the
+    synthetic plan a terraform configuration is read as — is proposing the
+    policy, so it reads "creates"; an action outside :data:`_CHANGE_VERBS` leads
+    with no verb rather than one the plan does not support. A block being
+    deleted or updated never reaches here: it is told from its before state
+    (:func:`_change_sentences`), which is where the denial it takes away is
+    written down.
     """
     def key(record):
         return (_address_of(record), record.get("policy", ""),
@@ -3826,45 +3886,58 @@ def _deny_sentences(records: Sequence[Mapping[str, Any]],
                                              for r in rows))
         principals = _capped_list(_distinct(r.get("denied_principal", "")
                                             for r in rows))
-        text = f"{verb} a deny policy" if verb else "a deny policy"
+        clause = ""
         if permissions and principals:
-            text += f" denying {permissions} to {principals}"
+            clause += f" denying {permissions} to {principals}"
         exempted = _capped_list(_distinct(r.get("exception_principal", "")
                                           for r in carved.get(group, ())))
         if exempted:
-            text += f", excepting {exempted}"
+            clause += f", excepting {exempted}"
         if any(r.get("has_condition") for r in rows):
-            text += ", conditionally"
-        sentences.append((address, text))
+            clause += ", conditionally"
+        head = f"{verb} a deny policy" if verb else "a deny policy"
+        sentences.append((address, f"{head}{clause}", clause))
     return sentences
 
 
 def _firewall_sentences(records: Sequence[Mapping[str, Any]]
-                        ) -> list[tuple[str, str]]:
+                        ) -> list[tuple[str, str, str]]:
     """``opens <direction> <proto>/<port> from <ranges> on <network>`` — one
     line per firewall block, over the (range × protocol × port) rows it was
-    flattened into, and using only the fields those rows carry."""
+    flattened into, and using only the fields those rows carry.
+
+    A rule that is being deleted reads as what it was ALLOWING (or denying) —
+    the same content, spelled as the clause the deletion hangs off.
+    """
     def key(record):
         return (_address_of(record), record.get("name", ""))
 
     sentences = []
     for (address, name), rows in _grouped(records, key).items():
         first = rows[0]
-        verb = "opens" if first.get("action") == "allow" else "denies"
-        parts = [verb, str(first.get("direction") or "").strip(),
-                 _capped_list(_distinct(_layer4_label(r) for r in rows))]
-        text = " ".join(part for part in parts if part)
+        allowing = first.get("action") == "allow"
+        head = " ".join(part for part in
+                        (str(first.get("direction") or "").strip(),
+                         _capped_list(_distinct(_layer4_label(r) for r in rows)))
+                        if part)
+        tail = ""
         for field, word in (("source_range", "from"),
                             ("destination_range", "to")):
             ranges = _capped_list(_distinct(r[field] for r in rows
                                             if r.get(field)))
             if ranges:
-                text += f" {word} {ranges}"
+                tail += f" {word} {ranges}"
         if first.get("network"):
-            text += f" on {first['network']}"
+            tail += f" on {first['network']}"
         if first.get("disabled"):
-            text += " (disabled)"
-        sentences.append((address or name, text))
+            tail += " (disabled)"
+        verb = "opens" if allowing else "denies"
+        doing = "allowing" if allowing else "denying"
+        sentences.append((address or name,
+                          f"{' '.join(part for part in (verb, head) if part)}"
+                          f"{tail}",
+                          f" {' '.join(part for part in (doing, head) if part)}"
+                          f"{tail}"))
     return sentences
 
 
@@ -3890,14 +3963,384 @@ def _layer4_label(record: Mapping[str, Any]) -> str:
     return f"{protocol}/{port}" if port is not None else protocol
 
 
-def _unreadable_blocks(document: Any, covered: Sequence[tuple[str, str]],
-                       actions: Mapping[str, str]) -> list[tuple[str, str]]:
+def _shape_sentences(rows: Mapping[str, Sequence[Mapping[str, Any]]],
+                     document: Any, kind: str | None,
+                     actions: Mapping[str, str]) -> list[tuple[str, str, str]]:
+    """Every ``(address, sentence, clause)`` the five shapes make of *rows*.
+
+    One place assembles them, so the before state of a changed block is
+    described by exactly the renderers that describe a proposed one.
+    """
+    return (_iam_sentences(rows["iam_bindings"])
+            + _org_sentences(rows["org_policy_rules"], document, kind)
+            + _role_sentences(rows["proposed_role_permissions"])
+            + _deny_sentences(rows["deny_rules"], rows["deny_rule_exceptions"],
+                              actions)
+            + _firewall_sentences(rows["proposed_firewall_rules"]))
+
+
+def _under(address: str, block: str) -> bool:
+    """Whether *address* is *block* itself or a location nested inside it (a
+    binding of a ``policy_data`` document, say)."""
+    return address == block or address.startswith(f"{block}.")
+
+
+def _rows_under(rows: Mapping[str, Sequence[Mapping[str, Any]]],
+                block: str) -> dict[str, tuple]:
+    """*rows*, restricted to the ones one block's address owns."""
+    return {name: tuple(record for record in records
+                        if _under(_address_of(record), block))
+            for name, records in rows.items()}
+
+
+# -- the change story: a delete and an update, from the state they leave --------
+
+
+#: Row fields no delta line is ever minted for. The two masks are the companions
+#: ``sec_domains`` mints beside every ``Cidr`` field — the same range spelled for
+#: the solver, so a line about them would say the range changed twice; ``policy``
+#: and ``rule_index`` are the keys the deny collections are GROUPED by rather
+#: than content; ``is_list`` is the org-policy row's shape flag, and which list a
+#: value came from is what ``value`` already says.
+_DELTA_SKIP = ("source_range_mask", "destination_range_mask", "policy",
+               "rule_index", "is_list")
+
+#: The pseudo-field the flattened firewall rows' protocol and port are read
+#: through: the rows keep them apart for the solver, and the sentences have
+#: always spelled them together (``tcp/22``).
+_DELTA_LAYER4 = "protocol/port"
+
+#: The SET-VALUED row fields — the dimensions a block's rows are the cross
+#: product of — and the English for the set each one flattens. A change to one of
+#: these is an addition to or a removal from a list; every other field is a
+#: scalar and reads ``sets <field>=<now> (was <was>)``.
+_DELTA_LISTS = {
+    "source_range": "source ranges",
+    "destination_range": "destination ranges",
+    "member": "members",
+    "permission": "permissions",
+    "denied_principal": "denied principals",
+    "exception_principal": "the exceptionPrincipals",
+    "source_tag": "source tags",
+    "target_tag": "target tags",
+    "value": "values",
+    _DELTA_LAYER4: "the protocols and ports it matches",
+}
+
+#: The fields whose values are ranges, and so the only ones a delta may call a
+#: narrowing or a widening.
+_DELTA_CIDRS = ("source_range", "destination_range")
+
+
+def _plan_changes(document: Any) -> dict[str, Mapping[str, Any]]:
+    """Resource address → the ``resource_changes`` entry stating exactly ONE
+    change action for it.
+
+    Only where the entry states one action: a replacement pair
+    (``["delete", "create"]``) says two things about one address, and telling
+    either half's story would be a claim the plan does not make.
+    """
+    if not isinstance(document, Mapping):
+        return {}
+    changes = document.get("resource_changes")
+    if not isinstance(changes, list):
+        return {}
+    entries: dict[str, Mapping[str, Any]] = {}
+    for entry in changes:
+        if not isinstance(entry, Mapping):
+            continue
+        address = entry.get("address")
+        change = entry.get("change")
+        acts = change.get("actions") if isinstance(change, Mapping) else None
+        if isinstance(address, str) and address and isinstance(acts, list) \
+                and len(acts) == 1 and isinstance(acts[0], str):
+            entries.setdefault(address, entry)
+    return entries
+
+
+def _before_reading(sec_rules: Any, entry: Mapping[str, Any], kind: str | None,
+                    path: str,
+                    collections: Sequence[str]
+                    ) -> tuple[dict[str, tuple], set[str], Any] | None:
+    """The rows *collections* read out of one entry's ``change.before``, the
+    names of the ones that could not read it, and the document they were read
+    from — None when the entry states no before state at all.
+
+    THE C3 FUNNEL, REUSED: ``iam_deny_checks.check_deny_wake_plan`` reads the old
+    side of a change off ``change.before`` and grades it with the same machinery
+    it grades the new side with. So does this: the entry is handed back verbatim
+    (its address, type and provider are the plan's own words) with ``change``
+    traded for the ``values`` key ``planned_values`` spells them under, and the
+    registered extractors read that one-resource plan. Nothing here parses an
+    attribute, so a deletion can only ever say what a collection said.
+
+    Only the block's OWN collections are read: every other one would abstain
+    over it for the reason it always abstains over another shape ("the plan
+    carries no IAM binding resources"), which says nothing about this block.
+    """
+    change = entry.get("change")
+    before = change.get("before") if isinstance(change, Mapping) else None
+    if not isinstance(before, Mapping):
+        return None
+    resource = {key: value for key, value in entry.items() if key != "change"}
+    resource["values"] = before
+    plan = {"planned_values": {"root_module": {"resources": [resource]}}}
+    ctx = sec_rules.RuleContext(snapshot=None, document=plan,
+                                document_kind=kind, source=path)
+    rows: dict[str, tuple] = {name: () for name in _SENTENCE_COLLECTIONS}
+    unread: set[str] = set()
+    for name in collections:
+        records, missing = _collection_reading(sec_rules, ctx, name)
+        rows[name] = records
+        if missing is not None:
+            unread.add(name)
+    return rows, unread, plan
+
+
+def _value_text(value: Any) -> str:
+    """One row value, in the spelling the sentences use: a boolean lower-cased
+    the way every other line here spells one, an honest empty named rather than
+    printed as nothing."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    text = str(value)
+    return text if text else "(none)"
+
+
+def _field_values(rows: Sequence[Mapping[str, Any]], field: str,
+                  listed: bool) -> list[str]:
+    """The values *rows* carry for one field, duplicates dropped.
+
+    A set-valued field drops its empties — an empty ``source_tag`` is the
+    dimension saying the rule has no tags, not a value the rule carries — the
+    way every other list in this section does; a scalar keeps its empty and
+    names it, because a field that went blank is a change.
+    """
+    if field == _DELTA_LAYER4:
+        return _distinct(_layer4_label(record) for record in rows)
+    if listed:
+        return _distinct(record[field] for record in rows if record.get(field))
+    return _distinct(_value_text(record[field]) for record in rows
+                     if field in record)
+
+
+def _delta_fields(before: Sequence[Mapping[str, Any]],
+                  after: Sequence[Mapping[str, Any]]) -> list[str]:
+    """The fields either side's rows carry, in first-seen order, with the
+    layer-4 pair folded into its one pseudo-field."""
+    address_field = _address_field()
+    fields: list[str] = []
+    for record in (*before, *after):
+        for field in record:
+            if field in _DELTA_SKIP or field == address_field:
+                continue
+            if field in ("protocol", "port"):
+                field = _DELTA_LAYER4
+            if field not in fields:
+                fields.append(field)
+    return fields
+
+
+def _address_field() -> str:
+    """The key the extractors thread a row's block address under — read from
+    ``sec_rules`` rather than restated, exactly as :func:`_address_of` reads
+    it. It is bookkeeping, never a field a delta speaks about."""
+    sec_rules = _optional_module("sec_rules")
+    return getattr(sec_rules, "WITNESS_ADDRESS_FIELD", "address")
+
+
+def _range_verb(removed: Sequence[str], added: Sequence[str],
+                field: str) -> str:
+    """"narrows", "widens" — or "changes" whenever neither is COMPUTED.
+
+    Only ranges may be called narrower or wider, and only when every new range
+    sits inside an old one (or every old one inside a new one), parsed by the
+    standard library's own network reader. A pair of ranges that moved sideways
+    is neither, and saying otherwise would be a claim about coverage nobody
+    worked out.
+    """
+    if field not in _DELTA_CIDRS:
+        return "changes"
+    try:
+        old = [ipaddress.ip_network(text, strict=False) for text in removed]
+        new = [ipaddress.ip_network(text, strict=False) for text in added]
+        if old and new:
+            if all(any(n.subnet_of(o) for o in old) for n in new):
+                return "narrows"
+            if all(any(o.subnet_of(n) for n in new) for o in old):
+                return "widens"
+    except (TypeError, ValueError):
+        logger.debug("--explain: %s ranges %r → %r were not comparable", field,
+                     removed, added, exc_info=True)
+    return "changes"
+
+
+def _delta_text(field: str, was: Sequence[str], now: Sequence[str],
+                suffix: str) -> str:
+    """One changed field, in English: an addition, a removal, a narrowing, or a
+    scalar's new value with the old one beside it."""
+    label = _DELTA_LISTS.get(field)
+    if label is None:
+        if not was:
+            return f"sets {field}={_capped_list(now)}, which the prior rows " \
+                   f"did not state"
+        if not now:
+            return f"no longer states {field} (was {_capped_list(was)})"
+        return f"sets {field}={_capped_list(now)} (was {_capped_list(was)})"
+    added = [value for value in now if value not in was]
+    removed = [value for value in was if value not in now]
+    if added and not removed:
+        return f"adds {_capped_list(added)} to {label}{suffix}"
+    if removed and not added:
+        return f"removes {_capped_list(removed)} from {label}{suffix}"
+    return (f"{_range_verb(removed, added, field)} {label} from "
+            f"{_capped_list(removed)} to {_capped_list(added)}{suffix}")
+
+
+def _collection_delta(name: str, before: Mapping[str, Sequence],
+                      after: Mapping[str, Sequence],
+                      suffix: str, skip: Sequence[str] = ()) -> list[str]:
+    """The delta lines one collection's rows make, field by field."""
+    was, now = before.get(name, ()), after.get(name, ())
+    lines = []
+    for field in _delta_fields(was, now):
+        if field in skip:
+            continue
+        listed = field in _DELTA_LISTS
+        old, new = (_field_values(was, field, listed),
+                    _field_values(now, field, listed))
+        if old != new:
+            lines.append(_delta_text(field, old, new, suffix))
+    return lines
+
+
+def _delta_lines(before: Mapping[str, Sequence], after: Mapping[str, Sequence],
+                 collections: Sequence[str]) -> list[str]:
+    """Every delta line one block's two sets of rows make.
+
+    The carve-outs are read FIRST because they are the richer telling of the
+    same fact: a deny rule's ``has_principal_exceptions`` flips because a
+    principal was carved out, and the exception rows are the ones that know
+    which. When they say it, the flag does not say it again.
+    """
+    carved = ([] if "deny_rule_exceptions" not in collections else
+              _collection_delta("deny_rule_exceptions", before, after,
+                                _deny_suffix(before, after)))
+    lines = list(carved)
+    for name in collections:
+        if name == "deny_rule_exceptions":
+            continue
+        skip = ("has_principal_exceptions",) if carved else ()
+        lines.extend(_collection_delta(name, before, after, "", skip))
+    return lines
+
+
+def _deny_suffix(before: Mapping[str, Sequence],
+                 after: Mapping[str, Sequence]) -> str:
+    """`` of the deny rule denying <permissions>`` — which rule a carve-out was
+    threaded through, named from the deny rows themselves (the new ones where
+    the change kept them, else the old)."""
+    for rows in (after.get("deny_rules", ()), before.get("deny_rules", ())):
+        denied = _capped_list(_distinct(r.get("permission", "") for r in rows))
+        if denied:
+            return f" of the deny rule denying {denied}"
+    return ""
+
+
+def _delete_lines(block: str, noun: str, verb: str, kind: str | None,
+                  reading, collections: Sequence[str]) -> list[tuple[str, str]]:
+    """What a deleted block is TAKING AWAY, one line per rule its before state
+    carried — or the plain refusal when that state could not be read."""
+    unreadable = [(block, f"{verb} {noun} whose prior content could not be read")]
+    if reading is None:
+        return unreadable
+    rows, unread, plan = reading
+    shapes = _shape_sentences(rows, plan, kind, {})
+    if shapes:
+        return [(address, f"{verb} {noun}{clause}")
+                for address, _sentence, clause in shapes]
+    if any(name in unread for name in collections):
+        return unreadable
+    return [(block, f"{verb} {noun}")]
+
+
+def _update_lines(block: str, noun: str, document: Any, kind: str | None,
+                  reading, after: Mapping[str, Sequence], unread: Sequence[str],
+                  collections: Sequence[str]) -> list[tuple[str, str]]:
+    """What an update MOVED, field by field over the two sets of rows.
+
+    A difference needs BOTH sides. Where one of them is a set of rows nobody
+    read, the side that WAS read is said plainly as itself — as the new state,
+    or as the old one — because a collection's silence is not the same fact as
+    an emptied field, and differencing against it would report the second.
+    """
+    now = _shape_sentences(after, document, kind, {})
+    if reading is None or any(name in reading[1] for name in collections):
+        head = f"updates {noun} whose prior content could not be read"
+        return ([(block, head)] if not now else
+                [(address, f"{head} — now{clause}")
+                 for address, _sentence, clause in now])
+    rows, _unread_before, plan = reading
+    if any(name in unread for name in collections):
+        head = f"updates {noun} whose new content could not be read"
+        was = _shape_sentences(rows, plan, kind, {})
+        return ([(block, head)] if not was else
+                [(address, f"{head} — it was{clause}")
+                 for address, _sentence, clause in was])
+    lines = _delta_lines(rows, after, collections)
+    if not lines:
+        return [(block, f"updates {noun} — no field its rows carry changed")]
+    return [(block, text) for text in lines]
+
+
+def _change_sentences(sec_rules: Any, document: Any, kind: str | None, path: str,
+                      rows: Mapping[str, Sequence], unread: Sequence[str],
+                      actions: Mapping[str, str]) -> list[tuple[str, str]]:
+    """One story per plan block being deleted or updated.
+
+    Only blocks of a shape these sentences speak for are told about: a type with
+    no noun here has no collection whose rows it would have been, exactly as in
+    the create list, and inventing a line for it is the failure mode.
+
+    *unread* names the collections that abstained over the document under
+    review — the new side of every update in it.
+    """
+    tf_claims = _optional_module("tf_claims")
+    if tf_claims is None:
+        return []
+    types = {address: rtype
+             for address, rtype, _values in tf_claims._google_resources(document)}
+    lines: list[tuple[str, str]] = []
+    for block, entry in _plan_changes(document).items():
+        action = actions.get(block)
+        if action not in _BEFORE_ACTIONS:
+            continue
+        rtype = types.get(block, "")
+        noun = _TF_BLOCK_NOUNS.get(rtype)
+        if noun is None:
+            continue
+        collections = _TF_BLOCK_COLLECTIONS.get(rtype, ())
+        reading = _before_reading(sec_rules, entry, kind, path, collections)
+        if action == "delete":
+            lines.extend(_delete_lines(block, noun,
+                                       _DELETE_VERBS.get(rtype, "deletes"),
+                                       kind, reading, collections))
+        else:
+            lines.extend(_update_lines(block, noun, document, kind, reading,
+                                       _rows_under(rows, block), unread,
+                                       collections))
+    return lines
+
+
+def _unreadable_blocks(document: Any,
+                       covered: Sequence[tuple[str, str]]) -> list[tuple[str, str]]:
     """One line per terraform block the sentences above could not speak for.
 
     A block whose type has no shape here contributes nothing. A block being
-    DELETED says so — its planned values are gone by design, and reporting that
-    as unreadable would blame the change for the absence it is. Anything else of
-    a shape this block knows, with no row of its own, says it could not be read:
+    deleted or updated is never one of these: its story is told from its before
+    state (:func:`_change_sentences`), which speaks for every such block even
+    when it can only say the prior content could not be read. Anything left of a
+    shape this block knows, with no row of its own, says it could not be read:
     the collection abstained over it, and that abstention is a verdict above.
     """
     tf_claims = _optional_module("tf_claims")
@@ -3909,42 +4352,18 @@ def _unreadable_blocks(document: Any, covered: Sequence[tuple[str, str]],
         noun = _TF_BLOCK_NOUNS.get(rtype)
         if noun is None or tf_claims._extractor_for(rtype) is None:
             continue
-        if any(spoke == address or spoke.startswith(f"{address}.")
-               for spoke in spoken):
+        if any(_under(spoke, address) for spoke in spoken):
             continue
-        verb = actions.get(address)
-        if verb == "delete":
-            sentences.append((address, f"deletes {noun}"))
-        else:
-            sentences.append((address, "could not be read — judged as a named "
-                                       "abstention above"))
+        sentences.append((address, "could not be read — judged as a named "
+                                   "abstention above"))
     return sentences
 
 
 def _plan_actions(document: Any) -> dict[str, str]:
-    """Resource address → the single change action a plan states for it.
-
-    Read from ``resource_changes`` (the design's own instruction), and only
-    where the entry states exactly ONE action: a replacement pair
-    (``["delete", "create"]``) says two things about one address, and leading a
-    sentence with either half would be a claim the plan does not make.
-    """
-    if not isinstance(document, Mapping):
-        return {}
-    changes = document.get("resource_changes")
-    if not isinstance(changes, list):
-        return {}
-    actions: dict[str, str] = {}
-    for entry in changes:
-        if not isinstance(entry, Mapping):
-            continue
-        address = entry.get("address")
-        change = entry.get("change")
-        acts = change.get("actions") if isinstance(change, Mapping) else None
-        if isinstance(address, str) and address and isinstance(acts, list) \
-                and len(acts) == 1 and isinstance(acts[0], str):
-            actions.setdefault(address, acts[0])
-    return actions
+    """Resource address → the single change action a plan states for it, over
+    the entries :func:`_plan_changes` accepted."""
+    return {address: entry["change"]["actions"][0]
+            for address, entry in _plan_changes(document).items()}
 
 
 def _proposal_sentences(path: str) -> list[str]:
@@ -3969,17 +4388,22 @@ def _proposal_sentences(path: str) -> list[str]:
         return []
     ctx = sec_rules.RuleContext(snapshot=None, document=document,
                                 document_kind=kind, source=path)
-    rows = {name: _collection_rows(sec_rules, ctx, name)
-            for name in _SENTENCE_COLLECTIONS}
+    readings = {name: _collection_reading(sec_rules, ctx, name)
+                for name in _SENTENCE_COLLECTIONS}
+    rows = {name: records for name, (records, _why) in readings.items()}
+    unread = [name for name, (_records, why) in readings.items()
+              if why is not None]
     actions = _plan_actions(document) if kind == "tf_plan" else {}
-    sentences = (_iam_sentences(rows["iam_bindings"])
-                 + _org_sentences(rows["org_policy_rules"], document, kind)
-                 + _role_sentences(rows["proposed_role_permissions"])
-                 + _deny_sentences(rows["deny_rules"],
-                                   rows["deny_rule_exceptions"], actions)
-                 + _firewall_sentences(rows["proposed_firewall_rules"]))
+    changed = [address for address, action in actions.items()
+               if action in _BEFORE_ACTIONS]
+    sentences = [(address, text)
+                 for address, text, _clause
+                 in _shape_sentences(rows, document, kind, actions)
+                 if not any(_under(address, block) for block in changed)]
     if kind == "tf_plan":
-        sentences += _unreadable_blocks(document, sentences, actions)
+        sentences += _change_sentences(sec_rules, document, kind, path, rows,
+                                       unread, actions)
+        sentences += _unreadable_blocks(document, sentences)
     ordered = sorted(sentences)
     lines = [f"{_SENTENCE_INDENT}{address}: {text}" if address
              else f"{_SENTENCE_INDENT}{text}"

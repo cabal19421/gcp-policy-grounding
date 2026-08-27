@@ -222,6 +222,21 @@ a kind no collection here covers (the perimeter and the Cloud Armor policy
 above) contributes no sentence at all. The list stops at eight blocks and
 counts the rest.
 
+A block a plan is **deleting or updating** is described by what the change
+does, not by the state it plans — a deletion plans no state at all, and an
+update's planned values say where the change lands rather than what it moved.
+Both are read from the plan's own `change.before`, through those same
+collections, the way the deny-wake check already reads the old side of a
+change. So a deletion names what it takes away
+(`deletes the deny policy denying iam.serviceAccounts.getAccessToken … to
+principalSet://goog/public:all`, in scenario 6b below), and an update names the
+difference, field by field: `narrows source ranges from 0.0.0.0/0 to
+10.0.0.0/8`, `sets enforce=false (was true)`, `adds principal://…/payroll-ci@…
+to the exceptionPrincipals of the deny rule denying
+iam.serviceAccounts.getAccessToken`. "narrows" and "widens" are computed over
+the ranges themselves; ranges that moved sideways read as "changes". A before
+state no collection could read says that and nothing more.
+
 — the violated promise is one of six English sentences compiled from
 `tests/fixtures/gcp/sec_requirements/`, and the refutation names the exact
 terraform block to fix. The full walkthrough, including what each flag is and
@@ -2016,16 +2031,21 @@ summary — what just happened:
   provider                : no schema configured — resource shapes not checked
   proposed change         : examples/terraform-denypolicy/plan_remove_deny.json
       — a terraform plan: 1 google_iam_deny_policy
-      google_iam_deny_policy.guard_token_mint: deletes the deny policy
+      google_iam_deny_policy.guard_token_mint: deletes the deny policy denying
+        iam.serviceAccounts.getAccessToken, iam.serviceAccounts.getOpenIdToken
+        to principalSet://goog/public:all
   result                  : DENIED (exit 1)
     blocked by 2 built-in findings: [iam_deny_shadow]
 ```
 
 — and the summary is where the promises' abstention is visible as an absence:
 three promises are in force, none of them refused, and the block is reported
-as built-in findings alone. The sentence leads with the plan's own change
-action: the block has no planned values to describe, and "deletes" is the one
-thing about it the plan does state.
+as built-in findings alone. The sentence says what the deletion takes AWAY:
+the block plans no values (that is what a deletion is), so the guardrail is
+read off the entry's own `change.before` — the same old side the wake
+computation grades — through the same deny collections a new policy is
+described with. "deletes the deny policy" on its own would leave the reader to
+go and look up what was in it.
 
 No allow policy changed anywhere — effective permissions increased with no
 grant edited, which is exactly the shape no per-document gate can see. The
