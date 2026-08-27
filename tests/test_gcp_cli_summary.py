@@ -16,6 +16,12 @@ ordering assertions matter for a second reason: the decision has to stay the
 last thing on the terminal, and a block appended after the recap is exactly how
 that gets lost.
 
+The promises row carries that same burden one level deeper. Its ids are a block
+now — one line each, with the AUTHOR'S OWN sentence under them — so the join to
+assert is the sentence's: it is the text the compiled artifact stores, compared
+here against the artifact itself, and an artifact that stored none leaves the id
+alone rather than being handed English nobody wrote.
+
 Environment-honest like its neighbours: without z3 no promise compiles and no
 rule is admitted, so the enforcing/violated arms are SKIPPED there rather than
 silently asserting over an empty rule set.
@@ -24,11 +30,14 @@ silently asserting over an empty rule set.
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from gcp_grounding.cli import (REQUIREMENTS_ENV, SNAPSHOT_ENV,
-                               _result_lines, _summary_section_lines, main)
+                               _PROMISE_TEXT_CAP, _SUMMARY_BLOCK_CAP,
+                               _promise_block_lines, _result_lines,
+                               _summary_section_lines, main)
 from gcp_grounding.core.report import GroundingReport, Verdict
 from gcp_grounding.core.solver import get_solver
 from gcp_grounding.discovery import CONFIG_SCHEMA
@@ -187,6 +196,44 @@ def test_a_config_supplied_input_reports_the_file_that_supplied_it(
                               str(proposal), "--snapshot",
                               str(AGENTIC_SNAPSHOT), "--explain")
     assert row(err, "terraform state on disk") == f"{TF_STATE} [config {config}]"
+
+
+def test_several_state_files_are_one_per_line(capsys):
+    """Every summary row whose value is a LIST prints the list as a block: two
+    configured state files are two lines under a row that counts them, not one
+    comma-joined row a reader has to take apart."""
+    other = EXAMPLES / "terraform-masked" / "terraform.tfstate"
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(TF_PROPOSAL), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--terraform-state",
+                              str(TF_STATE), "--terraform-state", str(other),
+                              "--explain")
+    assert row(err, "terraform state on disk") == "2 files [cli]"
+    lines = section(err).splitlines()
+    start = lines.index("  terraform state on disk : 2 files [cli]")
+    assert lines[start + 1:start + 3] == [f"      {TF_STATE}", f"      {other}"]
+
+
+def test_several_schemas_are_one_per_line(capsys, tmp_path):
+    """The provider row the same way, each schema keeping its own clause — the
+    one that loaded and the one that did not."""
+    broken = tmp_path / "provider-schema.json"
+    broken.write_text("{not json", encoding="utf-8")
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(SCHEMA_PROPOSAL), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--provider-schema",
+                              str(PROVIDER_SCHEMA), "--provider-schema",
+                              str(broken), "--explain")
+    captured = json.loads(PROVIDER_SCHEMA.read_text(encoding="utf-8"))
+    types = len(captured["provider_schemas"]
+                ["registry.terraform.io/hashicorp/google"]["resource_schemas"])
+    assert row(err, "provider") == "2 schemas in force"
+    lines = section(err).splitlines()
+    start = lines.index("  provider                : 2 schemas in force")
+    assert lines[start + 1:start + 3] == [
+        f"      {PROVIDER_SCHEMA} [cli] — google, {types} resource types",
+        f"      {broken} [cli] — could not be read, so resource shapes were "
+        f"not checked"]
 
 
 # -- nothing configured --------------------------------------------------------
@@ -564,13 +611,20 @@ def test_a_denial_keeps_promises_and_built_in_findings_apart(capsys, tmp_path):
     assert code == 1
     block = section(err)
     assert row(err, "result") == "DENIED (exit 1)"
-    assert ("it violated these promises: no-primitive-roles-outside-domain"
-            in block)
+    assert ("    it violated these promises:\n"
+            "      no-primitive-roles-outside-domain\n") in block
     assert "blocked by 1 built-in finding: [principal]" in block
-    # Neither vocabulary leaks into the other's clause.
+    # Neither vocabulary leaks into the other's clause. The violated clause is
+    # a block now — id lines at six spaces, the author's sentence at eight —
+    # so the id lines are what the built-in kind must stay out of. (The kind's
+    # word can legitimately appear INSIDE a sentence its author wrote; it is
+    # the reported ids that must be promise ids and nothing else.)
     violated = block[block.index("it violated these promises:"):]
-    violated = violated[:violated.index("\n")]
-    assert "principal" not in violated
+    violated = violated[:violated.index("    blocked by ")]
+    ids = [line.strip() for line in violated.splitlines()
+           if line.startswith("      ") and not line.startswith("       ")]
+    assert ids == ["no-primitive-roles-outside-domain"]
+    assert "principal" not in " ".join(ids)
     blocked = block[block.index("blocked by "):]
     blocked = blocked[:blocked.index("\n")]
     assert "no-primitive-roles-outside-domain" not in blocked
@@ -585,34 +639,185 @@ def test_the_result_row_never_reads_a_promise_id_off_a_built_in_verdict():
     report.add(Verdict("ungrounded", "sec:iam", "no-public-principals", 0,
                        "refuted by iam_bindings[0]"))
     lines = _result_lines(report)
-    assert lines[0] == "  result                  : DENIED (exit 1)"
-    assert lines[1] == "    it violated these promises: no-public-principals"
-    assert lines[2] == \
-        "    blocked by 1 built-in finding: [firewall_exposure]"
+    assert lines == ["  result                  : DENIED (exit 1)",
+                     "    it violated these promises:",
+                     "      no-public-principals",
+                     "    blocked by 1 built-in finding: [firewall_exposure]"]
 
 
-# -- the promises row ----------------------------------------------------------
+def test_the_violated_promises_are_one_per_line_with_their_sentences():
+    """One violated promise per line, the author's stored sentence under each,
+    and the built-in clause still LAST so the reasons stay in one order.
+
+    The sentences come from the rules the run admitted; a violated promise the
+    caller handed no rule for keeps its id and gets no sentence."""
+    report = GroundingReport()
+    for promise_id in ("no-public-principals", "no-open-ssh-rdp-ingress",
+                       "unregistered-promise"):
+        report.add(Verdict("ungrounded", "sec:iam", promise_id, 0, "refuted"))
+    lines = _result_lines(report, [_rule("no-public-principals", "No allUsers."),
+                                   _rule("no-open-ssh-rdp-ingress", "No 0.0.0.0/0.")])
+    assert lines == ["  result                  : DENIED (exit 1)",
+                     "    it violated these promises:",
+                     "      no-public-principals",
+                     "        “No allUsers.”",
+                     "      no-open-ssh-rdp-ingress",
+                     "        “No 0.0.0.0/0.”",
+                     "      unregistered-promise"]
+
+
+def test_the_violated_promises_are_bounded_like_every_other_block():
+    """Past the cap the rest is counted, never dropped in silence."""
+    report = GroundingReport()
+    for index in range(_SUMMARY_BLOCK_CAP + 2):
+        report.add(Verdict("ungrounded", "sec:iam", f"promise-{index}", 0, "no"))
+    lines = _result_lines(report)
+    assert lines[2:] == [f"      promise-{index}"
+                         for index in range(_SUMMARY_BLOCK_CAP)] + ["      +2 more"]
+
+
+# -- the promises row, and the author's own English under each id --------------
+#
+# The block under the row is ONE LINE PER PROMISE, and the line under an id is
+# the sentence the compiled artifact stored — the author's own words, the same
+# text show_promises.py renders. So the assertions here are about that join in
+# both directions: a sentence is the artifact's, read back off the rule objects
+# the run admitted, and an id whose artifact carried no sentence stands alone
+# rather than borrowing one.
+
+
+def promise_block(err: str) -> list[str]:
+    """The lines under the ``promises in force`` row, indent kept."""
+    lines = section(err).splitlines()
+    start = next(i for i, line in enumerate(lines)
+                 if line.strip().startswith("promises in force"))
+    out = []
+    for line in lines[start + 1:]:
+        if line.strip().startswith("provider"):
+            break
+        out.append(line)
+    return out
+
+
+def stored_sentences(compiled: Path) -> dict[str, str]:
+    """Every promise's stored sentence, read from the artifacts the way
+    ``show_promises.py`` reads them — the text the summary must not paraphrase.
+    """
+    return {promise["id"]: promise["source"]["text"]
+            for path in sorted(compiled.glob("*.promises.json"))
+            for promise in json.loads(path.read_text(encoding="utf-8"))["promises"]}
+
+
+def _rule(promise_id: str, text: str | None = "") -> SimpleNamespace:
+    """A stand-in for one admitted rule. ``text=None`` is the artifact that
+    carried no sentence — a shape :class:`sec_artifact.Promise` refuses to
+    hold, which is why the fallback is pinned through the renderer."""
+    source = SimpleNamespace() if text is None else SimpleNamespace(text=text)
+    return SimpleNamespace(promise=SimpleNamespace(id=promise_id, source=source))
 
 
 @_needs_z3
 def test_the_promises_row_agrees_with_the_promises_block(capsys, tmp_path):
     """One count of what enforces, shared with the block above it: the summary
     reads the same rules and the same carry verdicts, so it cannot call a
-    promise enforcing that the block called stalled."""
+    promise enforcing that the block called stalled. The ids are no longer on
+    the row — they are the block below it, one per line."""
     compiled = compiled_requirements(tmp_path)
     capsys.readouterr()
     _code, _out, err = invoke(capsys, "verify-policy", str(A10_POLICY),
                               "--snapshot", str(AGENTIC_SNAPSHOT),
                               "--requirements", str(compiled), "--explain")
     assert "promises in force (6 enforcing, 2 not" in err
-    value = row(err, "promises in force")
-    assert value.startswith(f"6 enforcing, 2 not — from {compiled} [cli] (")
-    # The list is bounded the way the decision block bounds its own: the first
-    # few ids spelled out, the remainder counted.
-    listed = value[value.index(" (") + 2:].rstrip(")").split(", ")
-    assert listed[-1] == "+1 more"
-    assert len(listed) == 6                # five ids, then the elision
-    assert "no-primitive-roles-outside-domain" in listed
+    assert row(err, "promises in force") == \
+        f"6 enforcing, 2 not — from {compiled} [cli]"
+
+
+@_needs_z3
+def test_each_promise_in_force_gets_a_line_and_the_authors_own_sentence(
+        capsys, tmp_path):
+    """One line per enforcing promise, ids sorted, and under each the sentence
+    the artifact stored — verbatim, compared against the artifact itself."""
+    compiled = compiled_requirements(tmp_path)
+    capsys.readouterr()
+    _code, _out, err = invoke(capsys, "verify-policy", str(A10_POLICY),
+                              "--snapshot", str(AGENTIC_SNAPSHOT),
+                              "--requirements", str(compiled), "--explain")
+    stored = stored_sentences(compiled)
+    enforcing = ["impersonation-sre-only", "no-open-ssh-rdp-ingress",
+                 "no-primitive-roles-outside-domain", "no-public-principals",
+                 "perimeter-restricts-storage", "sa-key-creation-disabled"]
+    expected = []
+    for promise_id in enforcing:
+        expected.append(f"      {promise_id}")
+        expected.append(f"        “{stored[promise_id]}”")
+    assert promise_block(err)[:len(expected)] == expected
+
+
+@_needs_z3
+def test_a_promise_that_is_not_enforcing_states_its_stored_reason(
+        capsys, tmp_path):
+    """The two that never became rules are listed too, each with the reason the
+    compile stored for it — the rejection reason, not a sentence of ours."""
+    compiled = compiled_requirements(tmp_path)
+    capsys.readouterr()
+    _code, _out, err = invoke(capsys, "verify-policy", str(A10_POLICY),
+                              "--snapshot", str(AGENTIC_SNAPSHOT),
+                              "--requirements", str(compiled), "--explain")
+    assert promise_block(err)[-4:] == [
+        "      not enforcing  bigquery-reader-only",
+        "        requirement was rejected at compile time (vocabulary is not "
+        "grounded: roles/bigquery.reader does not exist in the snapshot); it "
+        "did not run",
+        "      not enforcing  untranslated-security-review-before-merge",
+        "        no promise block — the sentence was not translated",
+    ]
+
+
+def test_a_promise_whose_artifact_stored_no_sentence_prints_its_id_alone():
+    """No sentence in the artifact, no sentence in the block: an id on its own
+    line is the answer, because the only other one is words nobody wrote."""
+    assert _promise_block_lines([_rule("silent-promise", None),
+                                 _rule("empty-promise", "")], ()) == [
+        "      empty-promise", "      silent-promise"]
+
+
+def test_a_long_sentence_is_truncated_at_the_cap_with_an_ellipsis():
+    """The rule is TRUNCATE, not wrap: one line per promise is the block's
+    whole shape, and a wrapped continuation reads as the next promise."""
+    assert _PROMISE_TEXT_CAP == 160
+    long = "No binding may grant " + "a" * 300
+    lines = _promise_block_lines([_rule("long-promise", long)], ())
+    assert lines[0] == "      long-promise"
+    assert lines[1] == f"        “{long[:160]}…”"
+    assert len(lines) == 2
+    # Whitespace is collapsed, so a sentence wrapped in its markdown source
+    # still prints as one line.
+    assert _promise_block_lines([_rule("wrapped", "No\n  owner\tgrants.")],
+                                ())[1] == "        “No owner grants.”"
+
+
+def test_the_promise_block_is_bounded_and_counts_what_it_elided():
+    """Both halves of the block cap at :data:`_SUMMARY_BLOCK_CAP`, and each
+    counts its own remainder — an elision that silently dropped promises would
+    read as a shorter corpus than the row above it counted."""
+    rules = [_rule(f"promise-{index}") for index in range(_SUMMARY_BLOCK_CAP + 3)]
+    stalled = [Verdict("unverified", "sec:iam", f"stalled-{index}", 0,
+                       f"anchor.md:{index}: 'a sentence' — it did not compile")
+               for index in range(_SUMMARY_BLOCK_CAP + 1)]
+    lines = _promise_block_lines(rules, stalled)
+    assert lines[_SUMMARY_BLOCK_CAP] == "      +3 more"
+    assert lines[-1] == "      +1 more not enforcing"
+    assert lines[-3:-1] == ["      not enforcing  stalled-7",
+                            "        it did not compile"]
+
+
+def test_one_stalled_promise_with_several_verdicts_is_listed_once():
+    """The row counts distinct promise ids; the block must not print one id
+    twice because two carry verdicts named it."""
+    stalled = [Verdict("unverified", "sec:iam", "stalled", 0, "x — first"),
+               Verdict("unverified", "sec:artifact", "stalled", 0, "x — second")]
+    assert _promise_block_lines((), stalled) == [
+        "      not enforcing  stalled", "        first"]
 
 
 # -- hook mode and the non-explain paths ---------------------------------------

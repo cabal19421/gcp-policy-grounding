@@ -337,8 +337,11 @@ promises in force, the captured provider schema, the proposed document with its
 census, and the result. Each input row names the settings layer that supplied it
 in the same ``[cli]``/``[env]``/``[config]``/``[auto]``/``[default]`` spelling
 ``--state-explain`` prints, and the result row comes LAST so the decision is
-still the terminal's final word. Hook stderr is unchanged, and so is every byte
-of a run without ``--explain``.
+still the terminal's final word. A row whose value is a list prints one item per
+line under it — each promise in force with the author's OWN sentence, as the
+compiled artifact stored it, under its id, and each violated promise of a denial
+the same way. Hook stderr is unchanged, and so is every byte of a run without
+``--explain``.
 
 ``--format json`` emits :func:`gcp_grounding.sec_evidence.sec_document` instead
 of :meth:`~gcp_grounding.report.PolicyReport.to_dict` whenever a requirements
@@ -3157,6 +3160,30 @@ _SUMMARY_WIDTH = max(len(label) for label in _SUMMARY_LABELS)
 #: decision block's cap, reused so the two surfaces elide alike.
 _SUMMARY_ID_CAP = _UNDECIDED_LINE_CAP
 
+#: How many items a summary row's own BLOCK spells out before it counts the
+#: rest. A row whose value is a list prints one item per line rather than
+#: joining them, and every such block in the section — the promises in force,
+#: the violated promises, the state files, the schemas, the proposal sentences
+#: (:data:`_SENTENCE_BLOCK_CAP`, which is this) — elides the same way: a reader
+#: who has learnt one block's shape has learnt them all.
+_SUMMARY_BLOCK_CAP = 8
+
+#: A block item's indent, and the indent of the stored text printed under one.
+#: Both are DEEPER than the four spaces the proposal block above indents its
+#: bare block addresses with, so a reader — or a test — scanning for one list
+#: never collects the other.
+_SUMMARY_ITEM_INDENT = " " * 6
+_SUMMARY_TEXT_INDENT = " " * 8
+
+#: How much of an author's stored sentence a summary line carries. The sentence
+#: is TRUNCATED here rather than wrapped: a wrapped continuation and the next
+#: promise's line look alike in a terminal, and one line per promise is the
+#: whole shape of the block.
+_PROMISE_TEXT_CAP = 160
+
+#: The ``provider`` row's answer when no schema is configured.
+_NO_SCHEMA = "no schema configured — resource shapes not checked"
+
 #: The verdict-kind prefix the compiled-requirements layer stamps on every
 #: promise verdict (``sec:iam``, ``sec:vpc_firewall``, ...). It is what tells a
 #: refuted PROMISE apart from a built-in finding, and the summary must never
@@ -3197,6 +3224,17 @@ def _layered(values: Sequence[str], layer: str) -> str:
     return f"{', '.join(values)} [{layer}]"
 
 
+def _block_items(items: Sequence[str]) -> list[str]:
+    """*items*, ONE PER INDENTED LINE, bounded at :data:`_SUMMARY_BLOCK_CAP`
+    with the remainder counted rather than dropped."""
+    shown = list(items)[:_SUMMARY_BLOCK_CAP]
+    lines = [f"{_SUMMARY_ITEM_INDENT}{item}" for item in shown]
+    rest = len(items) - len(shown)
+    if rest > 0:
+        lines.append(f"{_SUMMARY_ITEM_INDENT}+{rest} more")
+    return lines
+
+
 def _state_summary(settings: discovery.Settings) -> str:
     """The ``terraform state on disk`` value: the configured state file(s) with
     their origin layer, or the plain no-source answer."""
@@ -3206,10 +3244,24 @@ def _state_summary(settings: discovery.Settings) -> str:
     return _layered(paths, settings.origin_of("terraform_state"))
 
 
+def _state_rows(settings: discovery.Settings) -> list[str]:
+    """The ``terraform state on disk`` row, plus one line per file when more
+    than one was configured: a list joined into a row is a row a reader has to
+    parse, and the files are what they came here to see."""
+    paths = tuple(getattr(settings.options, "terraform_state", ()) or ())
+    if len(paths) <= 1:
+        return [_summary_row("terraform state on disk", _state_summary(settings))]
+    layer = settings.origin_of("terraform_state")
+    return ([_summary_row("terraform state on disk",
+                          f"{len(paths)} files [{layer}]")]
+            + _block_items(paths))
+
+
 def _promise_summary(settings: discovery.Settings, source: str | None,
                      rules, carried) -> str:
     """The ``promises in force`` value: how many compiled promises enforce, how
-    many do not, where they came from, and a bounded list of the enforcing ids.
+    many do not, and where they came from. The ids themselves are the block
+    under the row (:func:`_promise_block_lines`).
 
     The two counts are derived exactly as :func:`_requirements_notice` derives
     them — the enforcing ids are the registered rules', and a promise that never
@@ -3223,24 +3275,115 @@ def _promise_summary(settings: discovery.Settings, source: str | None,
     stalled = {verdict.target for verdict in carried
                if verdict.target not in registered}
     return (f"{len(enforcing)} enforcing, {len(stalled)} not — from "
-            f"{_layered((source,), settings.origin_of('requirements'))}"
-            f"{_capped_ids(sorted(enforcing))}")
+            f"{_layered((source,), settings.origin_of('requirements'))}")
 
 
-def _provider_summary(settings: discovery.Settings) -> str:
-    """The ``provider`` value: the captured schema this run judged resource
-    shapes against, or the plain no-schema answer.
+def _promise_text(text: Any) -> str:
+    """One stored sentence, whitespace collapsed and TRUNCATED at
+    :data:`_PROMISE_TEXT_CAP` with an ellipsis. Empty text stays empty, so a
+    caller can tell "the artifact stored nothing" from "the artifact stored
+    this" without inspecting the string."""
+    collapsed = " ".join(str(text or "").split())
+    if len(collapsed) <= _PROMISE_TEXT_CAP:
+        return collapsed
+    return f"{collapsed[:_PROMISE_TEXT_CAP]}…"
+
+
+def _promise_sentence(rule: Any) -> str:
+    """The author's OWN English for *rule*'s promise: ``promise.source.text``
+    as the compiled artifact stored it — the same sentence ``show_promises.py``
+    renders, read off the rule object this run admitted rather than from the
+    file on disk, which nothing here re-opens.
+
+    ``""`` when the artifact carried no sentence: the id then stands alone,
+    because the only other answer is a sentence nobody wrote.
+    """
+    source = getattr(getattr(rule, "promise", None), "source", None)
+    return _promise_text(getattr(source, "text", ""))
+
+
+def _promise_id_lines(ids: Sequence[str], sentences: Mapping[str, str]
+                      ) -> list[str]:
+    """One line per promise id, each with the author's stored sentence under
+    it, bounded like every other block in the section.
+
+    *sentences* is the id → stored-sentence map of the rules this run admitted;
+    an id it does not carry prints alone rather than borrowing a neighbour's
+    English.
+    """
+    lines: list[str] = []
+    for promise_id in list(ids)[:_SUMMARY_BLOCK_CAP]:
+        lines.append(f"{_SUMMARY_ITEM_INDENT}{promise_id}")
+        sentence = sentences.get(promise_id, "")
+        if sentence:
+            lines.append(f"{_SUMMARY_TEXT_INDENT}“{sentence}”")
+    rest = len(ids) - min(len(ids), _SUMMARY_BLOCK_CAP)
+    if rest > 0:
+        lines.append(f"{_SUMMARY_ITEM_INDENT}+{rest} more")
+    return lines
+
+
+def _stalled_reason(message: str) -> str:
+    """The stored reason inside a carry verdict's message.
+
+    ``sec_rules._carry_verdict`` renders a promise that never compiled as
+    ``<file>:<line>: <sentence> — <the reason the artifact stored>``, so the
+    tail is the rejection reason and the head is an anchor the promises block
+    above already printed. A message in some other shape is printed WHOLE
+    rather than cut at a separator it does not have: more of what the run
+    recorded is never a claim it did not make.
+    """
+    _head, separator, tail = message.partition(" — ")
+    return _promise_text(tail if separator and tail.strip() else message)
+
+
+def _promise_block_lines(rules, carried) -> list[str]:
+    """The ``promises in force`` block: one line per promise, with what the
+    artifact stored about it underneath.
+
+    An enforcing promise gets the author's sentence; a promise that is not
+    enforcing gets the reason it is not. Both are read off the objects this run
+    admitted — the registered rules and the carry verdicts they came in with —
+    which is the same pair of inputs :func:`_promise_summary` counts, so the
+    lines can never disagree with the counts above them.
+    """
+    sentences = {getattr(rule.promise, "id", ""): _promise_sentence(rule)
+                 for rule in rules}
+    enforcing = sorted(sentences)
+    # A promise that never compiled exists only as a carry verdict, and one
+    # promise can carry several; the first message in id-then-message order
+    # speaks for it, so the lines count exactly the ids the row counted.
+    reasons: dict[str, str] = {}
+    for verdict in sorted(carried, key=lambda v: (str(v.target), str(v.message))):
+        target = str(verdict.target)
+        if target in sentences:
+            continue
+        reasons.setdefault(target, _stalled_reason(str(verdict.message)))
+    lines = _promise_id_lines(enforcing, sentences)
+    stalled = sorted(reasons)
+    for promise_id in stalled[:_SUMMARY_BLOCK_CAP]:
+        lines.append(f"{_SUMMARY_ITEM_INDENT}not enforcing  {promise_id}")
+        if reasons[promise_id]:
+            lines.append(f"{_SUMMARY_TEXT_INDENT}{reasons[promise_id]}")
+    rest = len(stalled) - min(len(stalled), _SUMMARY_BLOCK_CAP)
+    if rest > 0:
+        lines.append(f"{_SUMMARY_ITEM_INDENT}+{rest} more not enforcing")
+    return lines
+
+
+def _provider_clauses(settings: discovery.Settings) -> tuple[list[str], str]:
+    """→ ``(one clause per captured schema, the policy note)``.
 
     The runtime is :func:`gcp_grounding.provider_schema.runtime_from_settings`
     and the schemas come back through ``load_cached`` — the SAME resolution and
     the same cached load :func:`_ground` activates for
-    :func:`gcp_grounding.tf_schema_checks.check_provider_schema`, so the line
+    :func:`gcp_grounding.tf_schema_checks.check_provider_schema`, so the clause
     names the file the checks actually read. A path that would not load says so
     rather than being counted as a schema in force.
     """
     runtime = provider_schema.runtime_from_settings(settings)
     if not runtime.paths:
-        return "no schema configured — resource shapes not checked"
+        return [], ""
     layer = settings.origin_of("provider_schema")
     clauses: list[str] = []
     for path in runtime.paths:
@@ -3254,10 +3397,22 @@ def _provider_summary(settings: discovery.Settings) -> str:
         types = len(schema.resource_types())
         noun = "resource type" if types == 1 else "resource types"
         clauses.append(f"{path} [{layer}] — {providers}, {types} {noun}")
-    value = "; ".join(clauses)
-    if runtime.effective_policy == "off":
-        value += " (schema policy 'off' — resource shapes were not checked)"
-    return value
+    note = (" (schema policy 'off' — resource shapes were not checked)"
+            if runtime.effective_policy == "off" else "")
+    return clauses, note
+
+
+def _provider_rows(settings: discovery.Settings) -> list[str]:
+    """The ``provider`` row: the captured schema this run judged resource
+    shapes against, or the plain no-schema answer — and, where several schemas
+    are in force, one line per schema under a row that counts them."""
+    clauses, note = _provider_clauses(settings)
+    if not clauses:
+        return [_summary_row("provider", _NO_SCHEMA)]
+    if len(clauses) == 1:
+        return [_summary_row("provider", f"{clauses[0]}{note}")]
+    return ([_summary_row("provider", f"{len(clauses)} schemas in force{note}")]
+            + _block_items(clauses))
 
 
 def _census_clause(path: str) -> str:
@@ -3373,14 +3528,16 @@ def _plan_types(doc: Any) -> tuple[str, ...]:
 # two lists apart — says "allows value <v> … at <node>". Filling either in would
 # be a guess about a document nobody read that way.
 
-#: How many blocks the sentence list spells out before it counts the rest.
-_SENTENCE_BLOCK_CAP = 8
+#: How many blocks the sentence list spells out before it counts the rest —
+#: every per-line block in the section shares the one cap.
+_SENTENCE_BLOCK_CAP = _SUMMARY_BLOCK_CAP
 
 #: The sentences' own indent, DEEPER than the four spaces the proposal block
 #: above indents its bare block addresses with. The two lists name the same
 #: addresses, and a reader — or a test — scanning for one must not collect the
-#: other.
-_SENTENCE_INDENT = " " * 6
+#: other. It is the indent every other block in the section prints its items
+#: at, for the same reason: one shape, learnt once.
+_SENTENCE_INDENT = _SUMMARY_ITEM_INDENT
 
 #: The proposal-tier collections the sentences are built from, in the order
 #: their shapes are rendered. Every one is proposal tier, so none of them reads
@@ -3804,7 +3961,7 @@ def _proposal_sentences(path: str) -> list[str]:
     return lines
 
 
-def _result_lines(report: GroundingReport) -> list[str]:
+def _result_lines(report: GroundingReport, rules=()) -> list[str]:
     """The ``result`` row and, on a denial, WHAT denied it.
 
     The two reasons are kept apart on purpose: a refuted promise is a
@@ -3812,6 +3969,12 @@ def _result_lines(report: GroundingReport) -> list[str]:
     is one of this tool's own checks. They are told apart by the verdict kind's
     :data:`_SEC_KIND_PREFIX`, so neither can ever be reported as the other, and
     a promise id is only ever read off a promise verdict's target.
+
+    The violated promises are a BLOCK, one per line, each with the author's own
+    sentence under it — the same rendering the promises row uses, over the same
+    admitted *rules*. It is repeated here because the promises block elides
+    past its cap, and the promise a run was denied for is the one sentence a
+    reader must not have to go looking for.
     """
     if report.ok:
         counts = report.counts()
@@ -3821,11 +3984,15 @@ def _result_lines(report: GroundingReport) -> list[str]:
                              f"APPROVED{qualifier} (exit {EXIT_OK})")]
     deciding = [verdict for status in _FINDING_STATUSES
                 for verdict in report.by_status(status)]
-    promises = [v.target for v in deciding if v.kind.startswith(_SEC_KIND_PREFIX)]
+    promises = _distinct(v.target for v in deciding
+                         if v.kind.startswith(_SEC_KIND_PREFIX))
     builtin = [v for v in deciding if not v.kind.startswith(_SEC_KIND_PREFIX)]
     lines = [_summary_row("result", f"DENIED (exit {EXIT_FAILED})")]
     if promises:
-        lines.append(f"    it violated these promises: {', '.join(promises)}")
+        sentences = {getattr(rule.promise, "id", ""): _promise_sentence(rule)
+                     for rule in rules}
+        lines.append("    it violated these promises:")
+        lines.extend(_promise_id_lines(promises, sentences))
     if builtin:
         kinds = ", ".join(sorted({verdict.kind for verdict in builtin}))
         noun = "finding" if len(builtin) == 1 else "findings"
@@ -3849,16 +4016,24 @@ def _summary_section_lines(path: str, report: GroundingReport,
     read from :meth:`gcp_grounding.discovery.Settings.origin_of` rather than
     re-derived here.
 
+    A row whose value is a LIST prints the list as a block under it, one item
+    per line: the promises in force with the author's own sentence under each
+    id, the violated promises of a denial, several state files, several
+    schemas. Each block is bounded at :data:`_SUMMARY_BLOCK_CAP` with the
+    remainder counted, the way the decision block bounds its own lists.
+
     The proposed-change row is followed by :func:`_proposal_sentences` — one
     English sentence per proposal block, read back off the rows this run already
     extracted. It is guarded like the census beside it: sentences the renderer
     cannot build cost the sentences and nothing else.
     """
-    lines = ["", _SUMMARY_HEADER,
-             _summary_row("terraform state on disk", _state_summary(settings)),
-             _summary_row("promises in force",
-                          _promise_summary(settings, source, rules, carried)),
-             _summary_row("provider", _provider_summary(settings))]
+    lines = ["", _SUMMARY_HEADER]
+    lines.extend(_state_rows(settings))
+    lines.append(_summary_row("promises in force",
+                              _promise_summary(settings, source, rules,
+                                               carried)))
+    lines.extend(_promise_block_lines(rules, carried))
+    lines.extend(_provider_rows(settings))
     try:
         census = _census_clause(path)
     except Exception:
@@ -3869,7 +4044,7 @@ def _summary_section_lines(path: str, report: GroundingReport,
         lines.extend(_proposal_sentences(path))
     except Exception:  # noqa: BLE001 — the sentences never cost a graded run
         logger.debug("--explain: the proposal sentences failed", exc_info=True)
-    lines.extend(_result_lines(report))
+    lines.extend(_result_lines(report, rules))
     return lines
 
 
