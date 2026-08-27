@@ -1,9 +1,9 @@
 """The two shared estate fixtures every later grounding domain grounds against.
 
-``estate_snapshot.json`` captures ALL EIGHTEEN snapshot categories with
+``estate_snapshot.json`` captures ALL NINETEEN snapshot categories with
 deliberately realistic content, so no downstream check ever blocks for the
 wrong reason (an uncaptured category or an unrepresentable value). Its twin,
-``estate_partial_snapshot.json``, is byte-identical EXCEPT the seven record
+``estate_partial_snapshot.json``, is byte-identical EXCEPT the eight record
 tables are omitted entirely — the abstention fixture, against which every
 ESTATE check must degrade to ``unverified`` rather than fabricate a verdict.
 
@@ -28,19 +28,21 @@ FIXTURES = Path(__file__).parent / "fixtures" / "gcp"
 FULL_PATH = FIXTURES / "estate_snapshot.json"
 PARTIAL_PATH = FIXTURES / "estate_partial_snapshot.json"
 
-# The eighteen categories the full estate fixture captures: five pre-existing
-# vocabularies, six flat vocabularies, seven record tables.
+# The nineteen categories the full estate fixture captures: five pre-existing
+# vocabularies, six flat vocabularies, eight record tables.
 ALL_CATEGORIES = (
     "roles", "permissions", "principals", "constraints", "resource_types",
     "networks", "subnetworks", "network_tags", "service_accounts",
     "access_levels", "restricted_services",
     "firewall_rules", "hierarchical_firewall_policies", "cloud_armor_policies",
     "vpc_sc_perimeters", "resource_hierarchy", "iam_bindings", "org_policies",
+    "iam_deny_policies",
 )
-# The eleven the partial fixture keeps (everything but the seven record tables).
+# The eleven the partial fixture keeps (everything but the eight record tables).
 RECORD_TABLES = (
     "firewall_rules", "hierarchical_firewall_policies", "cloud_armor_policies",
     "vpc_sc_perimeters", "resource_hierarchy", "iam_bindings", "org_policies",
+    "iam_deny_policies",
 )
 VOCAB_CATEGORIES = tuple(c for c in ALL_CATEGORIES if c not in RECORD_TABLES)
 
@@ -58,6 +60,8 @@ ESTATE_ACCESSORS = (
     ("firewall_rules_for_network", ("net",)),
     ("firewall_policies_attached_to", ("organizations/1",)),
     ("hierarchy_names", ()),
+    ("iam_deny_policy", ("x",)),
+    ("iam_deny_policies_attached_to", ("projects/x",)),
 )
 
 
@@ -103,17 +107,17 @@ def test_partial_fixture_round_trips_byte_equal():
 # -- captured-category counts ---------------------------------------------
 
 
-def test_full_fixture_captures_all_eighteen_categories():
+def test_full_fixture_captures_all_nineteen_categories():
     snap = GcpSnapshot.load(FULL_PATH)
     assert snap.captured_categories() == ALL_CATEGORIES
-    assert len(snap.captured_categories()) == 18
+    assert len(snap.captured_categories()) == 19
 
 
 def test_partial_fixture_captures_exactly_eleven_categories():
     snap = GcpSnapshot.load(PARTIAL_PATH)
     assert snap.captured_categories() == VOCAB_CATEGORIES
     assert len(snap.captured_categories()) == 11
-    # none of the seven record tables were captured
+    # none of the eight record tables were captured
     for table in RECORD_TABLES:
         assert getattr(snap, table) is None
 

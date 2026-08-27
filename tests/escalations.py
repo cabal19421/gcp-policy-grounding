@@ -587,6 +587,40 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_agentic_benign.py::"
                  "test_the_clauses_grounded_floor_tells_checked_from_never_looked"),
     ),
+    Escalation(
+        id="ESC-DENY-REGISTER-ACTIVATION",
+        clause=("MEASURE each entry per the register's own doctrine (mutant "
+                "applied alone to a git-archive copy, must_fail nodes "
+                "observed FAILED via -rA, unmutated copy green) before "
+                "adding it"),
+        unsatisfiable=(
+            "The twelve MK-D entries anchor in code this session lands "
+            "UNCOMMITTED (the session's house rule forbids a commit), and the "
+            "frozen flip test — tests/test_gcp_mutation_machinery.py's "
+            "enforcement over `register()` — EXECUTES every ACTIVE entry "
+            "against a fresh `git archive HEAD` copy, where uncommitted "
+            "anchors and witness nodes do not exist: an ACTIVE MK-D entry "
+            "reddens the machinery on every full run. The register's own "
+            "state machine offers no honest alternative — AWAITING is "
+            "forbidden while the owner is PRESENT (the floor), and the "
+            "AWAITING pins are shrink-only. So the entries are seeded as "
+            "PARKED DATA (tests/mutation_entries.py DENY_ENTRIES), each "
+            "MEASURED against a working-tree copy exactly per the doctrine "
+            "minus the git-archive materialisation the doctrine assumes "
+            "(rsync of the tree, unmutated copy green, mutant applied alone "
+            "through the contract's own `mutate`, every named node FAILED "
+            "under -rA), and REQUIRED_MK_IDS grew to 77 so the gate's "
+            "required-id xfail records them as debt. Moving DENY_ENTRIES "
+            "into ENTRIES — plus the owner declarations "
+            "(spec_assertions.TASK_IDS, mutation_contract._SLICES, a "
+            "gcp-gx-fixes.md task line) — once the deny pair is at HEAD is "
+            "what closes this: the node below then XPASSes and forces this "
+            "entry to be retired deliberately."
+        ),
+        owner_task="gx-iam-deny-pair",
+        node_id=("tests/test_gcp_iam_deny_checks.py::"
+                 "test_the_deny_mutation_entries_are_active_in_the_register"),
+    ),
 )
 
 
@@ -742,6 +776,142 @@ PRODUCT_ESCALATIONS: tuple[ProductEscalation, ...] = (
 )
 
 
+#: The six DELIBERATE out-of-scope decisions of designs/gcp-iam-deny.md (§6),
+#: recorded as scope notes in the register's own shape: no assertion exists to
+#: xfail — every honest test of the abstaining behaviour PASSES — and each
+#: names the product capability whose absence the abstention stands on, so a
+#: reader of a named abstention can find why it is the intended state.
+_DENY_SCOPE_NOTES: tuple[ProductEscalation, ...] = (
+    ProductEscalation(
+        id="ESC-DENY-ESTATE-TIER",
+        clause="no estate-tier `deny_rules` collection",
+        why=(
+            "There is no estate-tier deny_rules collection: 'every deny "
+            "policy IN THE ESTATE denies X' is not judgeable, and the "
+            "proposal tier judges each deny policy at review time instead. "
+            "Building the estate tier before fetch capture exists "
+            "(ESC-DENY-FETCH-CAPTURE) would gate every such promise on a "
+            "table no real snapshot carries."
+        ),
+        product_fix=(
+            "An estate CollectionSpec over snapshot.iam_deny_policies plus "
+            "COLLECTION_CATEGORIES['deny_rules_estate'] = 'iam_deny_policies' "
+            "— CompiledRule._incomplete_estate already gates any estate "
+            "collection generically."
+        ),
+        residual_risk=(
+            "An estate-wide deny promise cannot be written; a reviewer must "
+            "spell the per-policy proposal-tier form and rely on the C2 "
+            "interaction check for the estate side."
+        ),
+    ),
+    ProductEscalation(
+        id="ESC-DENY-GROUP-MEMBERSHIP",
+        clause="no snapshot category enumerates group membership",
+        why=(
+            "principalSet://goog/group/... containment for anything but the "
+            "group itself is UNDECIDED forever: no snapshot category "
+            "enumerates group membership, and guessing it would fabricate "
+            "coverage in one direction and escape in the other. The "
+            "abstention names the group."
+        ),
+        product_fix=(
+            "A captured group-membership category (Cloud Identity "
+            "memberships) plus a containment arm in "
+            "iam_deny_checks._member_in reading it."
+        ),
+        residual_risk=(
+            "A grant to a group member masked (or woken) through a "
+            "group-set deny rule is reported unverified naming the group, "
+            "never decided."
+        ),
+    ),
+    ProductEscalation(
+        id="ESC-DENY-FETCH-CAPTURE",
+        clause="the estate table is fixture/hand-authored until a capture path lands",
+        why=(
+            "fetch.py does not capture policies.denypolicies, so the "
+            "iam_deny_policies table is fixture- or hand-authored until a "
+            "capture path lands. The estate interaction check (C2) abstains "
+            "estate:incomplete over an uncaptured table — scoped to "
+            "escalation-material grants, the recorded deviation in "
+            "designs/gcp-iam-deny.md §10 — which is the intended honest "
+            "state, not a bug."
+        ),
+        product_fix=(
+            "A fetch.py capture of the v2 policies.denypolicies surface at "
+            "project, folder and organization nodes, keyed by the v2 "
+            "resource name the knowledge parser already validates."
+        ),
+        residual_risk=(
+            "On real snapshots the allow×deny interaction is decided only "
+            "for what a proposal itself carries (C1/C3/C4); non-escalation "
+            "grants keep the pre-existing silence about estate denies."
+        ),
+    ),
+    ProductEscalation(
+        id="ESC-DENY-CONDITION-SAT",
+        clause="conditional coverage is UNDECIDED by design in both directions",
+        why=(
+            "There is no satisfiability reasoning over denialCondition — "
+            "even CEL-translatable ones: conditional coverage is UNDECIDED "
+            "by design in both directions, because a window that is true at "
+            "some instants can neither prove nor waive coverage offline."
+        ),
+        product_fix=(
+            "Route decidable windows through constraints._CelToZ3 and treat "
+            "a provably-always-true condition as unconditional (and a "
+            "provably-false one as absent), the check_cel precedent."
+        ),
+        residual_risk=(
+            "A deny rule guarded by a tautological condition reads as "
+            "conditional and its masking is abstained on rather than "
+            "affirmed."
+        ),
+    ),
+    ProductEscalation(
+        id="ESC-DENY-ALLOW-CONDITIONS",
+        clause="mirrors `_predecessor`'s conditional refusal",
+        why=(
+            "A CONDITIONAL grant's masking or waking is abstained on by "
+            "name: the grant's own reach is request-time dependent, so no "
+            "coverage statement about it is sound — mirroring "
+            "iam_scope._predecessor's conditional refusal."
+        ),
+        product_fix=(
+            "The same _CelToZ3 routing as ESC-DENY-CONDITION-SAT, applied "
+            "to the allow side's binding conditions."
+        ),
+        residual_risk=(
+            "An agent can shield a grant from the interaction checks by "
+            "conditioning it — the abstention is loud and names "
+            "ESC-DENY-ALLOW-CONDITIONS, so the evasion leaves a record."
+        ),
+    ),
+    ProductEscalation(
+        id="ESC-DENY-PRINCIPAL-HIERARCHY",
+        clause="extending the table is curation work, reviewed like code",
+        why=(
+            "v2 principalSet:// forms outside the curated table — workforce "
+            "and workload pools, cloudIdentityCustomerId — abstain by name: "
+            "extending the table is curation work, reviewed like code, and "
+            "a guessed containment fabricates verdicts in both polarities."
+        ),
+        product_fix=(
+            "Grow iam_deny_checks' curated translation/containment tables "
+            "entry by entry, each with the documented v2 semantics beside "
+            "it, exactly as ESCALATION_PERMISSIONS grows."
+        ),
+        residual_risk=(
+            "Coverage through an uncurated principal set is reported "
+            "unverified naming the spelling, never decided."
+        ),
+    ),
+)
+
+PRODUCT_ESCALATIONS = PRODUCT_ESCALATIONS + _DENY_SCOPE_NOTES
+
+
 # Escalation owners that are not tasks of designs/gcp-gx-fixes.md. It exists so
 # an escalation raised against a PREDECESSOR document's task has an append-only
 # home and is never forced to edit the frozen self-test.
@@ -749,6 +919,13 @@ PRODUCT_ESCALATIONS: tuple[ProductEscalation, ...] = (
 # `tx-agentic-tf-benign` is declared in designs/gcp-tf-source.md, the predecessor
 # document that owns tests/test_gcp_agentic_tf_benign.py; ESC-GX-TFPROMISE-001 is
 # raised against its promise pair and no task of gcp-gx-fixes.md owns that module.
+#
+# `gx-iam-deny-pair` is declared in designs/gcp-iam-deny.md, the document that
+# owns the deny pair (tests/test_gcp_deny_domains.py,
+# tests/test_gcp_iam_deny_checks.py, tests/test_gcp_agentic_deny.py);
+# ESC-DENY-REGISTER-ACTIVATION is raised against its mutation-entry activation
+# and no task of gcp-gx-fixes.md owns those modules.
 OUT_OF_DOCUMENT_OWNER_TASKS: frozenset[str] = frozenset({
     "tx-agentic-tf-benign",
+    "gx-iam-deny-pair",
 })

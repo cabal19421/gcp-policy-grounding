@@ -1,0 +1,126 @@
+{
+  "captured_at": "2026-07-18T09:00:00Z",
+  "constraints": {
+    "constraints/iam.disableServiceAccountKeyCreation": {
+      "constraint_default": "ALLOW",
+      "description": "Disable service account key creation",
+      "value_type": "boolean"
+    }
+  },
+  "iam_bindings": {
+    "//cloudresourcemanager.googleapis.com/projects/acme-pay-prod": {
+      "bindings": [
+        {
+          "members": [
+            "serviceAccount:payroll-ci@acme-pay-prod.iam.gserviceaccount.com"
+          ],
+          "role": "roles/iam.serviceAccountTokenCreator"
+        },
+        {
+          "members": ["group:security@acme.example"],
+          "role": "roles/logging.viewer"
+        }
+      ]
+    }
+  },
+  "iam_deny_policies": {
+    "policies/cloudresourcemanager.googleapis.com%2Fprojects%2Facme-pay-prod/denypolicies/guard-token-mint": {
+      "attachment_point": "projects/acme-pay-prod",
+      "rules": [
+        {
+          "denied_permissions": [
+            "iam.googleapis.com/serviceAccounts.getAccessToken",
+            "iam.googleapis.com/serviceAccounts.getOpenIdToken"
+          ],
+          "denied_principals": ["principalSet://goog/public:all"],
+          "exception_permissions": [],
+          "exception_principals": []
+        }
+      ]
+    }
+  },
+  "org_policies": {
+    "organizations/123456789012|constraints/iam.disableServiceAccountKeyCreation": {
+      "node": "organizations/123456789012",
+      "constraint": "constraints/iam.disableServiceAccountKeyCreation",
+      "reset": false,
+      "inherit_from_parent": false,
+      "rules": [
+        {
+          "enforce": true,
+          "allow_all": null,
+          "deny_all": null,
+          "allowed_values": [],
+          "denied_values": [],
+          "condition": null
+        }
+      ]
+    }
+  },
+  "permissions": [
+    "iam.serviceAccountKeys.create",
+    "iam.serviceAccounts.actAs",
+    "iam.serviceAccounts.get",
+    "iam.serviceAccounts.getAccessToken",
+    "iam.serviceAccounts.getOpenIdToken",
+    "iam.serviceAccounts.list",
+    "logging.logEntries.list",
+    "logging.logs.list",
+    "resourcemanager.projects.get"
+  ],
+  "principals": [
+    "group:payments-platform@acme.example",
+    "group:security@acme.example",
+    "serviceAccount:payroll-ci@acme-pay-prod.iam.gserviceaccount.com",
+    "user:dana@acme.example"
+  ],
+  "resource_hierarchy": {
+    "folders/665544332211": {
+      "display_name": "payments",
+      "number": "665544332211",
+      "parent": "organizations/123456789012",
+      "type": "folder"
+    },
+    "organizations/123456789012": {
+      "display_name": "acme",
+      "number": "123456789012",
+      "parent": null,
+      "type": "organization"
+    },
+    "projects/acme-pay-dr": {
+      "display_name": "acme-pay-dr",
+      "number": "445566778900",
+      "parent": "folders/665544332211",
+      "type": "project"
+    },
+    "projects/acme-pay-prod": {
+      "display_name": "acme-pay-prod",
+      "number": "445566778899",
+      "parent": "folders/665544332211",
+      "type": "project"
+    }
+  },
+  "resource_types": [
+    "google_iam_deny_policy",
+    "google_org_policy_policy",
+    "google_project_iam_binding",
+    "google_project_iam_member",
+    "google_service_account"
+  ],
+  "roles": {
+    "roles/iam.serviceAccountTokenCreator": {
+      "included_permissions": [
+        "iam.serviceAccounts.getAccessToken",
+        "iam.serviceAccounts.getOpenIdToken"
+      ],
+      "title": "Service Account Token Creator"
+    },
+    "roles/logging.viewer": {
+      "included_permissions": [
+        "logging.logEntries.list",
+        "logging.logs.list"
+      ],
+      "title": "Logs Viewer"
+    }
+  }
+}

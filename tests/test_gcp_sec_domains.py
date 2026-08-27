@@ -186,9 +186,13 @@ def extract(collection, context):
 #: have passed just as happily if a domain silently stopped registering.
 EXTRACTOR_DEPENDENCIES = {
     "proposed_role_permissions": None,
+    "deny_rules": "iam_deny",
+    "deny_rule_exceptions": "iam_deny",
     "proposed_firewall_rules": "fw_claims",
     "firewall_rules": None,
     "armor_rules": "armor_claims",
+    "effective_org_policy_bool": "org_effective",
+    "effective_org_policy_values": "org_effective",
     "hier_firewall_rules": None,
     "perimeter_resources": "vpcsc_claims",
     "perimeter_restricted_services": "vpcsc_claims",
@@ -264,7 +268,8 @@ def test_registering_an_identical_spec_again_does_not_raise():
 def test_collections_registered_with_the_documented_tiers():
     tiers = {name: sec_ast.COLLECTIONS[name].tier for name in (
         "proposed_firewall_rules", "firewall_rules", "hier_firewall_rules",
-        "armor_rules", "perimeter_resources", "perimeter_restricted_services")}
+        "armor_rules", "perimeter_resources", "perimeter_restricted_services",
+        "effective_org_policy_bool", "effective_org_policy_values")}
     assert tiers == {
         "proposed_firewall_rules": "proposal",
         "firewall_rules": "estate",
@@ -272,6 +277,11 @@ def test_collections_registered_with_the_documented_tiers():
         "armor_rules": "proposal",
         "perimeter_resources": "proposal",
         "perimeter_restricted_services": "proposal",
+        # the effective org-policy fold: facts about the estate AS AMENDED by
+        # the document under review — estate tier is what routes them through
+        # the completeness gate
+        "effective_org_policy_bool": "estate",
+        "effective_org_policy_values": "estate",
     }
     # every Cidr field declares its Ip4 companion, which is what lets the
     # existing cidr_contains encoder apply with no override

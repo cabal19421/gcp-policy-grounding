@@ -734,14 +734,19 @@ def test_pre_existing_org_policy_verdicts_are_unchanged():
     # The exact expectations of tests/test_gcp_preflight.py, re-asserted here
     # against the vocabulary-only snapshot those tests use: the new claim adds
     # a verdict, it never alters or removes one.
+    # `org_effective` is filtered exactly as `org_enforcement` is: each landed
+    # beside these pre-existing verdicts as an ADDED verdict (the effective
+    # fold's own abstention over this vocabulary-only snapshot), never an
+    # alteration or removal of one.
+    added = ("org_enforcement", "org_effective")
     vocab = GcpSnapshot.load(FIXTURES / "snapshot.json")
     good = ground_policy(POLICIES / "org_policy_good.json", vocab)
     assert good.ok
-    assert [(v.status, v.kind) for v in good.verdicts if v.kind != "org_enforcement"] \
+    assert [(v.status, v.kind) for v in good.verdicts if v.kind not in added] \
         == [("grounded", "constraint"), ("grounded", "constraint")]
     bad = ground_policy(POLICIES / "org_policy_bad.json", vocab)
     assert not bad.ok
-    assert [(v.status, v.kind) for v in bad.verdicts if v.kind != "org_enforcement"] \
+    assert [(v.status, v.kind) for v in bad.verdicts if v.kind not in added] \
         == [("grounded", "constraint"), ("contradicted", "constraint")]
     [mismatch] = bad.contradicted
     assert "boolean" in mismatch.message

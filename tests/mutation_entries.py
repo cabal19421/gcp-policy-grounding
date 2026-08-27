@@ -820,3 +820,341 @@ REMOVALS: tuple[SeededRemoval, ...] = (
         must_fail=(_SQ + "test_S09_the_pruned_artifact_still_blocks",),
         owner=_SOWNER, pending=False, spelling=SECREQ_IN_PROCESS),
 )
+
+
+# -- the IAM-deny pair's twelve must-kills, PARKED -----------------------------
+#
+# MK-D01..MK-D12 belong to designs/gcp-iam-deny.md (owner task
+# `gx-iam-deny-pair`). They are seeded HERE as data but deliberately NOT in
+# :data:`ENTRIES`: the frozen flip test executes every ACTIVE entry against a
+# fresh ``git archive HEAD`` copy, and the session that landed the deny pair
+# may not commit — an ACTIVE entry whose anchor and witnesses exist only in
+# the working tree reddens the machinery on every full run. The state machine
+# offers no honest parking spot either (AWAITING is forbidden while the owner
+# is present, and the AWAITING pins are shrink-only), so the entries wait as
+# data under ESC-DENY-REGISTER-ACTIVATION, whose strict-xfail node —
+# tests/test_gcp_iam_deny_checks.py::
+# test_the_deny_mutation_entries_are_active_in_the_register — XPASSes (and so
+# reddens the suite) the moment they are moved into ENTRIES, forcing the
+# escalation to be retired deliberately. REQUIRED_MK_IDS already names all
+# twelve, so the gate's required-id xfail carries them as visible debt.
+#
+# SOURCE OF EVERY ``must_fail``, recorded once because it is the same for all:
+# this checkout's collect-only pass. Each entry below was then MEASURED, not
+# read — per the register's doctrine with ONE recorded substitution: the
+# scratch copy was a full copy of the WORKING TREE (a git archive cannot
+# contain uncommitted code). Unmutated copy green over the 16-node union;
+# each mutant applied ALONE through tests.mutation_contract.mutate (the same
+# scope-confined rewrite the flip test runs); every named node observed
+# FAILED via ``-rA``. ``line_hint`` is the line the rewrite landed on at
+# measurement time.
+
+_DD = "gcp_grounding/sec_domains.py"
+_DC = "gcp_grounding/iam_deny_checks.py"
+_DOWNER = "gx-iam-deny-pair"
+_TDD = "tests/test_gcp_deny_domains.py::"
+_TDC = "tests/test_gcp_iam_deny_checks.py::"
+
+DENY_ENTRIES: tuple[Mutation, ...] = (
+    Mutation(
+        id="MK-D01", module=_DD, enclosing="_deny_walk",
+        before="            effective = [p for p in denied_norm if p not in excepted_norm]",
+        after="            effective = [p for p in denied_norm]",
+        line_hint=1441,
+        behaviour="the exceptionPermissions subtraction is dropped, so an "
+                  "excepted permission mints a deny_rules row stating a "
+                  "falsehood the strong promise grounds on",
+        must_fail=(_TDD + "test_permission_exceptions_are_subtracted_before_rows_exist",),
+        owner=_DOWNER),
+    Mutation(
+        id="MK-D02", module=_DD, enclosing="_deny_walk",
+        before='                "has_principal_exceptions": bool(entries["exception_principals"]),',
+        after='                "has_principal_exceptions": not bool(entries["exception_principals"]),',
+        line_hint=1444,
+        behaviour="the no-principal-exceptions conjunct inverts: the strong "
+                  "promise grounds on a policy WITH a carve-out",
+        must_fail=(_TDD + "test_principal_exceptions_set_the_bool_and_mint_exception_rows",),
+        owner=_DOWNER),
+    Mutation(
+        id="MK-D03", module=_DD, enclosing="_deny_walk",
+        before='                           for p in entries["denied_permissions"]]',
+        after='                           for p in entries["denied_permissions"] if module._normalize_permission(p) is not None]',
+        line_hint=1438,
+        behaviour="a wildcard deny permission silently drops its row instead "
+                  "of aborting the rule naming the raw string",
+        must_fail=(_TDD + "test_a_wildcard_permission_aborts_the_rule_naming_the_raw_string",),
+        owner=_DOWNER),
+    Mutation(
+        id="MK-D04", module=_DD, enclosing="_deny_walk",
+        before="        if tf and rules and not unit:",
+        after="        if tf and rules and not unit and False:",
+        line_hint=1410,
+        behaviour="the plan census is disabled: a deny block that yielded no "
+                  "readable claims loses its by-name census abstention",
+        must_fail=(_TDD + "test_a_deny_block_that_yielded_no_claims_aborts_by_census",),
+        owner=_DOWNER),
+    Mutation(
+        id="MK-D05", module=_DD, enclosing="_deny_condition",
+        before="    return {}",
+        after='    return {"has_condition": False, "condition": ""}',
+        line_hint=1493,
+        behaviour="an unreadable denialCondition block reads as no condition, "
+                  "so the unconditional promise is satisfied over a condition "
+                  "nobody read",
+        must_fail=(_TDD + "test_an_unreadable_condition_block_omits_both_keys",),
+        owner=_DOWNER),
+    Mutation(
+        id="MK-D06", module=_DC, enclosing="_member_in",
+        before="    if spelling == PUBLIC_ALL:",
+        after="    if spelling == member_v2 == PUBLIC_ALL:",
+        line_hint=197,
+        behaviour="the public:all universal arm reads exact-match only, so a "
+                  "deny of everyone covers nobody and the masked-grant "
+                  "warning vanishes",
+        must_fail=(_TDC + "test_public_all_is_the_universal_set",
+                   _TDC + "test_c1_masks_the_grant_and_names_rule_resource_and_class"),
+        owner=_DOWNER),
+    Mutation(
+        id="MK-D07", module=_DC, enclosing="_member_in",
+        before='        return _Tri("undecided", f"group membership of {member_v1!r} in {spelling!r} is not captured in any snapshot category")',
+        after='        return _Tri("yes", f"group membership of {member_v1!r} in {spelling!r} is not captured in any snapshot category")',
+        line_hint=208,
+        behaviour="group-set containment fabricates TRUE from unknowable "
+                  "membership: a masking warning is minted where the honest "
+                  "answer is unverified naming the group",
+        must_fail=(_TDC + "test_group_membership_is_undecided_by_name",
+                   _TDC + "test_c1_group_coverage_abstains_naming_the_group_not_a_warning"),
+        owner=_DOWNER),
+    Mutation(
+        id="MK-D08", module=_DC, enclosing="_covered",
+        before='    if state == "covered" and rule.condition_state == "present":',
+        after='    if state == "covered" and rule.condition_state != "present":',
+        line_hint=443,
+        behaviour="a conditional deny rule claims coverage (and an "
+                  "unconditional one abstains): request-time truth is decided "
+                  "offline",
+        must_fail=(_TDC + "test_a_conditional_rule_cannot_prove_coverage",
+                   _TDC + "test_c1_a_conditional_deny_rule_abstains_naming_the_condition"),
+        owner=_DOWNER),
+    Mutation(
+        id="MK-D09", module=_DC, enclosing="_wake_findings",
+        before='        status = "contradicted" if (escalation_class or public) else "grounded"',
+        after='        status = "grounded" if (escalation_class or public) else "grounded"',
+        line_hint=1098,
+        behaviour="a woken escalation-class (or public) grant no longer "
+                  "blocks: the guardrail-removal polarity is lost in both the "
+                  "plan (C3) and pair (C4) arcs",
+        must_fail=(_TDC + "test_c3_deleting_the_guardrail_wakes_the_dormant_escalation_grant",
+                   _TDC + "test_c4_dropping_the_rule_wakes_the_dormant_grant"),
+        owner=_DOWNER),
+    Mutation(
+        id="MK-D10", module=_DC, enclosing="check_deny_pair",
+        before='    reason = _require_complete(ctx.snapshot, "iam_bindings")',
+        after='    reason = None  # _require_complete(ctx.snapshot, "iam_bindings")',
+        line_hint=1217,
+        behaviour="the C4 self-gate is removed: a clean 'wakes nothing' is "
+                  "stated over a partial iam_bindings view",
+        must_fail=(_TDC + "test_c4_self_gates_the_clean_answer_on_iam_bindings_coverage",),
+        owner=_DOWNER),
+    Mutation(
+        id="MK-D11", module="gcp_grounding/cli.py", enclosing="_decision_lines",
+        before='        0 if (v.kind in ("iam_escalation", "iam_scope_diff", "iam_deny_shadow",',
+        after='        0 if (v.kind in ("iam_escalation", "iam_scope_diff",',
+        line_hint=3087,
+        behaviour="iam_deny_shadow loses its JUDGMENT taste seat: a deny "
+                  "interaction abstention trails the coverage noise and falls "
+                  "out of the capped decision block",
+        must_fail=(_TDC + "test_the_deny_shadow_abstention_leads_the_decision_blocks_taste",),
+        owner=_DOWNER),
+    Mutation(
+        id="MK-D12", module="gcp_grounding/knowledge.py",
+        enclosing="_parse_iam_deny_policies",
+        before="        if decoded not in agreed:",
+        after="        if decoded not in agreed and False:",
+        line_hint=364,
+        behaviour="the key/attachment_point agreement rejection is removed: a "
+                  "mismatched record is accepted and the containment walk can "
+                  "govern the wrong node",
+        must_fail=(_TDC + "test_a_mismatched_key_and_attachment_point_is_rejected",),
+        owner=_DOWNER),
+)
+
+
+# -- the effective org-policy fold's fourteen, PARKED like DENY_ENTRIES ------
+#
+# The MK-F must-kills of the effective org-policy design (its own table names
+# the family MK-E01..E14; the ids are seeded here as MK-F01..F14 because
+# MK-E01..MK-E07 are ALREADY RESERVED in the gate's required-id tuple for
+# gx-iam-escalation-evidence — designs/gcp-gx-fixes.md's closed exchange —
+# and one id may not name two mutants). Seeded PARKED, not in ENTRIES, for
+# exactly the reason ESC-DENY-REGISTER-ACTIVATION records for the deny
+# twelve: this work lands UNCOMMITTED, and the frozen flip test executes
+# every ACTIVE entry against a fresh `git archive HEAD` copy where these
+# anchors and witness nodes do not exist. The activation debt is carried by
+# tests/test_gcp_org_effective.py's strict-xfail
+# `test_the_org_effective_mutation_entries_are_active_in_the_register`, which
+# XPASSes — and forces a deliberate retirement — the day these move into
+# ENTRIES.
+#
+# SOURCE OF EVERY ``must_fail``, recorded once because it is the same for
+# all: this checkout's collect-only pass. Each entry below was then MEASURED,
+# not read — per the register's doctrine with the deny block's ONE recorded
+# substitution (a full copy of the WORKING TREE; a git archive cannot contain
+# uncommitted code): unmutated copy green over the 14-node union, each mutant
+# applied ALONE through tests.mutation_contract.mutate (the same
+# scope-confined, one-line-differs rewrite the flip test runs), every named
+# node observed FAILED via ``-rA``. ``line_hint`` is the line the rewrite
+# landed on at measurement time.
+
+_OE = "gcp_grounding/org_effective.py"
+_FOWNER = "fx-org-effective"
+_TOE = "tests/test_gcp_org_effective.py::"
+
+ORG_EFFECTIVE_ENTRIES: tuple[Mutation, ...] = (
+    Mutation(
+        id="MK-F01", module=_OE, enclosing="_effective_bool",
+        before="    for node in reversed(chain):",
+        after="    for node in tuple(chain):",
+        line_hint=478,
+        behaviour="the nearest-first walk becomes root-first: an org-level "
+                  "enforce overrides the project's own false, and the "
+                  "disablement grounds",
+        must_fail=(_TOE + "test_bool_nearest_set_wins",),
+        owner=_FOWNER),
+    Mutation(
+        id="MK-F02", module=_OE, enclosing="_effective_bool",
+        before='        if policy["reset"]:\n'
+               '            return _default_bool(record, constraint)',
+        after='        if policy["reset"]:\n'
+              '            continue',
+        line_hint=490,
+        behaviour="a reset stops clearing: the walk continues past it and "
+                  "the ancestor's enforce leaks through the "
+                  "restore-the-default decision",
+        must_fail=(_TOE + "test_bool_reset_restores_default",),
+        owner=_FOWNER),
+    Mutation(
+        id="MK-F03", module=_OE, enclosing="_default_bool",
+        before='    if default == "DENY":\n        return True',
+        after='    if default == "DENY":\n        return False',
+        line_hint=235,
+        behaviour="an enforced-by-default constraint reads unenforced when "
+                  "no policy is set anywhere on the chain",
+        must_fail=(_TOE + "test_bool_default_deny_is_enforced",),
+        owner=_FOWNER),
+    Mutation(
+        id="MK-F04", module=_OE, enclosing="_effective_list",
+        before='                     "denied": parent["denied"] | local["denied"],',
+        after='                     "denied": local["denied"],',
+        line_hint=531,
+        behaviour="the inherit union drops the parent's denied side: "
+                  "inherited denials vanish and a widening grounds",
+        must_fail=(_TOE + "test_list_inherit_merges_parent_values",),
+        owner=_FOWNER),
+    Mutation(
+        id="MK-F05", module=_OE, enclosing="_effective_list",
+        before='        if policy["inherit_from_parent"]:\n'
+               '            parent = resolved(state)',
+        after='        if True or policy["inherit_from_parent"]:\n'
+              '            parent = resolved(state)',
+        line_hint=528,
+        behaviour="the replace branch merges like inherit: a replace that "
+                  "drops the parent's allowlist reads as keeping it (or "
+                  "abstains reaching for a default the walk should never "
+                  "read)",
+        must_fail=(_TOE + "test_list_replace_drops_parent_values",),
+        owner=_FOWNER),
+    Mutation(
+        id="MK-F06", module=_OE, enclosing="_list_rows",
+        before='    for value in sorted(state["allowed"] - state["denied"]):',
+        after='    for value in sorted(state["allowed"]):',
+        line_hint=566,
+        behaviour="a both-sides value emits an allow row beside its deny "
+                  "row; 'must not allow v' is falsely refuted by a state "
+                  "that in fact denies v",
+        must_fail=(_TOE + "test_deny_precedence_suppresses_allow_row",),
+        owner=_FOWNER),
+    Mutation(
+        id="MK-F07", module=_OE, enclosing="_list_rows",
+        before='    if state["deny_all"]:\n'
+               '        rows.append({**base, "polarity": "deny", "value": "",\n'
+               '                     "all_values": True})\n'
+               '        return rows',
+        after='    if state["deny_all"]:\n'
+              '        rows.append({**base, "polarity": "deny", "value": "",\n'
+              '                     "all_values": True})\n'
+              '        pass  # the early return removed',
+        line_hint=559,
+        behaviour="the deny_all early return is removed: allow rows coexist "
+                  "with an effective deny-all",
+        must_fail=(_TOE + "test_deny_all_emits_no_allow_rows",),
+        owner=_FOWNER),
+    Mutation(
+        id="MK-F08", module=_OE, enclosing="_policy_gates",
+        before='        if rule["condition"]:',
+        after='        if rule["condition"] and False:',
+        line_hint=414,
+        behaviour="a conditional rule is folded instead of abstaining: a "
+                  "tag-gated rule decides the effective state offline",
+        must_fail=(_TOE + "test_condition_on_chain_abstains_by_name",),
+        owner=_FOWNER),
+    Mutation(
+        id="MK-F09", module=_OE, enclosing="_pol.resolve",
+        before="        if entry is not None:",
+        after='        if entry is not None and snapshot.org_policy(node, f"{_PREFIX}{constraint}") is None:',
+        line_hint=837,
+        behaviour="the overlay stops replacing the captured record it "
+                  "targets: at a node with both, the OLD set-policy keeps "
+                  "deciding and the proposal's replacement is ignored",
+        must_fail=(_TOE + "test_rest_overlay_replaces_captured_policy",),
+        owner=_FOWNER),
+    Mutation(
+        id="MK-F10", module=_OE, enclosing="_stated_key",
+        before="    if len(stated) > 1:",
+        after="    if len(stated) > 2:",
+        line_hint=395,
+        behaviour="an ambiguous two-key oneof rule decides on the first "
+                  "stated key instead of abstaining",
+        must_fail=(_TOE + "test_ambiguous_rule_abstains",),
+        owner=_FOWNER),
+    Mutation(
+        id="MK-F11", module=_OE, enclosing="_chain",
+        before="        record = table.get(cursor)",
+        after='        record = table.get(cursor) or {"parent": None}',
+        line_hint=176,
+        behaviour="a dangling parent is treated as the root: a truncated "
+                  "hierarchy silently shortens the fold",
+        must_fail=(_TOE + "test_dangling_parent_abstains",),
+        owner=_FOWNER),
+    Mutation(
+        id="MK-F12", module=_OE, enclosing="_universe",
+        before="        if node in _chain(table, name):",
+        after="        if node in _chain(table, name) and False:",
+        line_hint=198,
+        behaviour="the universe collapses to the proposal's own node: a "
+                  "folder-level change's project-level effect goes unjudged",
+        must_fail=(_TOE + "test_descendants_in_universe",),
+        owner=_FOWNER),
+    Mutation(
+        id="MK-F13", module=_OE, enclosing="_estate_gates",
+        before='    _require_complete(snapshot, "resource_hierarchy")',
+        after='    _require_complete(snapshot, "org_policies")',
+        line_hint=856,
+        behaviour="the resource_hierarchy completeness check is dropped (a "
+                  "second org_policies ask replaces it): a partial hierarchy "
+                  "licenses the fold",
+        must_fail=(_TOE + "test_partial_hierarchy_refused",),
+        owner=_FOWNER),
+    Mutation(
+        id="MK-F14", module=_OE, enclosing="check_org_effective",
+        before="        except _Undecidable as exc:\n"
+               "            verdicts.append(Verdict(",
+        after="        except _Undecidable as exc:\n"
+              "            (lambda *_a, **_k: None)(Verdict(",
+        line_hint=1071,
+        behaviour="an undecidable before/after fold disappears from the "
+                  "report instead of landing as one unverified per target",
+        must_fail=(_TOE +
+                   "test_an_undecidable_fold_is_on_the_record_never_skipped",),
+        owner=_FOWNER),
+)

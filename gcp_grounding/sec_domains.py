@@ -162,20 +162,26 @@ _PERIMETER_SERVICE_FIELDS = {"perimeter": "Str", "service": "Str", "section": "S
 #: Domain → its collections, in ``sec_artifact.DOMAINS``-compatible order. The
 #: ``iam`` entry is NOT the base ``iam_bindings`` collection (that one is
 #: ``sec_ast``'s own and its REST extractor a ``sec_rules`` built-in): it is the
-#: custom-role permission collection, which has no REST arm at all.
+#: custom-role permission collection, which has no REST arm at all, plus the two
+#: deny-policy collections built from :mod:`gcp_grounding.iam_deny`'s claims.
 DOMAIN_COLLECTIONS: dict[str, tuple[str, ...]] = {
-    "iam": ("proposed_role_permissions",),
+    "iam": ("proposed_role_permissions", "deny_rules", "deny_rule_exceptions"),
     "vpc_firewall": ("proposed_firewall_rules", "firewall_rules"),
     "cloud_armor": ("armor_rules",),
+    "org_policy": ("effective_org_policy_bool", "effective_org_policy_values"),
     "hier_firewall": ("hier_firewall_rules",),
     "vpc_sc": ("perimeter_resources", "perimeter_restricted_services"),
 }
 
 #: The claims module each domain's proposal-tier extractor is built from. Absent
-#: from a partial checkout is not an error — see :func:`_domain_module`.
+#: from a partial checkout is not an error — see :func:`_domain_module`. The
+#: ``iam`` entry powers only the deny collections; ``proposed_role_permissions``
+#: is claim-built from ``tf_claims``, a hard import of this module already.
 DOMAIN_MODULES: dict[str, str] = {
+    "iam": "iam_deny",
     "vpc_firewall": "fw_claims",
     "cloud_armor": "armor_claims",
+    "org_policy": "org_effective",
     "vpc_sc": "vpcsc_claims",
 }
 
@@ -195,13 +201,85 @@ BASE_COLLECTION_OVERRIDES: tuple[str, ...] = ("iam_bindings", "org_policy_rules"
 #: so no promise can quantify over it — its one consumer is the witness message).
 _ROLE_PERMISSION_FIELDS = {"role": "Str", "permission": "Str"}
 
+#: One row per EFFECTIVE (rule, denied-principal, denied-permission)
+#: combination of an IAM v2 deny policy, permission exceptions SUBTRACTED
+#: before rows are minted: GCP applies ``deniedPermissions \
+#: exceptionPermissions`` per rule, both sides exact names in one namespace, so
+#: subtraction at extraction time loses nothing and every surviving row states
+#: a true fact — a row minted for an excepted permission would state a
+#: falsehood a ``forall`` promise could be refuted by. ``permission`` carries
+#: the NORMALIZED short form (``iam.serviceAccounts.getAccessToken``), the
+#: sibling-claim convention ``iam_checks.check_denied_permission`` already
+#: relies on, so the promise vocabulary grounds against ``snapshot.permissions``.
+#: ``denied_principal`` keeps the RAW v2 spelling — principal exceptions are
+#: NOT a string set difference (``exceptionPrincipals`` may carve members out
+#: of a ``principalSet://`` the strings cannot subtract), so the rows keep the
+#: raw denied principal and carry ``has_principal_exceptions`` alongside; WHO
+#: is exempted is the ``deny_rule_exceptions`` collection's business, joinable
+#: on (policy, rule_index). A dimension with no honest values omits its key
+#: (module docstring), and BOTH condition keys are omitted when the
+#: ``denialCondition`` block is present but unreadable — spelling that as
+#: ``has_condition=False`` would satisfy "denies … unconditionally" over a
+#: condition nobody read.
+_DENY_RULE_FIELDS = {
+    "policy": "Str",
+    "rule_index": "Int",
+    "denied_principal": "Str",
+    "permission": "Str",
+    "has_principal_exceptions": "Bool",
+    "has_condition": "Bool",
+    "condition": "Str",
+}
+
+#: One row per (rule, exception principal) — the enumerated principal
+#: carve-outs of the same deny rules, RAW v2 spelling, for promises about WHO
+#: is exempted ("no deny rule exempts the public").
+_DENY_EXCEPTION_FIELDS = {
+    "policy": "Str",
+    "rule_index": "Int",
+    "exception_principal": "Str",
+}
+
+#: The two EFFECTIVE org-policy collections :mod:`gcp_grounding.org_effective`
+#: computes — the hierarchy fold of ``snapshot.org_policies`` +
+#: ``snapshot.resource_hierarchy`` + the proposal's own set-policy, split by
+#: the constraint's declared ``value_type`` so no row is ever ragged: one
+#: list-typed row in a shared universe would otherwise knock out every
+#: ``enforce``-mentioning promise through sec_encode's missing-from-the-record
+#: refusal, and filler scalars could fabricate a refutation. ``constraint`` is
+#: spelled WITHOUT the ``constraints/`` prefix, matching both
+#: ``org_policy_rules`` arms, so one promise phrase reads across the
+#: per-document and the effective collections. ``value`` is ``""`` on an
+#: all-values flag row (the documented honest empty ``Str``), and
+#: ``all_values`` is always a real boolean. ESTATE tier: the records are facts
+#: about the estate as amended by the document under review, and estate tier
+#: is what routes them through ``CompiledRule._incomplete_estate``.
+_EFFECTIVE_BOOL_FIELDS = {
+    "node": "Str",         # the hierarchy node the state is computed AT
+    "constraint": "Str",   # canonical id, "constraints/" prefix STRIPPED
+    "enforce": "Bool",     # the folded effective enforcement
+}
+_EFFECTIVE_VALUES_FIELDS = {
+    "node": "Str",
+    "constraint": "Str",
+    "polarity": "Str",     # "allow" | "deny"
+    "value": "Str",        # the enumerated value; "" on an all_values row
+    "all_values": "Bool",  # True on the allValues flag row, else False
+}
+
 #: Every spec :func:`register` installs, in :data:`DOMAIN_COLLECTIONS` order.
 COLLECTION_SPECS: tuple[CollectionSpec, ...] = (
     CollectionSpec("proposed_role_permissions", "proposal",
                    _ROLE_PERMISSION_FIELDS),
+    CollectionSpec("deny_rules", "proposal", _DENY_RULE_FIELDS),
+    CollectionSpec("deny_rule_exceptions", "proposal", _DENY_EXCEPTION_FIELDS),
     CollectionSpec("proposed_firewall_rules", "proposal", _FIREWALL_FIELDS),
     CollectionSpec("firewall_rules", "estate", _FIREWALL_FIELDS),
     CollectionSpec("armor_rules", "proposal", _ARMOR_FIELDS),
+    CollectionSpec("effective_org_policy_bool", "estate",
+                   _EFFECTIVE_BOOL_FIELDS),
+    CollectionSpec("effective_org_policy_values", "estate",
+                   _EFFECTIVE_VALUES_FIELDS),
     CollectionSpec("hier_firewall_rules", "estate", _HIER_FIELDS),
     CollectionSpec("perimeter_resources", "proposal", _PERIMETER_RESOURCE_FIELDS),
     CollectionSpec("perimeter_restricted_services", "proposal",
@@ -1148,6 +1226,332 @@ def _proposed_role_permissions(ctx):
     return _tf_role_permissions(ctx)
 
 
+# -- the IAM deny-policy proposal collections ----------------------------------
+#
+# ``deny_rules`` / ``deny_rule_exceptions`` follow the claims-are-the-records
+# discipline over :mod:`gcp_grounding.iam_deny`'s claims, grouped by the
+# location grammar THAT module owns (its ``*_AT`` regexes — one spelling, no
+# drift), with the two values the claims do not carry — the ``denialCondition``
+# and the per-field entry census — fetched from the document (or the plan, at
+# the block's own address through ``tf_claims``' walker) at the claim's own
+# anchor. The census is what promotes the parser's conservative debug-skips (a
+# non-string permission entry, a non-list field, a malformed rule object) from
+# silence to a NAMED abstention without touching ``iam_deny``'s claim
+# behaviour: a count that disagrees with the claims is an entry nobody read,
+# and dropping it would let a ``forall`` promise pass over it. Every failure
+# path raises :class:`_Undecidable` naming policy, rule and offending value;
+# :func:`_guarded` converts it to the promise's missing_reason verbatim.
+
+#: The claim kinds one deny rule anchors at its four principal/permission
+#: fields. ``cel`` is deliberately absent: the condition facts come from the
+#: rule block itself, because the ``cel`` claim is missing both for "no
+#: condition" and for "runtime-marker condition" and cannot tell them apart.
+_DENY_KINDS = frozenset({"denied_principal", "denied_permission", "permission",
+                         "principal", "public_principal",
+                         "unmodelled_principal"})
+
+#: The member-shaped claim kinds (every ``exceptionPrincipals`` entry yields
+#: exactly one of the three — the parser drops none).
+_DENY_MEMBER_KINDS = frozenset({"principal", "public_principal",
+                                "unmodelled_principal"})
+
+_DENY_LABEL = "IAM deny policy"
+
+
+def _deny_claims(ctx, module):
+    """→ ``(claims, heads)`` — the one funnel for both deny collections.
+
+    *heads* maps each policy unit's location head (``""`` for a REST document,
+    ``"<address>."`` for a terraform block) to the mapping its rules are
+    re-read from. A terraform head that yielded no claims is caught by the
+    walk's per-rule agreement checks, and a plan with no
+    ``google_iam_deny_policy`` resource at all abstains through
+    :func:`_no_tf_records`."""
+    if ctx.document is None:
+        raise _Undecidable("no document under review — the IAM deny rule was "
+                           "not evaluated")
+    kind = ctx.document_kind
+    if kind == _TF_PLAN:
+        _plan_envelope(ctx.document)
+        by_address = _plan_values(ctx.document)
+        heads = {f"{address}.": _resource_values(address, by_address,
+                                                 _DENY_LABEL)
+                 for address in sorted(by_address)
+                 if module.DENY_POLICY_ADDRESS.match(address)}
+        if not heads:
+            raise _no_tf_records(_DENY_LABEL)
+        claims = tuple(c for c in tf_claims.terraform_plan_claims(ctx.document)
+                       if c.kind in _DENY_KINDS)
+        return claims, heads
+    if kind == "iam_deny_policy":
+        claims = tuple(c for c in module.iam_deny_policy_claims(ctx.document)
+                       if c.kind in _DENY_KINDS)
+        return claims, {"": ctx.document}
+    raise _Undecidable(
+        "the document under review is not an IAM deny policy — the deny "
+        "collections have no records here and the rule was not evaluated")
+
+
+def _deny_groups(claims, heads, module):
+    """The funnel's claims grouped as ``{head: {rule: {field: {j: value}}}}``.
+
+    A deny-kind claim matching no grammar row, one whose payload ``rule_index``
+    or ``excepted`` flag disagrees with its own location, or one anchored under
+    no deny-policy unit aborts by name — never silently regrouped: the payload
+    keys are the documented discriminators, and a claim the grammar cannot
+    place is a denial nobody can correlate."""
+    groups: dict[str, dict[int, dict[str, dict[int, str]]]] = {}
+
+    def put(head, i, field, j, value, location):
+        if head not in heads:
+            raise _Undecidable(
+                f"the deny claim at {location!r} sits under no IAM deny policy "
+                "unit this extraction read — the rule was not evaluated")
+        slot = groups.setdefault(head, {}).setdefault(i, {}).setdefault(field, {})
+        if j in slot:
+            raise _Undecidable(
+                f"two deny claims anchor at {location!r} — which entry is "
+                "attested is ambiguous — the rule was not evaluated")
+        slot[j] = value
+
+    for claim in claims:
+        location = claim.location if isinstance(claim.location, str) else ""
+        payload = claim.fields()
+        if claim.kind == "denied_principal":
+            matched = module.DENIED_PRINCIPAL_AT.match(location)
+            if matched is None:
+                raise _Undecidable(
+                    f"the denied_principal claim at {location!r} sits outside "
+                    "the deniedPrincipals[] grammar — the rule was not evaluated")
+            _deny_index_agrees(payload, matched, location)
+            put(matched.group("head"), int(matched.group("i")),
+                "denied_principals", int(matched.group("j")), claim.value,
+                location)
+        elif claim.kind == "denied_permission":
+            excepted = bool(payload.get("excepted"))
+            regex = (module.EXCEPTION_PERMISSION_AT if excepted
+                     else module.DENIED_PERMISSION_AT)
+            matched = regex.match(location)
+            if matched is None:
+                raise _Undecidable(
+                    f"the denied_permission claim at {location!r} disagrees "
+                    f"with its own excepted={excepted} payload about which "
+                    "field it came from — the rule was not evaluated")
+            _deny_index_agrees(payload, matched, location)
+            field = "exception_permissions" if excepted else "denied_permissions"
+            put(matched.group("head"), int(matched.group("i")), field,
+                int(matched.group("j")), claim.value, location)
+        elif claim.kind in _DENY_MEMBER_KINDS:
+            matched = module.EXCEPTION_PRINCIPAL_AT.match(location)
+            if matched is not None:
+                put(matched.group("head"), int(matched.group("i")),
+                    "exception_principals", int(matched.group("j")),
+                    claim.value, location)
+            # a member claim at deniedPrincipals[] is attested through its
+            # denied_principal sibling; one anywhere else (a binding member in
+            # the same plan) is another collection's subject
+    return groups
+
+
+def _deny_index_agrees(payload, matched, location: str) -> None:
+    """The claim's own ``rule_index`` payload must agree with its location —
+    the documented discriminator, cross-checked rather than trusted."""
+    index = payload.get("rule_index")
+    if isinstance(index, bool) or index != int(matched.group("i")):
+        raise _Undecidable(
+            f"the deny claim at {location!r} carries rule_index={index!r}, "
+            "which disagrees with its own location — which rule it attests is "
+            "ambiguous — the rule was not evaluated")
+
+
+def _deny_entries(module, deny_rule: Mapping[str, Any], spellings: tuple,
+                  what: str, field: str) -> tuple:
+    """The raw entries of one deny-rule field, strings only.
+
+    An absent field reads as observed-empty (the parser treats absent as "no
+    entries" too); a non-list field or a non-string / empty-string entry aborts
+    the rule: a coerced spelling could fabricate a refutation, and an entry the
+    claim walker skipped is a denial nobody read."""
+    raw = module._get(deny_rule, spellings)
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise _Undecidable(
+            f"{what}.{field} is not an array ({type(raw).__name__}) — its "
+            "entries were not read — the rule was not evaluated")
+    for j, entry in enumerate(raw):
+        if not isinstance(entry, str) or not entry:
+            raise _Undecidable(
+                f"{what}.{field}[{j}] is not a plain non-empty string "
+                f"({entry!r}) — a coerced spelling could fabricate a "
+                "refutation — the rule was not evaluated")
+    return tuple(raw)
+
+
+def _deny_agreed(entries: tuple, attested: Mapping[int, str], what: str,
+                 field: str) -> None:
+    """The census must agree with the claims, entry for entry: a length or
+    value that disagrees is an entry the claim walker skipped (a debug-logged
+    non-string, a malformed sibling) — a denial nobody read."""
+    if set(attested) != set(range(len(entries))) or any(
+            attested[j] != entries[j] for j in range(len(entries))):
+        raise _Undecidable(
+            f"{what}.{field} carries {len(entries)} readable entr(ies) but its "
+            f"claims attest {len(attested)} — entries the claim walker skipped "
+            "are denials nobody read — the rule was not evaluated")
+
+
+def _deny_normalized(module, what: str, permission: str) -> str:
+    """The one normalized short form, or abort the rule by name: dropping only
+    the bad entry would let a ``forall`` pass over a permission nobody read,
+    and an uncomputable subtraction poisons every sibling row."""
+    normalized = module._normalize_permission(permission)
+    if normalized is None:
+        raise _Undecidable(
+            f"{what} names permission {permission!r} with no unambiguous "
+            "normalized form — the rows for this rule would be a guess — the "
+            "rule was not evaluated")
+    return normalized
+
+
+def _deny_walk(ctx, module) -> tuple[list, list]:
+    """→ ``(rule_rows, exception_rows)`` for every deny-policy unit of
+    ``ctx.document`` — the shared walk both deny collections are thin over."""
+    claims, heads = _deny_claims(ctx, module)
+    groups = _deny_groups(claims, heads, module)
+    tf = ctx.document_kind == _TF_PLAN
+    rule_rows: list[dict] = []
+    exception_rows: list[dict] = []
+    for head in sorted(heads):
+        source = heads[head]
+        address = head[:-1] if tf else ""
+        policy = ""
+        if not tf:
+            # The REST document's own name; a plan block's literal name is NOT
+            # trusted (usually known-after-apply) — "" plus the block address
+            # under WITNESS_ADDRESS_FIELD, which the witness message prints.
+            name = source.get("name")
+            policy = name if isinstance(name, str) and name else ""
+        where = address or policy or "<document>"
+        unit = groups.get(head, {})
+        rules = evidence.rows(source, "rules", what=f"{_DENY_LABEL} {where}")
+        # THE PLAN CENSUS (mirroring _IAM_BINDING_ADDRESS): a deny block whose
+        # rules are present but which yielded NO claim at all is a policy whose
+        # rules were stripped or malformed — it denies nobody nobody read, and
+        # the per-rule agreement checks below cannot run for rules the claim
+        # walker never anchored anything under.
+        if tf and rules and not unit:
+            raise _Undecidable(
+                f"deny policy resource {address!r} yielded no readable claims "
+                "— a policy whose rules were stripped or malformed denies "
+                "nobody nobody read — the rule was not evaluated")
+        for i, rule in enumerate(rules):
+            what = f"{_DENY_LABEL} {where} rules[{i}]"
+            rule_claims = unit.get(i, {})
+            if not isinstance(rule, Mapping):
+                raise _Undecidable(
+                    f"{what} is not an object — a rule nobody read could deny "
+                    "anything — the rule was not evaluated")
+            deny_rule = module._as_mapping(module._get(rule,
+                                                       module._DENY_RULE_KEYS))
+            if deny_rule is None:
+                raise _Undecidable(
+                    f"{what} carries no readable denyRule object — a rule "
+                    "nobody read could deny anything — the rule was not "
+                    "evaluated")
+            entries = {}
+            for field, spellings, _flag in (*module._PRINCIPAL_FIELDS,
+                                            *module._PERMISSION_FIELDS):
+                snake = _DENY_FIELD_NAMES[field]
+                entries[snake] = _deny_entries(module, deny_rule, spellings,
+                                               what, field)
+                _deny_agreed(entries[snake], rule_claims.get(snake, {}),
+                             what, field)
+            denied_norm = [_deny_normalized(module, what, p)
+                           for p in entries["denied_permissions"]]
+            excepted_norm = {_deny_normalized(module, what, p)
+                             for p in entries["exception_permissions"]}
+            effective = [p for p in denied_norm if p not in excepted_norm]
+            base: dict[str, Any] = {
+                "policy": policy, "rule_index": i,
+                "has_principal_exceptions": bool(entries["exception_principals"]),
+                **_deny_condition(module, deny_rule),
+            }
+            if address:
+                base[sec_rules.WITNESS_ADDRESS_FIELD] = address
+            rule_rows.extend(_rows(base, (
+                [{"denied_principal": p}
+                 for p in entries["denied_principals"]] or [{}],
+                [{"permission": p} for p in effective] or [{}],
+            )))
+            for principal in entries["exception_principals"]:
+                row = {"policy": policy, "rule_index": i,
+                       "exception_principal": principal}
+                if address:
+                    row[sec_rules.WITNESS_ADDRESS_FIELD] = address
+                exception_rows.append(row)
+    if not rule_rows:
+        raise _Undecidable(
+            "the IAM deny policy unit(s) under review carry no rules — "
+            "deny_rules has no records and the rule was not evaluated over "
+            "any record")
+    return rule_rows, exception_rows
+
+
+#: The parser's canonical (camelCase) field names → the census keys the walk
+#: groups under, which are also the snapshot table's snake_case spellings.
+_DENY_FIELD_NAMES = {
+    "deniedPrincipals": "denied_principals",
+    "exceptionPrincipals": "exception_principals",
+    "deniedPermissions": "denied_permissions",
+    "exceptionPermissions": "exception_permissions",
+}
+
+
+def _deny_condition(module, deny_rule: Mapping[str, Any]) -> dict:
+    """The two condition keys, from the rule block itself (never from the
+    ``cel`` claim, which is absent both for "no condition" and for a
+    runtime-marker condition): a readable expression → ``(True, raw text)``, a
+    genuinely absent block → ``(False, "")``, and a block that is present but
+    unreadable → BOTH KEYS OMITTED, so "denies … unconditionally" abstains
+    loudly while permission-only promises still judge. The raw text is a
+    document fact — no satisfiability is implied."""
+    raw = module._get(deny_rule, module._DENIAL_CONDITION_KEYS)
+    if raw is None:
+        return {"has_condition": False, "condition": ""}
+    block = module._as_mapping(raw)
+    expression = block.get("expression") if block is not None else None
+    if isinstance(expression, str) and expression.strip():
+        return {"has_condition": True, "condition": expression}
+    return {}
+
+
+def _deny_rules_extractor(module) -> Callable:
+    """``deny_rules``: one row per effective (rule, principal, permission)."""
+    def extract(ctx):
+        rule_rows, _exceptions = _deny_walk(ctx, module)
+        return _sorted(rule_rows, _DENY_RULE_FIELDS), None
+    return extract
+
+
+def _deny_rule_exceptions_extractor(module) -> Callable:
+    """``deny_rule_exceptions``: one row per (rule, exception principal).
+
+    A document whose rules carry NO principal exception anywhere returns the
+    ATTESTATION channel — records empty with an ``empty_because`` — so a
+    ``forall`` over the empty instance grounds WITH the note instead of
+    tripping the evidence floor."""
+    def extract(ctx):
+        _rules, exception_rows = _deny_walk(ctx, module)
+        if not exception_rows:
+            return evidence.observed_empty(
+                "the deny document under review",
+                "every deny rule was read and none carries a principal "
+                "exception")
+        return _sorted(exception_rows, _DENY_EXCEPTION_FIELDS), None
+    return extract
+
+
 def _with_terraform_arm(tf_extract: Callable, builtin: Callable) -> Callable:
     """Dispatch for an overridden base collection: a ``tf_plan`` document takes
     *tf_extract*; every other kind — including the loud unrecognized/None
@@ -1273,6 +1677,35 @@ def register() -> None:
     sec_rules.register_extractor(
         "proposed_role_permissions",
         _guarded("proposed_role_permissions", _proposed_role_permissions))
+
+    # The deny collections need the iam_deny claims module; a checkout without
+    # it registers the specs (above, unconditionally) and skips the extractors,
+    # so a deny promise compiles and abstains loudly — the documented
+    # partial-checkout behaviour.
+    iam_deny = _domain_module(DOMAIN_MODULES["iam"])
+    if iam_deny is not None:
+        sec_rules.register_extractor(
+            "deny_rules", _guarded("deny_rules",
+                                   _deny_rules_extractor(iam_deny)))
+        sec_rules.register_extractor(
+            "deny_rule_exceptions",
+            _guarded("deny_rule_exceptions",
+                     _deny_rule_exceptions_extractor(iam_deny)))
+
+    # The two effective org-policy collections need the org_effective fold
+    # module; a checkout without it registers the specs (above,
+    # unconditionally) and skips the extractors, so an effective-state promise
+    # compiles and abstains loudly — the documented partial-checkout behaviour.
+    org_effective = _domain_module(DOMAIN_MODULES["org_policy"])
+    if org_effective is not None:
+        sec_rules.register_extractor(
+            "effective_org_policy_bool",
+            _guarded("effective_org_policy_bool",
+                     org_effective.effective_org_policy_bool_records))
+        sec_rules.register_extractor(
+            "effective_org_policy_values",
+            _guarded("effective_org_policy_values",
+                     org_effective.effective_org_policy_values_records))
 
     vpcsc = _domain_module(DOMAIN_MODULES["vpc_sc"])
     if vpcsc is not None:

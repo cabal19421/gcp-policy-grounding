@@ -386,6 +386,10 @@ def test_subprocess_budget_default_ceiling_is_not_exceeded_by_a_quiet_run():
     quiet = SubprocessBudget()
     # Re-derived for the integrated suite (nineteen spawn-using modules measure
     # 408 spawns); see SubprocessBudget.MAX_SUBPROCESS_SPAWNS for the derivation.
-    assert quiet.MAX_SUBPROCESS_SPAWNS == 466
+    # 466 -> 478 when the IAM-deny catalogue landed (its declared
+    # MODULE_SPAWN_CAP of 12: ten measured children plus two of headroom).
+    # 478 -> 488 when the effective org-policy catalogue landed (its declared
+    # MODULE_SPAWN_CAP of 10: eight measured children plus two of headroom).
+    assert quiet.MAX_SUBPROCESS_SPAWNS == 488
     quiet.increment("hookrunner")
     quiet.check()  # well under the ceiling: no assertion

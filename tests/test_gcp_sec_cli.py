@@ -778,7 +778,11 @@ def test_explain_reads_as_a_decision_narrative_on_a_denied_policy(
     # Why it was denied: the gate's own finding messages, plus the honest rest.
     assert "why:" in err
     assert "principal 'user:attacker@evil.example' does not exist" in err
-    assert "honestly undecided: 2 abstention(s)" in err
+    # 2 -> 3 when the allow-x-deny interaction landed: roles/owner expands to
+    # escalation-class permissions and the agentic snapshot captures no
+    # iam_deny_policies table, so the estate:incomplete abstention is on the
+    # record of this run too.
+    assert "honestly undecided: 3 abstention(s)" in err
     assert "checks that passed: 4" in err
     # The violated promise's stanza: marker, sentence, refutation, rule.
     assert "VIOLATED  no-primitive-roles-outside-domain [iam]" in err

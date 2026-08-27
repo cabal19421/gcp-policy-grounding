@@ -1173,6 +1173,12 @@ COLLECTION_CATEGORIES = {
     "perimeter_restricted_services": "vpc_sc_perimeters",
     "iam_bindings": "iam_bindings",
     "org_policy_rules": "org_policies",
+    # The two effective org-policy collections fold org_policies OVER
+    # resource_hierarchy; one collection maps to ONE category here, so
+    # org_policies is the primary and the extractor enforces
+    # resource_hierarchy (and constraints) completeness itself.
+    "effective_org_policy_bool": "org_policies",
+    "effective_org_policy_values": "org_policies",
 }
 
 

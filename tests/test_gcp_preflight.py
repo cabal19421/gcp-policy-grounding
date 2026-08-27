@@ -128,13 +128,20 @@ def test_good_org_policy_passes_the_gate(snap):
     # because THIS snapshot captures the five vocabularies only — it has no
     # `org_policies` table to compare the enforce flag against. So the counts
     # stay backend-independent.
+    # Two honest abstentions ride beside the two grounded verdicts: the
+    # org_enforcement claim check (no `org_policies` table to compare the
+    # enforce flag against) and the org_effective fold (the same uncaptured
+    # table, plus no `resource_hierarchy` to fold over).
     assert report.counts() == {"grounded": 2, "ungrounded": 0,
-                               "contradicted": 0, "unverified": 1}
-    [undecided] = report.by_status("unverified")
-    assert undecided.kind == "org_enforcement"
+                               "contradicted": 0, "unverified": 2}
+    [undecided] = [v for v in report.by_status("unverified")
+                   if v.kind == "org_enforcement"]
     assert "not captured" in undecided.message
+    [fold] = [v for v in report.by_status("unverified")
+              if v.kind == "org_effective"]
+    assert "did not capture" in fold.message
     assert all(v.target == "constraints/iam.disableServiceAccountKeyCreation"
-               for v in report.verdicts)
+               for v in report.verdicts if v.kind != "org_effective")
 
 
 def test_bad_org_policy_fails_on_the_value_type_mismatch(snap):
@@ -145,7 +152,7 @@ def test_bad_org_policy_fails_on_the_value_type_mismatch(snap):
     # never captured the org policies in force.
     assert [(v.status, v.kind) for v in report.verdicts] == [
         ("grounded", "constraint"), ("contradicted", "constraint"),
-        ("unverified", "org_enforcement")]
+        ("unverified", "org_enforcement"), ("unverified", "org_effective")]
     [mismatch] = report.contradicted
     assert "boolean" in mismatch.message
 

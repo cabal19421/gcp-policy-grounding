@@ -471,6 +471,25 @@ def _build_iam_binding(category: str, parts: Mapping[str, Any],
         "promoted to one, because only its service is known without guessing")
 
 
+def _build_iam_deny_policy(category: str, parts: Mapping[str, Any],
+                           aliases: Mapping[str, str]) -> str:
+    """``policies/<url-encoded-attachment>/denypolicies/<id>`` — the v2 REST
+    resource name, taken as stored: the attachment segment stays ENCODED
+    because that is the API's own spelling of the key, and a name outside the
+    shape is refused rather than reshaped — a guessed attachment would let the
+    containment walk govern the wrong node."""
+    name = _text(category, parts, "name").strip().strip("/")
+    segments = name.split("/")
+    if (len(segments) == 4 and segments[0] == "policies"
+            and segments[2] == "denypolicies" and segments[1] and segments[3]):
+        return name
+    raise AmbiguousKey(
+        category, "ambiguous_key",
+        "an IAM deny policy key is the v2 resource name "
+        "('policies/<url-encoded-attachment>/denypolicies/<id>'); anything "
+        "else cannot be promoted to one without guessing the attachment")
+
+
 def _canonical_constraint(category: str, value: str) -> str:
     """The parentless ``constraints/<name>`` form. The API answers
     parent-qualified names (``organizations/123/constraints/x``) while
@@ -713,6 +732,15 @@ SPECS: Mapping[str, CategorySpec] = {
         "org_policies", "<node>|<constraint>",
         ("name", "node", "constraint"), _build_org_policy,
         note="the only place this composite is joined"),
+
+    # iam_deny_policies — "IAM v2 deny policies keyed by the v2 REST resource
+    # name ('policies/<url-encoded-attachment>/denypolicies/<id>')" — the
+    # API's own one spelling; the knowledge parser cross-checks the encoded
+    # attachment segment against the record's decoded attachment_point.
+    "iam_deny_policies": CategorySpec(
+        "iam_deny_policies", "policies/<url-encoded-attachment>/denypolicies/<id>",
+        ("name",), _build_iam_deny_policy,
+        note="a name outside the v2 denypolicies shape is refused, never guessed"),
 }
 
 

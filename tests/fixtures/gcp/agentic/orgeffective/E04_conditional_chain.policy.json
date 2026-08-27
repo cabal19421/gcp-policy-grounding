@@ -1,0 +1,10 @@
+{
+  "name": "projects/orgfx-prod/policies/compute.requireShieldedVm",
+  "spec": {
+    "rules": [
+      {
+        "enforce": true
+      }
+    ]
+  }
+}

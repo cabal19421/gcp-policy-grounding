@@ -1,0 +1,87 @@
+{
+  "format_version": "1.2",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_iam_deny_policy.guard_token_mint",
+          "mode": "managed",
+          "name": "guard_token_mint",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "type": "google_iam_deny_policy",
+          "values": {
+            "name": "guard-token-mint",
+            "parent": "cloudresourcemanager.googleapis.com%2Fprojects%2Facme-pay-prod",
+            "rules": [
+              {
+                "deny_rule": [
+                  {
+                    "denied_permissions": [
+                      "iam.googleapis.com/serviceAccounts.getAccessToken",
+                      "iam.googleapis.com/serviceAccounts.getOpenIdToken"
+                    ],
+                    "denied_principals": [
+                      "principalSet://goog/public:all"
+                    ],
+                    "exception_principals": [
+                      "principal://iam.googleapis.com/projects/-/serviceAccounts/payroll-ci@acme-pay-prod.iam.gserviceaccount.com"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "address": "google_org_policy_policy.sa_key_guard",
+          "mode": "managed",
+          "name": "sa_key_guard",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "type": "google_org_policy_policy",
+          "values": {
+            "name": "organizations/123456789012/policies/iam.disableServiceAccountKeyCreation",
+            "parent": "organizations/123456789012",
+            "spec": [
+              {
+                "rules": [
+                  {
+                    "enforce": true
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "address": "google_project_iam_binding.auditors",
+          "mode": "managed",
+          "name": "auditors",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "type": "google_project_iam_binding",
+          "values": {
+            "members": [
+              "group:security@acme.example"
+            ],
+            "project": "acme-pay-prod",
+            "role": "roles/logging.viewer"
+          }
+        },
+        {
+          "address": "google_project_iam_binding.payroll_ci_token_creator",
+          "mode": "managed",
+          "name": "payroll_ci_token_creator",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "type": "google_project_iam_binding",
+          "values": {
+            "members": [
+              "serviceAccount:payroll-ci@acme-pay-prod.iam.gserviceaccount.com"
+            ],
+            "project": "acme-pay-prod",
+            "role": "roles/iam.serviceAccountTokenCreator"
+          }
+        }
+      ]
+    }
+  },
+  "terraform_version": "1.9.5"
+}

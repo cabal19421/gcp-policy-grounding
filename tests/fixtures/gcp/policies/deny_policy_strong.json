@@ -1,0 +1,18 @@
+{
+  "displayName": "Block service-account token minting for everyone",
+  "etag": "BwYnDenyStrong=",
+  "name": "policies/cloudresourcemanager.googleapis.com%2Fprojects%2Facme-prod/denypolicies/block-sa-tokens",
+  "rules": [
+    {
+      "denyRule": {
+        "deniedPermissions": [
+          "iam.googleapis.com/serviceAccounts.getAccessToken"
+        ],
+        "deniedPrincipals": [
+          "principalSet://goog/public:all"
+        ]
+      },
+      "description": "nobody mints SA access tokens in acme-prod"
+    }
+  ]
+}

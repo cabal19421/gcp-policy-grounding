@@ -79,6 +79,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DOMAIN_GLOBS = ("gcp_grounding/*_checks.py", "gcp_grounding/*_claims.py")
 NAMED_MODULES = (
     "gcp_grounding/claims.py",
+    # org_effective.py matches neither glob (*_checks.py / *_claims.py), so it
+    # is named explicitly — the effective-state fold reads estate collections
+    # and must stay inside the evidence channel like every domain module.
+    "gcp_grounding/org_effective.py",
     "gcp_grounding/sec_domains.py",
     "gcp_grounding/tf_claims.py",
 )
@@ -98,7 +102,13 @@ EXPECTED_MODULES = frozenset({
     "gcp_grounding/hfw_checks.py",
     "gcp_grounding/hfw_claims.py",
     "gcp_grounding/iam_checks.py",
+    # iam_deny_checks.py landed with the allow-x-deny interaction family and
+    # is WALKED like every other *_checks.py domain module.
+    "gcp_grounding/iam_deny_checks.py",
     "gcp_grounding/org_checks.py",
+    # org_effective.py landed with the effective org-policy fold and is
+    # WALKED by name (the globs miss it, exactly like claims.py).
+    "gcp_grounding/org_effective.py",
     "gcp_grounding/sec_domains.py",
     "gcp_grounding/tf_claims.py",
     # tf_schema_checks.py landed with the provider-schema capability and is

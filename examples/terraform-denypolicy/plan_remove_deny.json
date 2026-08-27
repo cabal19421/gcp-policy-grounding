@@ -1,0 +1,43 @@
+{
+  "format_version": "1.2",
+  "planned_values": {
+    "root_module": {
+      "resources": []
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "google_iam_deny_policy.guard_token_mint",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "after": null,
+        "before": {
+          "name": "guard-token-mint",
+          "parent": "cloudresourcemanager.googleapis.com%2Fprojects%2Facme-pay-prod",
+          "rules": [
+            {
+              "deny_rule": [
+                {
+                  "denied_permissions": [
+                    "iam.googleapis.com/serviceAccounts.getAccessToken",
+                    "iam.googleapis.com/serviceAccounts.getOpenIdToken"
+                  ],
+                  "denied_principals": [
+                    "principalSet://goog/public:all"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "mode": "managed",
+      "name": "guard_token_mint",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "type": "google_iam_deny_policy"
+    }
+  ],
+  "terraform_version": "1.9.5"
+}

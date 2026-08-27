@@ -345,21 +345,28 @@ class CompiledRule:
         scoped = SUBJECTS.get(ctx.document_kind or "")
         if scoped is None or not isinstance(ctx.document, Mapping):
             return None
-        kind, prefix, subject_of = scoped
+        kind, prefix, subjects_of = scoped
         wanted = sorted({ref.value[len(prefix):] if ref.value.startswith(prefix)
                          else ref.value
                          for ref in self.promise.vocabulary if ref.kind == kind})
         if not wanted:
             return None
-        subject = subject_of(ctx.document)
-        if subject in wanted:
+        subjects = subjects_of(ctx.document)
+        if subjects is None:
+            # Subjects undecidable (an unreadable plan, a plan with nothing of
+            # this kind at all): stay SILENT so the extractor's own named
+            # abstention speaks instead of a second, vaguer one.
+            return None
+        if set(wanted) & set(subjects):
             return None
         pid = self.promise.id
+        named = ", ".join(repr(s) for s in sorted(subjects))
         return Verdict(
             "unverified", f"sec:{self.promise.domain}", pid, 0,
-            f"{pid}: the document under review names the {kind} {subject!r} and "
-            f"never mentions {', '.join(wanted)} — a promise scoped to a named "
-            f"{kind} is not decided by a document about a different one")
+            f"{pid}: the document under review sets policies for the {kind} "
+            f"{named} and never mentions {', '.join(wanted)} — a promise "
+            f"scoped to a named {kind} is not decided by a document about a "
+            f"different one")
 
     # -- the estate-tier completeness gate ------------------------------------
 
@@ -733,13 +740,43 @@ def _org_constraint_name(policy: Mapping) -> str:
     return name.split(marker, 1)[1] if marker in name else name
 
 
+def _org_policy_subjects(policy: Mapping) -> frozenset:
+    """The one-element subject set of an org-policy document — the set
+    spelling of :func:`_org_constraint_name`, which stays byte-identical."""
+    return frozenset({_org_constraint_name(policy)})
+
+
+def _tf_plan_subjects(plan: Mapping):
+    """The constraints a terraform plan's org-policy resources set — prefix
+    stripped for comparison — or ``None`` (subjects undecidable) for a plan
+    that is unreadable or carries no org-policy constraint claim at all, so
+    the gate stays silent and the extractor's own abstention (A2/A3/A4 in the
+    org_effective design's index) speaks instead of a second, vaguer one."""
+    try:
+        from . import tf_claims  # a checkout without tf_claims decides nothing
+        claims = tf_claims.terraform_plan_claims(plan)
+    except Exception:  # noqa: BLE001 — an unreadable plan names no subject
+        return None
+    marker = "constraints/"
+    subjects = {claim.value[len(marker):] if claim.value.startswith(marker)
+                else claim.value
+                for claim in claims if claim.kind == "constraint"}
+    return frozenset(subjects) if subjects else None
+
+
 #: Document kind → ``(vocabulary kind, the prefix the vocab spelling carries,
-#: the reader naming what THIS document is about)``. A document of one of these
-#: kinds is ABOUT one named subject, which is what makes
+#: the reader naming the SET of subjects THIS document is about — or ``None``
+#: when that set is undecidable, which keeps the gate silent)``. A document of
+#: one of these kinds is ABOUT named subjects, which is what makes
 #: :meth:`CompiledRule._off_subject`'s abstention sound: everything the
-#: proposal-tier extractor yields describes that subject and nothing else.
+#: proposal-tier extractors yield describes those subjects and nothing else.
+#: The ``tf_plan`` entry closes the terraform half of the named-subject
+#: vacuity: a constraint-scoped promise over a plan that sets only OTHER
+#: constraints abstains by name instead of grounding vacuously over rows the
+#: plan never had.
 SUBJECTS: dict[str, tuple] = {
-    "org_policy": ("constraint", "constraints/", _org_constraint_name),
+    "org_policy": ("constraint", "constraints/", _org_policy_subjects),
+    "tf_plan": ("constraint", "constraints/", _tf_plan_subjects),
 }
 
 

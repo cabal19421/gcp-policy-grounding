@@ -1,0 +1,33 @@
+{
+  "etag": "BwYnDenyThread=",
+  "name": "policies/cloudresourcemanager.googleapis.com%2Fprojects%2Facme-prod/denypolicies/threaded",
+  "rules": [
+    {
+      "denyRule": {
+        "deniedPermissions": [
+          "iam.googleapis.com/serviceAccounts.getAccessToken"
+        ],
+        "deniedPrincipals": [
+          "principalSet://goog/public:all"
+        ],
+        "exceptionPrincipals": [
+          "principal://goog/subject/breakglass@acme.example"
+        ]
+      }
+    },
+    {
+      "denyRule": {
+        "deniedPermissions": [
+          "iam.googleapis.com/serviceAccounts.getAccessToken",
+          "iam.googleapis.com/serviceAccountKeys.create"
+        ],
+        "deniedPrincipals": [
+          "principalSet://goog/public:all"
+        ],
+        "exceptionPermissions": [
+          "iam.googleapis.com/serviceAccounts.getAccessToken"
+        ]
+      }
+    }
+  ]
+}

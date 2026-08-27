@@ -1,0 +1,72 @@
+{
+  "captured_at": "2026-07-18T09:00:00Z",
+  "iam_bindings": {
+    "//cloudresourcemanager.googleapis.com/projects/acme-prod": {
+      "bindings": [
+        {
+          "members": [
+            "serviceAccount:ci@acme-prod.iam.gserviceaccount.com"
+          ],
+          "role": "roles/iam.serviceAccountTokenCreator"
+        }
+      ]
+    }
+  },
+  "iam_deny_policies": {
+    "policies/cloudresourcemanager.googleapis.com%2Fprojects%2Facme-prod/denypolicies/block-sa-tokens": {
+      "attachment_point": "projects/acme-prod",
+      "rules": [
+        {
+          "denied_permissions": [
+            "iam.googleapis.com/serviceAccounts.getAccessToken"
+          ],
+          "denied_principals": [
+            "principalSet://goog/public:all"
+          ],
+          "exception_permissions": [],
+          "exception_principals": []
+        }
+      ]
+    }
+  },
+  "permissions": [
+    "bigquery.tables.getData",
+    "iam.serviceAccountKeys.create",
+    "iam.serviceAccounts.getAccessToken",
+    "iam.serviceAccounts.getOpenIdToken"
+  ],
+  "principals": [
+    "group:data-eng@acme.example",
+    "serviceAccount:ci@acme-prod.iam.gserviceaccount.com",
+    "user:alice@acme.example"
+  ],
+  "resource_hierarchy": {
+    "organizations/123456789012": {
+      "display_name": "acme",
+      "number": null,
+      "parent": null,
+      "type": "organization"
+    },
+    "projects/acme-prod": {
+      "display_name": "acme-prod",
+      "number": "111111111111",
+      "parent": "organizations/123456789012",
+      "type": "project"
+    }
+  },
+  "roles": {
+    "roles/bigquery.dataViewer": {
+      "included_permissions": [
+        "bigquery.tables.getData"
+      ],
+      "title": "BigQuery Data Viewer"
+    },
+    "roles/iam.serviceAccountTokenCreator": {
+      "included_permissions": [
+        "iam.serviceAccounts.getAccessToken",
+        "iam.serviceAccounts.getOpenIdToken"
+      ],
+      "title": "Service Account Token Creator"
+    }
+  }
+}

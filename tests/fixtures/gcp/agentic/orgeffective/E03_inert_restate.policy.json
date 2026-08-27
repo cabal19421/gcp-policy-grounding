@@ -1,0 +1,10 @@
+{
+  "name": "organizations/500/policies/iam.disableServiceAccountKeyCreation",
+  "spec": {
+    "rules": [
+      {
+        "enforce": true
+      }
+    ]
+  }
+}

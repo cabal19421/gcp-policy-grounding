@@ -35,7 +35,14 @@ class SubprocessBudget:
     #: 450 -> 466 when tx-agentic-tf-block (8 spawns) and tx-agentic-tf-drift
     #: (6) landed: the measured total moved to 456, and the ceiling moved by
     #: exactly the two modules' declared budgets plus two of headroom.
-    MAX_SUBPROCESS_SPAWNS = 466
+    #: 466 -> 478 when the IAM-deny catalogue (gx-iam-deny-pair) landed: five
+    #: cases at two children each measure 10, and the ceiling moved by exactly
+    #: that module's declared MODULE_SPAWN_CAP of 12 (10 plus two of headroom).
+    #: 478 -> 488 when the effective org-policy catalogue landed: eight hook
+    #: children measured (every sidecar report is the in-process CLI mirror,
+    #: so it costs nothing), and the ceiling moved by exactly that module's
+    #: declared MODULE_SPAWN_CAP of 10 (8 plus two of headroom).
+    MAX_SUBPROCESS_SPAWNS = 488
 
     #: The env name the mutation contract's machinery stamps on every child it
     #: spawns. A spawn carrying it is counted against :attr:`max_marked` — the

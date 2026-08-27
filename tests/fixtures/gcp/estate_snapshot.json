@@ -239,6 +239,23 @@
       ]
     }
   },
+  "iam_deny_policies": {
+    "policies/cloudresourcemanager.googleapis.com%2Fprojects%2Facme-sandbox/denypolicies/block-project-delete": {
+      "attachment_point": "projects/acme-sandbox",
+      "rules": [
+        {
+          "denied_permissions": [
+            "cloudresourcemanager.googleapis.com/projects.delete"
+          ],
+          "denied_principals": [
+            "principalSet://goog/public:all"
+          ],
+          "exception_permissions": [],
+          "exception_principals": []
+        }
+      ]
+    }
+  },
   "network_tags": [
     "bastion",
     "db",

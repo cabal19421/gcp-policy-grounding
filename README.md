@@ -32,8 +32,8 @@ degrade to explicit `unverified` when not.
 | Surface | Documents read | Checks |
 | --- | --- | --- |
 | **IAM allow policies** | policy JSON, terraform | role/permission/principal existence with did-you-mean; CEL condition satisfiability (dead bindings); escalation-class warnings; public-principal blocking; new⊆old widening against a baseline |
-| **IAM deny policies** (v2) | deny-policy JSON | denied-permission existence; deny-rule semantics, exceptions honestly abstained |
-| **Organization Policy** | v1 + v2 JSON, terraform | constraint existence; boolean/list value-type contradictions; enforce-flip detection; all three disablement spellings |
+| **IAM deny policies** (v2) | deny-policy JSON, terraform | denied-permission existence; per-rule flattening into the `deny_rules` / `deny_rule_exceptions` promise collections (permission exceptions subtracted before rows exist, principal carve-outs kept visible); the allow×deny interaction (`iam_deny_shadow`): masked grants warned inert, exception threading named, a deny removal that wakes a dormant escalation grant blocked |
+| **Organization Policy** | v1 + v2 JSON, terraform | constraint existence; boolean/list value-type contradictions; enforce-flip detection; all three disablement spellings; the effective-state fold over the captured hierarchy (`org_effective`): inert and blast-radius findings, estate-tier `effective_org_policy_*` collections for promises |
 | **VPC firewall rules** | firewall JSON, terraform | world-open exposure via the packet algebra (CIDR/port/protocol bit-vectors); pair non-enlargement; estate-level shadowing and re-opening by priority |
 | **Hierarchical firewall policies** | policy JSON, terraform | cross-level evaluation order and `goto_next`; a folder allow re-opening an org deny; placement and replacement |
 | **Cloud Armor** | security-policy JSON, terraform | priority-order bypass; default-rule removal; match-expression grounding over the offline-decidable subset |
@@ -45,6 +45,50 @@ degrade to explicit `unverified` when not.
 Every surface gets the same four-bucket honesty contract, and every domain can
 carry compiled promises from your requirements (`iam`, `vpc_firewall`,
 `hier_firewall`, `cloud_armor`, `org_policy`, `vpc_sc`).
+
+Two of those rows deserve a sentence more, because they are judgments most
+gates cannot make. **The IAM-deny pair**: every deny policy under review
+flattens into `deny_rules` — one row per *effective* (rule, denied-principal,
+denied-permission) combination, with `exceptionPermissions` subtracted on the
+normalized short form *before* rows exist, so a clawed-back denial never
+satisfies a promise — plus `deny_rule_exceptions`, one row per principal
+carve-out (principal exceptions are never a string subtraction: an exception
+can carve one subject out of `public:all`, so they stay visible as rows and as
+a per-row `has_principal_exceptions` flag). Beside the collections, the
+`iam_deny_shadow` checks decide the allow×deny *interaction*: a grant fully
+covered by a deny rule is warned as inert rather than blocked (GCP lands the
+grant; nothing becomes reachable), a grant threading a rule's exception is
+named — and blocked when the threading member is public — and a deny
+deletion or narrowing that wakes a dormant escalation-class grant is
+contradicted outright. The honest limits, stated rather than papered over:
+principal coverage is decided by a small curated v1→v2 containment table
+(`user:` / `serviceAccount:` / `group:` / `allUsers`); group *membership* is
+not captured in any snapshot category, `denialCondition` satisfiability is
+not reasoned about, and uncurated `principalSet://` spellings all abstain by
+name; and the `iam_deny_policies` estate table has no fetch path yet, so the
+estate-side interaction over a snapshot without it yields one
+`estate:incomplete` abstention saying the allow×deny interaction was not
+decided — never a silent assumption that no deny policy exists.
+
+**The effective org-policy fold** (`org_effective`): a per-document read
+answers "what does this policy say", never "what is actually enforced at this
+node once the org, the folders and this change compose". The fold answers the
+second question — boolean constraints nearest-set-wins, list constraints
+replace or inherit-union, `reset` restoring the constraint's managed default
+(decidable only from the optional `constraint_default` field the fetcher now
+captures) — over the proposal's node and every captured descendant, and
+surfaces it two ways: the estate-tier `effective_org_policy_bool` /
+`effective_org_policy_values` collections promises quantify over, and one
+built-in finding per (node, constraint) — INERT when the change restates what
+is already in force (loud, because a guardrail that changes nothing is a
+signal reviewers need), or the blast radius enumerating exactly the nodes
+whose effective state changes with a before→after summary each. Its honest
+limits: the fold refuses by name whenever the capture may not license it —
+`org_policies` or `resource_hierarchy` uncaptured or incomplete, a condition
+anywhere on the folded chain, a fold bottoming out at a managed default the
+snapshot did not record, type confusion, a broken or cyclic parent chain —
+and the universe is proposal-scoped: it judges the constraints and subtree
+the change actually touches, never an estate-wide sweep.
 
 ## Quick start
 
@@ -740,6 +784,10 @@ no network. Run from the repo root after the Development setup above.
 | 5e | `roles/owner` to an outsider + a token-creator grant (step 11) | `examples/terraform-orgpolicy/proposal_admin_impersonation.tf.json` | DENIED — `deny-admin-roles` + `iam-deny-service-account-impersonation` VIOLATED |
 | 5f | An egress allow to `0.0.0.0/0` (step 11) | `examples/terraform-orgpolicy/proposal_egress_world.tf.json` | DENIED — `egress-firewall-policy-high-strength-vpc-firewall` VIOLATED, beside the built-in `[firewall_reopen]` |
 | 5g | The benign counterpart: the ingress allowlist tightened (step 11) | `examples/terraform-orgpolicy/proposal_benign.tf.json` | APPROVED — a narrowing violates nothing; all eleven still hold |
+| 6 | The deny that guarded the estate, compliant: guardrail + the dormant grant it masks + the org-policy restatement (step 12) | `examples/terraform-denypolicy/plan_base.json` | APPROVED — all three promises hold; the masked-grant warning and the INERT org finding recorded |
+| 6a | The carve-out: payroll CI added to the guardrail's `exceptionPrincipals` (step 12) | `examples/terraform-denypolicy/plan_threading.json` | DENIED — both deny promises VIOLATED, the escaping (principal, permission) quoted verbatim; the threading warning beside them |
+| 6b | The removal: a rendered plan deleting the deny policy — the dormant grant wakes (step 12) | `examples/terraform-denypolicy/plan_remove_deny.json` | DENIED — `[iam_deny_shadow]` contradicted, naming the woken grant and its escalation class; the promises abstain by name |
+| 6c | The hygiene sweep: a folder-level `reset` that reads as a no-op (step 12) | `examples/terraform-denypolicy/plan_reset_payments.json` | DENIED — `sa-key-creation-stays-effectively-enforced` refuted over the effective collection, naming the folder node and the block |
 
 Two variations worth showing live: rerun 4 with `--schema-policy annotate`
 (the identical finding demoted to a warning at exit 0 — the hook-warns-while-
@@ -1408,7 +1456,226 @@ with `GCP_GROUNDING_NOW`, the package's documented CI answer). What a stale
 snapshot costs is the hallucination findings: recapture — never `--max-age
 off` — is the fix, exactly as the abstention says.
 
-In production the five flags collapse into a `.gcp-grounding.json` config file
+### 12. Scenario six: the deny that guarded the estate
+
+The payments estate's only real protection for token minting is an IAM deny
+policy: `guard-token-mint`, attached at `projects/acme-pay-prod`, denies the
+two token-mint permissions (`iam.serviceAccounts.getAccessToken` /
+`.getOpenIdToken`) to `principalSet://goog/public:all`. Under it sits a
+DORMANT grant — `roles/iam.serviceAccountTokenCreator` to the payroll CI
+service account — that the deny keeps fully inert, and above it an org-level
+`iam.disableServiceAccountKeyCreation` policy whose constraint carries the
+captured managed default `ALLOW`. `examples/terraform-denypolicy/` holds the
+pieces: `snapshot.json` is the captured estate (the deny policy in the new
+`iam_deny_policies` record table, the dormant grant in `iam_bindings`, the
+org→`folders/665544332211`→two-projects hierarchy, the org policy and the
+constraint's default), `requirements.md` is the scenario's three-promise
+corpus, and each `plan_*.json` is a **rendered plan** — deliberately, twice
+over: a deletion is visible only in a plan's `resource_changes`
+(`change.before` is what the wake computation reads — the pair-tier gap that
+over-blocks scenario three's cleanup has no purchase here), and the estate
+judgments below read the snapshot's own captured categories, which the
+snapshot-only route licenses as captured-complete. For the same reason the
+commands pin `GCP_GROUNDING_NOW` to the fixture's capture era: the wake and
+fold judgments are estate reads a stale snapshot may not license, so at
+today's wall clock the staleness ceiling would honestly demote them to
+abstentions (run 12c would *pass*, saying why) — the pin is the suite's own
+documented CI mechanism, not a trick. One layout honesty, because
+auto-detection is real: this directory ships no tfstate and no
+`.origins.json` sidecar on purpose — a state artifact beside the proposal
+would be discovered and re-route the run onto the merged-coverage path, whose
+provenance rules deliberately withhold the existence licence a hand-captured
+estate table cannot earn.
+
+The corpus (compiled separately, scenario-two style; artifacts not
+committed): `every-deny-covers-token-creation` is the strongest judgeable
+spelling of "the guardrail stands" — an `assert_satisfiable` over the
+`deny_rules` collection demanding the token permission denied to the public
+set with `has_principal_exceptions=false` and `has_condition=false`. Because
+`exceptionPermissions` are subtracted before rows exist, a policy that denies
+the permission and excepts it back has no satisfying row; because principal
+carve-outs are not subtractable, they surface as the flag instead.
+`no-principal-threads-the-guardrail` is its refute-mode partner over
+`deny_rule_exceptions`: any carve-out row refutes it, quoting the principal
+verbatim, while an exception-free policy grounds *with* the observed-empty
+attestation ("every deny rule was read and none carries a principal
+exception") rather than passing over records nobody read.
+`sa-key-creation-stays-effectively-enforced` is estate-tier, judged over
+`effective_org_policy_bool` — the folded effective state at the proposal's
+node and every captured descendant.
+
+```bash
+# 12. Compile the scenario corpus — EXPECTED TO EXIT 0: all three promises
+#     ground and admit (nothing here is booby-trapped).
+.venv/bin/gcp-ground compile-requirements examples/terraform-denypolicy \
+    --snapshot examples/terraform-denypolicy/snapshot.json --out demo/compiled-denypolicy
+
+# 12a. The compliant estate — EXPECTED TO EXIT 0: all three promises hold,
+#      and the guardrail is visible from three directions at once.
+GCP_GROUNDING_NOW=2026-07-18T12:00:00Z .venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-denypolicy/plan_base.json \
+    --snapshot examples/terraform-denypolicy/snapshot.json \
+    --requirements demo/compiled-denypolicy \
+    --explain
+```
+
+**12a — the base is APPROVED (exit 0), and the approval is three judgments,
+not silence.** The narrative carries `promises in force (3 enforcing, 0 not —
+from demo/compiled-denypolicy)` with all three `holds` stanzas, and the check
+listing shows the guardrail working from every side — the masked-grant
+warning (riding on `grounded`: a masked grant is not an exposure, and
+blocking it would block a safe state) and the INERT org finding (loud on
+purpose — a restatement that changes nothing is a signal reviewers need):
+
+```text
+✓ [iam_deny_shadow] google_project_iam_binding.payroll_ci_token_creator:
+    warning — rule 0 of google_iam_deny_policy.guard_token_mint masks
+    iam.serviceAccounts.getAccessToken (impersonation),
+    iam.serviceAccounts.getOpenIdToken (impersonation) granted to
+    serviceAccount:payroll-ci@acme-pay-prod.iam.gserviceaccount.com: the
+    grant lands but is inert — the entire grant is inert; a masked grant is
+    not an exposure, and removing the deny rule would wake it
+✓ [org_effective] google_org_policy_policy.sa_key_guard: this change is
+    INERT — it restates the effective state of
+    constraints/iam.disableServiceAccountKeyCreation already in force at
+    organizations/123456789012, and the effective state is unchanged at
+    every node it governs (4 node(s))
+✓ [sec:iam] no-principal-threads-the-guardrail: the obligation holds over
+    the document — grounded; the deny document under review: every deny rule
+    was read and none carries a principal exception
+```
+
+The abstention taste is two honest `no offline check is wired for claim kind
+'denied_principal'/'unmodelled_principal'` lines on the deny rule's principal
+entry — claim kinds whose per-claim checks live in the collections and the
+interaction layer, not in a wired existence check — deciding nothing.
+
+```bash
+# 12b. The carve-out — EXPECTED TO EXIT 1: payroll CI added to the
+#      guardrail's exceptionPrincipals, "so deploys stop failing".
+GCP_GROUNDING_NOW=2026-07-18T12:00:00Z .venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-denypolicy/plan_threading.json \
+    --snapshot examples/terraform-denypolicy/snapshot.json \
+    --requirements demo/compiled-denypolicy \
+    --explain
+```
+
+**12b — the carve-out is DENIED (exit 1), and everything quoted is a constant
+of the document.** Both deny promises refuse — the strong promise because the
+rule now carries `has_principal_exceptions=True`, the refute promise on the
+carve-out row itself — and the recap names the escaping (principal,
+permission) pair verbatim:
+
+```text
+decision recap: DENIED (exit 1) — because:
+  ⚠ [sec:iam] every-deny-covers-token-creation: refuted by deny_rules[0]
+      (google_iam_deny_policy.guard_token_mint) condition=''
+      denied_principal='principalSet://goog/public:all' has_condition=False
+      has_principal_exceptions=True
+      permission='iam.serviceAccounts.getAccessToken' policy='' rule_index=0
+  ⚠ [sec:iam] no-principal-threads-the-guardrail: refuted by
+      deny_rule_exceptions[0] (google_iam_deny_policy.guard_token_mint)
+      exception_principal='principal://iam.googleapis.com/projects/-/serviceAccounts/payroll-ci@acme-pay-prod.iam.gserviceaccount.com'
+      policy='' rule_index=0
+```
+
+The interaction check tells the same story from the grant's side, as a
+warning in the listing: *"this grant to serviceAccount:payroll-ci@… threads
+the exception 'principal://…/payroll-ci@…' of rule 0 of
+google_iam_deny_policy.guard_token_mint, which names
+iam.serviceAccounts.getAccessToken (impersonation), … — the guardrail does
+not cover it; review the exception"*. A warning, not a block, because a
+threaded grant exposes nothing *new* by itself — but had the threading member
+been public, the same check contradicts outright (the guardrail nullified
+from the allow side). With no promise corpus in force this run would have
+PASSED with only that warning recorded; the promises are what turn the
+carve-out into a refusal.
+
+```bash
+# 12c. The removal — EXPECTED TO EXIT 1: a rendered plan deleting the deny
+#      policy, "it keeps breaking the deploy pipeline".
+GCP_GROUNDING_NOW=2026-07-18T12:00:00Z .venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-denypolicy/plan_remove_deny.json \
+    --snapshot examples/terraform-denypolicy/snapshot.json \
+    --requirements demo/compiled-denypolicy \
+    --explain
+```
+
+**12c — the removal is DENIED (exit 1) on the interaction check alone, and
+the promises' honesty is the point.** A delete-only plan carries no planned
+deny values, so both deny promises abstain by name (*"IAM deny policy
+'google_iam_deny_policy.guard_token_mint' has no planned values — the rule
+was not evaluated"*) — an abstention never manufactures a block. What blocks
+is the wake computation over `change.before` against the estate's captured
+grants:
+
+```text
+decision recap: DENIED (exit 1) — because:
+  ⚠ [iam_deny_shadow] google_iam_deny_policy.guard_token_mint: removing or
+      narrowing rule 0 wakes the dormant grant of
+      iam.serviceAccounts.getAccessToken (impersonation) to
+      serviceAccount:payroll-ci@acme-pay-prod.iam.gserviceaccount.com
+      (//cloudresourcemanager.googleapis.com/projects/acme-pay-prod) — the
+      deny policy was the only thing keeping a known escalation path inert
+  ⚠ [iam_deny_shadow] google_iam_deny_policy.guard_token_mint: removing or
+      narrowing rule 0 wakes the dormant grant of
+      iam.serviceAccounts.getOpenIdToken (impersonation) to
+      serviceAccount:payroll-ci@acme-pay-prod.iam.gserviceaccount.com …
+```
+
+No allow policy changed anywhere — effective permissions increased with no
+grant edited, which is exactly the shape no per-document gate can see. The
+block is polarity-scoped, not blanket: an ordinary woken pair (unclassed
+permission, non-public member) draws a warning, and the escalation class or a
+public member is what makes it `contradicted`. The clean opposite answer is
+gated too: "this removal wakes nothing" is a universal negative over the
+grant population, so it is only ever said over a complete `iam_bindings`
+capture.
+
+```bash
+# 12d. The hygiene sweep — EXPECTED TO EXIT 1: a folder-level reset that
+#      "just restores the default", judged over the EFFECTIVE collection.
+GCP_GROUNDING_NOW=2026-07-18T12:00:00Z .venv/bin/gcp-ground verify-policy \
+    --proposal examples/terraform-denypolicy/plan_reset_payments.json \
+    --snapshot examples/terraform-denypolicy/snapshot.json \
+    --requirements demo/compiled-denypolicy \
+    --explain
+```
+
+**12d — the reset is DENIED (exit 1), and no document anywhere spells
+`enforce false`.** The proposal adds one block: a `reset` on
+`iam.disableServiceAccountKeyCreation` at the payments folder. Its
+document-local content is a no-op spelling — a reset states no value at all —
+and every per-document view (the same-node comparison of scenario five
+included) can at most shrug at it. The fold composes it: the org enforces,
+the reset clears that inheritance at the folder, and the constraint's
+captured managed default is `ALLOW` — so the *node-effective* value at the
+folder and both projects below flips to unenforced, which is exactly what the
+estate-tier promise quantifies over:
+
+```text
+decision recap: DENIED (exit 1) — because:
+  ⚠ [sec:org_policy] sa-key-creation-stays-effectively-enforced: refuted by
+      effective_org_policy_bool[0]
+      (google_org_policy_policy.payments_default_sweep)
+      constraint='iam.disableServiceAccountKeyCreation' enforce=False
+      node='folders/665544332211'
+```
+
+— the refutation names the *effective* row (the folder node, the folded
+`enforce=False`) and the terraform block to edit. The blast-radius finding in
+the listing enumerates the full damage — *"this change alters the effective
+state of constraints/iam.disableServiceAccountKeyCreation at 3 of the 3
+node(s) it governs — folders/665544332211: enforce true -> false;
+projects/acme-pay-dr: enforce true -> false; projects/acme-pay-prod: enforce
+true -> false"* — while the org restatement in the same plan keeps its INERT
+finding, and both deny promises still hold: the guardrail itself is
+untouched, and each promise judges only its own question. Had the fold been
+unlicensed — the constraint's default uncaptured, a condition on the chain,
+an incomplete `org_policies` table — this run would have abstained naming the
+gap rather than guessed either way.
+
+In production the demo's flags collapse into a `.gcp-grounding.json` config file
 discovered next to the proposal (see "Two overlapping ways to get the current
 state" above) — the same inputs, written once, so the command line shrinks to
 the proposal alone. The demo spells them out because the mapping *is* the

@@ -1,0 +1,25 @@
+{
+  "etag": "BwYnDenyBad=",
+  "name": "policies/cloudresourcemanager.googleapis.com%2Fprojects%2Facme-prod/denypolicies/mangled",
+  "rules": [
+    {
+      "denyRule": {
+        "deniedPermissions": [
+          "iam.googleapis.com/serviceAccounts.getAccessToken",
+          42
+        ],
+        "deniedPrincipals": [
+          "principalSet://goog/public:all"
+        ]
+      }
+    },
+    {
+      "denyRule": {
+        "deniedPermissions": [
+          "iam.googleapis.com/serviceAccountKeys.create"
+        ],
+        "deniedPrincipals": "principalSet://goog/public:all"
+      }
+    }
+  ]
+}

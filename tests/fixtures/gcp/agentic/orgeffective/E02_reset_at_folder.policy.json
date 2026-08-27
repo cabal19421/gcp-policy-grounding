@@ -1,0 +1,6 @@
+{
+  "name": "folders/510/policies/iam.disableServiceAccountKeyCreation",
+  "spec": {
+    "reset": true
+  }
+}

@@ -3084,8 +3084,8 @@ def _decision_lines(report: GroundingReport, *, hook: bool) -> list[str]:
     # each class; report order breaks ties.
     kind_counts = Counter(v.kind for v in undecided)
     taste = sorted(undecided, key=lambda v: (
-        0 if (v.kind in ("iam_escalation", "iam_scope_diff", "subset",
-                         "staleness")
+        0 if (v.kind in ("iam_escalation", "iam_scope_diff", "iam_deny_shadow",
+                         "subset", "staleness")
               or v.kind.startswith(("sec:", "drift", "baseline:"))) else 1,
         kind_counts[v.kind]))
     for verdict in taste[:_UNDECIDED_LINE_CAP]:

@@ -428,6 +428,7 @@ EXCLUDED_CATEGORIES = {
     "principals": "identities are created outside terraform (directory, workload identity), so a capture is never the population",
     "constraints": "org-policy constraint DEFINITIONS ship with the platform; terraform sets policies, it does not define constraints",
     "resource_types": "the asset-type vocabulary is the provider's; a configuration mentions the types it happens to use and no more",
+    "iam_deny_policies": "the deny-policy estate table is a capture, not a mapping: a plan's google_iam_deny_policy blocks are judged at proposal tier (the deny_rules collection and the same-plan shadow checks), and reading them as the estate's deny population would license 'no deny policy exists' from a view that only sees what terraform manages (see ESC-DENY-FETCH-CAPTURE)",
 }
 
 

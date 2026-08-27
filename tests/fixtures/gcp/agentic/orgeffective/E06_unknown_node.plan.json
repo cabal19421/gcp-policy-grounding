@@ -1,0 +1,36 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_org_policy_policy.after_apply",
+          "mode": "managed",
+          "type": "google_org_policy_policy",
+          "name": "after_apply",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "schema_version": 0,
+          "values": {
+            "parent": "projects/orgfx-prod",
+            "spec": [
+              {
+                "inherit_from_parent": null,
+                "reset": null,
+                "rules": [
+                  {
+                    "allow_all": null,
+                    "deny_all": null,
+                    "enforce": "TRUE",
+                    "values": [],
+                    "condition": []
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

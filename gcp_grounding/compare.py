@@ -363,6 +363,24 @@ FIELDS: Mapping[str, CategoryCompare] = {
         set_fields=frozenset({"allowed_values", "denied_values"}),
         ordered_fields=frozenset({"rules"}),
         subrecord_keys={"rules": BY_INDEX}),
+
+    # iam_deny_policies — "attachment_point (decoded node) + rules". EVERY
+    # field of a deny rule decides who is denied what: the four
+    # principal/permission lists are SETS (GCP applies them as memberships,
+    # and their order carries nothing), while the rules array itself — like an
+    # org policy's — has no per-rule priority, so its POSITION is its
+    # identity and it aligns by index.
+    "iam_deny_policies": CategoryCompare(
+        "iam_deny_policies",
+        security_fields=frozenset({
+            "attachment_point", "rules", "denied_principals",
+            "exception_principals", "denied_permissions",
+            "exception_permissions", "denial_condition", "expression"}),
+        set_fields=frozenset({
+            "denied_principals", "exception_principals",
+            "denied_permissions", "exception_permissions"}),
+        ordered_fields=frozenset({"rules"}),
+        subrecord_keys={"rules": BY_INDEX}),
 }
 
 

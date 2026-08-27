@@ -168,7 +168,10 @@ def test_the_matrix_covers_all_seven_committed_policy_fixtures():
     """
     fixtures = sorted(POLICIES.glob("*.json"))
     assert len(NON_STEALING) == len(fixtures) + 1  # + snapshot.json
-    assert len(fixtures) == 23
+    # 23 -> 29: the six deny fixtures of designs/gcp-iam-deny.md (four REST
+    # deny policies, the deny+grant plan and the deny-delete plan), each
+    # exercised by the parametrized case below like every other fixture.
+    assert len(fixtures) == 29
 
 
 @pytest.mark.parametrize("path", NON_STEALING)

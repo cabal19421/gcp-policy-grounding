@@ -56,6 +56,7 @@ which records an ``unverified`` — this module does not duplicate that logic.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from typing import Any, Mapping
 
@@ -66,6 +67,30 @@ from .core.log import get_logger
 logger = get_logger(__name__)
 
 __all__ = ["DOCUMENT_EXTRACTORS", "TF_EXTRACTORS", "iam_deny_policy_claims"]
+
+# -- the claim-location grammar, written once ---------------------------------
+#
+# The locations this module anchors claims at, as regexes the consumers group
+# by (`sec_domains`' deny collections and `iam_deny_checks`' coverage walk are
+# both thin over these — defining them beside the extractor is what stops the
+# two growing a second, drifting spelling). Matched against the WHOLE location
+# with the head captured, so a terraform prefix is kept and two resources'
+# rule 0 stay apart — the `iam_checks._rule_prefix` convention.
+
+DENIED_PRINCIPAL_AT = re.compile(
+    r"^(?P<head>.*)rules\[(?P<i>\d+)\]\.denyRule\.deniedPrincipals\[(?P<j>\d+)\]$")
+EXCEPTION_PRINCIPAL_AT = re.compile(
+    r"^(?P<head>.*)rules\[(?P<i>\d+)\]\.denyRule\.exceptionPrincipals\[(?P<j>\d+)\]$")
+DENIED_PERMISSION_AT = re.compile(
+    r"^(?P<head>.*)rules\[(?P<i>\d+)\]\.denyRule\.deniedPermissions\[(?P<j>\d+)\]$")
+EXCEPTION_PERMISSION_AT = re.compile(
+    r"^(?P<head>.*)rules\[(?P<i>\d+)\]\.denyRule\.exceptionPermissions\[(?P<j>\d+)\]$")
+
+#: The plan-side census: deny-policy resource addresses a deny-collection
+#: extraction is responsible for, mirroring ``sec_domains._IAM_BINDING_ADDRESS``.
+#: A plan block of this type that yielded NO deny claim must abstain by name —
+#: a policy whose rules were stripped or malformed denies nobody nobody read.
+DENY_POLICY_ADDRESS = re.compile(r"^google_iam_deny_policy\.[^.]+$")
 
 #: (canonical location field, accepted spellings, emit ``denied_principal``?).
 #: Only ``deniedPrincipals`` entries additionally get a ``denied_principal``

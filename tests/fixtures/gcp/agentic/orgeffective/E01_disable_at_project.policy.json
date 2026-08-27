@@ -1,0 +1,10 @@
+{
+  "name": "projects/orgfx-prod/policies/iam.disableServiceAccountKeyCreation",
+  "spec": {
+    "rules": [
+      {
+        "enforce": false
+      }
+    ]
+  }
+}

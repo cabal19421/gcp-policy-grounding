@@ -333,6 +333,18 @@ def fetch_constraints(orgpolicy: Any, parent: str) -> dict[str, dict[str, Any]]:
         record: dict[str, Any] = {"value_type": value_type}
         if entry.get("description"):
             record["description"] = entry["description"]
+        # The v2 Constraint.constraintDefault ("ALLOW"/"DENY") — the managed
+        # default the effective-state fold bottoms out at. Recorded only in a
+        # recognized spelling: anything else is omitted (the fold then
+        # abstains by name rather than reading a guess), never coerced.
+        default = entry.get("constraintDefault")
+        if default in ("ALLOW", "DENY"):
+            record["constraint_default"] = default
+        elif default is not None:
+            logger.debug("constraint %s declares constraintDefault=%r, which "
+                         "is not a recognized spelling — omitted, so the "
+                         "effective-state fold abstains rather than guesses",
+                         short, default)
         constraints[short] = record
     logger.debug("fetched %d constraints under %s", len(constraints), parent)
     return constraints

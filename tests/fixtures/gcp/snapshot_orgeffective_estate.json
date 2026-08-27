@@ -1,0 +1,79 @@
+{
+  "captured_at": "2026-07-18T09:00:00Z",
+  "constraints": {
+    "constraints/compute.requireShieldedVm": {
+      "description": "Shielded VMs",
+      "value_type": "boolean"
+    },
+    "constraints/compute.vmExternalIpAccess": {
+      "constraint_default": "DENY",
+      "description": "Define allowed external IPs for VM instances",
+      "value_type": "list"
+    },
+    "constraints/iam.disableServiceAccountKeyCreation": {
+      "constraint_default": "ALLOW",
+      "description": "Disable service account key creation",
+      "value_type": "boolean"
+    }
+  },
+  "resource_hierarchy": {
+    "organizations/500": {
+      "parent": null,
+      "type": "organization",
+      "number": "500",
+      "display_name": "orgfx"
+    },
+    "folders/510": {
+      "parent": "organizations/500",
+      "type": "folder",
+      "number": "510",
+      "display_name": "workloads"
+    },
+    "projects/orgfx-prod": {
+      "parent": "folders/510",
+      "type": "project",
+      "number": "5111",
+      "display_name": "orgfx-prod"
+    },
+    "projects/orgfx-dr": {
+      "parent": "folders/510",
+      "type": "project",
+      "number": "5222",
+      "display_name": "orgfx-dr"
+    }
+  },
+  "org_policies": {
+    "organizations/500|constraints/iam.disableServiceAccountKeyCreation": {
+      "node": "organizations/500",
+      "constraint": "constraints/iam.disableServiceAccountKeyCreation",
+      "reset": false,
+      "inherit_from_parent": false,
+      "rules": [
+        {
+          "enforce": true,
+          "allow_all": null,
+          "deny_all": null,
+          "allowed_values": [],
+          "denied_values": [],
+          "condition": null
+        }
+      ]
+    },
+    "organizations/500|constraints/compute.requireShieldedVm": {
+      "node": "organizations/500",
+      "constraint": "constraints/compute.requireShieldedVm",
+      "reset": false,
+      "inherit_from_parent": false,
+      "rules": [
+        {
+          "enforce": true,
+          "allow_all": null,
+          "deny_all": null,
+          "allowed_values": [],
+          "denied_values": [],
+          "condition": "resource.matchTagId('tagKeys/1', 'tagValues/2')"
+        }
+      ]
+    }
+  }
+}

@@ -37,6 +37,15 @@ from tests.spec_assertions import TASK_IDS
 
 #: THE REQUIRED-ID TUPLE, named in full and GROW-ONLY -- the opposite polarity
 #: from the allowlists below, which are holes. PRESENT in EITHER state satisfies.
+#: 65 -> 77: the twelve MK-D ids of designs/gcp-iam-deny.md joined, MEASURED
+#: killed on a working-tree copy and seeded PARKED (mutation_entries.py's
+#: DENY_ENTRIES, under ESC-DENY-REGISTER-ACTIVATION) until the deny pair is at
+#: git HEAD -- the required-id xfail below carries them as visible debt.
+#: 77 -> 91: the fourteen MK-F ids of the effective org-policy fold joined the
+#: same way (mutation_entries.py's ORG_EFFECTIVE_ENTRIES, PARKED for the same
+#: uncommitted-tree reason, each MEASURED killed on a working-tree copy; the
+#: family is MK-F rather than that design's MK-E spelling because MK-E01..07
+#: are already reserved for gx-iam-escalation-evidence above).
 REQUIRED_MK_IDS = tuple("""
     MK-P01 MK-P02 MK-P03 MK-P04 MK-P05 MK-P06 MK-P07 MK-P08 MK-P09 MK-P10 MK-P11
     MK-P12 MK-P13 MK-P14 MK-P15 MK-I01 MK-I02 MK-I03 MK-I04 MK-I05 MK-I06 MK-I07
@@ -44,6 +53,10 @@ REQUIRED_MK_IDS = tuple("""
     MK-I19 MK-I20 MK-I21 MK-I22 MK-I23 MK-I24 MK-I25 MK-I26 MK-I27 MK-I28 MK-I29
     MK-S01 MK-S02 MK-E01 MK-E02 MK-E03 MK-E04 MK-E05 MK-E06 MK-E07 MK-O01 MK-O02
     MK-H01 MK-H02 MK-H03 MK-H04 MK-H05 MK-V01 MK-V02 MK-V03 MK-V04 MK-V05
+    MK-D01 MK-D02 MK-D03 MK-D04 MK-D05 MK-D06 MK-D07 MK-D08 MK-D09 MK-D10 MK-D11
+    MK-D12
+    MK-F01 MK-F02 MK-F03 MK-F04 MK-F05 MK-F06 MK-F07 MK-F08 MK-F09 MK-F10 MK-F11
+    MK-F12 MK-F13 MK-F14
     """.split())
 
 #: The ids permitted to COMPUTE AWAITING, and the count. MEASURED EMPTY.
@@ -76,9 +89,26 @@ PENDING_REMOVAL_MAX = 7
 #: name. Covering these families therefore needs a FAMILY KIND and a repin
 #: task that do not exist, which is the owning document's decision and not a
 #: test's.
+#: ``deny`` joins the tf_* modules for the same structural reason: a
+#: ``Removal``'s ``family`` must key ``FAMILY_KINDS`` (which owns no deny
+#: family) and its ``owner`` must be a task of designs/gcp-gx-fixes.md —
+#: ``gx-iam-deny-pair`` is declared in designs/gcp-iam-deny.md, which is
+#: neither. Covering it needs a family kind and an in-document repin task,
+#: which is the owning document's decision and not a test's; the deny
+#: catalogue's own behavioural probe (tests/test_gcp_agentic_deny.py) is what
+#: keeps a gutted checker from collecting greens meanwhile.
+#: ``orgeffective`` joins for the deny block's structural reason, verbatim: a
+#: ``Removal``'s ``family`` must key ``FAMILY_KINDS`` (which owns no
+#: orgeffective family) and its ``owner`` must be a task of
+#: designs/gcp-gx-fixes.md — the effective org-policy fold's owner is neither.
+#: The catalogue's own behavioural assertions (tests/
+#: test_gcp_agentic_orgeffective.py drives the real hook and pins the
+#: blocked/abstained/recorded outcomes by identity) are what keep a gutted
+#: fold from collecting greens meanwhile, exactly as the deny catalogue does.
 UNCOVERED_FAMILIES = frozenset({
-    "benign", "degradation", "evasion", "orgpolicy", "plumbing", "sequence",
-    "snapshot", "sources", "tf_benign", "tf_block", "tf_drift", "tf_plumbing"})
+    "benign", "degradation", "deny", "evasion", "orgeffective", "orgpolicy",
+    "plumbing", "sequence", "snapshot", "sources", "tf_benign", "tf_block",
+    "tf_drift", "tf_plumbing"})
 UNCOVERED_CAPABILITIES = frozenset({
     "armor", "iam_existence", "org_constraint_value", "org_enforcement",
     "tf_claims"})
@@ -171,7 +201,7 @@ def ordering_failure(removal, outcomes) -> str:
 
 def test_the_pinned_tuples_hold_and_the_register_names_no_stranger(graded):
     entries, _, _ = graded
-    assert len(REQUIRED_MK_IDS) == len(set(REQUIRED_MK_IDS)) == 65
+    assert len(REQUIRED_MK_IDS) == len(set(REQUIRED_MK_IDS)) == 91
     ids = {e.id for e in entries}
     assert ids <= set(REQUIRED_MK_IDS), sorted(ids - set(REQUIRED_MK_IDS))
     assert all(e.owner in TASK_IDS and e.must_fail for e in entries)

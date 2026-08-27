@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.parse
 from dataclasses import dataclass
 from functools import cached_property
 from typing import Any, Mapping
@@ -65,18 +66,19 @@ class Unknown:
 
 UNKNOWN = Unknown()
 
-# The seven record-map estate tables: each a name -> record object with its own
+# The eight record-map estate tables: each a name -> record object with its own
 # captured bit, carrying firewall/policy/hierarchy structure the encodings read.
 # Their list-valued fields are order-SEMANTIC (rule/hierarchy order matters), so
 # they normalize to tuples but are NEVER sorted.
 _RECORD_TABLES = ("firewall_rules", "hierarchical_firewall_policies",
                   "cloud_armor_policies", "vpc_sc_perimeters",
-                  "resource_hierarchy", "iam_bindings", "org_policies")
+                  "resource_hierarchy", "iam_bindings", "org_policies",
+                  "iam_deny_policies")
 
 # Every top-level key a snapshot may carry besides captured_at. A typo here
 # ("role" for "roles") must not silently demote a whole category to UNKNOWN,
-# so from_dict rejects unrecognized keys outright. Eighteen in total: five
-# pre-existing vocabularies, six flat vocabularies, seven record tables.
+# so from_dict rejects unrecognized keys outright. Nineteen in total: five
+# pre-existing vocabularies, six flat vocabularies, eight record tables.
 _CATEGORIES = ("roles", "permissions", "principals", "constraints", "resource_types",
                "networks", "subnetworks", "network_tags", "service_accounts",
                "access_levels", "restricted_services", *_RECORD_TABLES)
@@ -326,6 +328,69 @@ def _parse_iam_bindings(value: Any) -> dict[str, dict[str, Any]] | None:
     return table
 
 
+def _parse_iam_deny_policies(value: Any) -> dict[str, dict[str, Any]] | None:
+    """The ``iam_deny_policies`` table: IAM v2 deny policies keyed by the v2
+    REST resource name ``policies/<url-encoded-attachment>/denypolicies/<id>``.
+
+    ``attachment_point`` is REQUIRED and stored DECODED (``projects/acme-prod``,
+    ``folders/123``, ``organizations/456``) so check time never URL-decodes — a
+    second parser — and it is cross-checked against the key's encoded middle
+    segment, REJECTING disagreement: a mismatched key would let the containment
+    walk govern the wrong node (the ``org_policies`` key/record-agreement
+    precedent). Per rule the four principal/permission fields go through
+    :func:`_str_tuple` (order preserved, never sorted) and ``denial_condition``
+    must be absent or an object with a non-empty ``expression`` string — a
+    half-parsed condition would let a conditional deny read as unconditional
+    and fabricate a masked verdict.
+    """
+    table = _record_map(value, "iam_deny_policies")
+    if table is None:
+        return None
+    for key, record in table.items():
+        attachment = record.get("attachment_point")
+        if not isinstance(attachment, str) or not attachment:
+            _reject("iam_deny_policies", key,
+                    "'attachment_point' (non-empty string) is required")
+        segments = key.split("/")
+        if (len(segments) != 4 or segments[0] != "policies"
+                or segments[2] != "denypolicies"
+                or not segments[1] or not segments[3]):
+            _reject("iam_deny_policies", key,
+                    "key must be 'policies/<url-encoded-attachment-point>/"
+                    "denypolicies/<policy-id>'")
+        decoded = urllib.parse.unquote(segments[1])
+        agreed = (attachment,
+                  f"cloudresourcemanager.googleapis.com/{attachment}")
+        if decoded not in agreed:
+            raise ValueError(
+                f"snapshot.iam_deny_policies[{key!r}]: 'attachment_point' "
+                f"({attachment!r}) disagrees with the key's encoded attachment "
+                f"segment ({decoded!r}) — a mismatched key would let the "
+                f"containment walk govern the wrong node")
+        rules = _rule_list(record.get("rules"), "iam_deny_policies", key)
+        validated = []
+        for i, rule in enumerate(rules):
+            rule = dict(rule)
+            for field in ("denied_principals", "exception_principals",
+                          "denied_permissions", "exception_permissions"):
+                rule[field] = _str_tuple(
+                    rule.get(field),
+                    f"iam_deny_policies[{key!r}].rules[{i}].{field}")
+            condition = rule.get("denial_condition")
+            if condition is not None:
+                expression = (condition.get("expression")
+                              if isinstance(condition, Mapping) else None)
+                if not isinstance(expression, str) or not expression:
+                    _reject("iam_deny_policies", key,
+                            f"rules[{i}] 'denial_condition' must be null or an "
+                            f"object with a non-empty 'expression' string, got "
+                            f"{condition!r}")
+            validated.append(rule)
+        record["rules"] = tuple(validated)
+        table[key] = _tuplify(record)
+    return table
+
+
 def _parse_org_policies(value: Any) -> dict[str, dict[str, Any]] | None:
     table = _record_map(value, "org_policies")
     if table is None:
@@ -434,6 +499,11 @@ class GcpSnapshot:
     #: from the ``constraints`` category, which holds the constraint DEFINITION;
     #: both are needed and neither substitutes for the other.
     org_policies: dict[str, dict[str, Any]] | None = None
+    #: IAM v2 deny policies keyed by the v2 REST resource name
+    #: ("policies/<url-encoded-attachment>/denypolicies/<id>"); record:
+    #: attachment_point (decoded node) + rules (denied/exception principals and
+    #: permissions, optional denial_condition).
+    iam_deny_policies: dict[str, dict[str, Any]] | None = None
 
     # -- construction ---------------------------------------------------------
 
@@ -490,6 +560,20 @@ class GcpSnapshot:
                     raise ValueError(f"constraints[{name!r}] needs a 'value_type' string "
                                      f"(e.g. 'boolean' or 'list') — without it wrong-typed "
                                      f"usage cannot be contradicted")
+                # OPTIONAL: the v2 Constraint.constraintDefault. Absent is
+                # honest (the effective-state fold abstains by name); present
+                # with an unrecognized spelling is rejected at parse time,
+                # mirroring the value_type check — a half-recognized default
+                # would be read as "not captured" and silently demote a
+                # decidable fold to an abstention, or worse, tempt a reader
+                # into a guess.
+                if "constraint_default" in record and \
+                        record["constraint_default"] not in ("ALLOW", "DENY"):
+                    raise ValueError(
+                        f"constraints[{name!r}].constraint_default must be "
+                        f"'ALLOW' or 'DENY', got "
+                        f"{record['constraint_default']!r} — omit the key when "
+                        f"the managed default was not captured")
 
         return cls(
             captured_at=captured_at,
@@ -512,6 +596,8 @@ class GcpSnapshot:
             resource_hierarchy=_parse_resource_hierarchy(data.get("resource_hierarchy")),
             iam_bindings=_parse_iam_bindings(data.get("iam_bindings")),
             org_policies=_parse_org_policies(data.get("org_policies")),
+            iam_deny_policies=_parse_iam_deny_policies(
+                data.get("iam_deny_policies")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -709,6 +795,11 @@ class GcpSnapshot:
             return UNKNOWN
         return self.org_policies.get(f"{node}|{constraint}")
 
+    def iam_deny_policy(self, name: str) -> Mapping[str, Any] | None | Unknown:
+        if self.iam_deny_policies is None:
+            return UNKNOWN
+        return self.iam_deny_policies.get(name)
+
     # -- table-wide estate accessors ------------------------------------------
     #
     # UNKNOWN when the category is uncaptured, so an ESTATE check that would sweep
@@ -728,6 +819,17 @@ class GcpSnapshot:
         return tuple(self.hierarchical_firewall_policies[name]
                      for name in sorted(self.hierarchical_firewall_policies)
                      if node in (self.hierarchical_firewall_policies[name].get("attachments") or ()))
+
+    def iam_deny_policies_attached_to(self, node: str) -> tuple[Mapping[str, Any], ...] | Unknown:
+        """The captured deny policies attached at exactly *node* — UNKNOWN when
+        the table was never captured (mirrors
+        :meth:`firewall_policies_attached_to`). Ancestor walks stay in the
+        CHECK, composed from :meth:`hierarchy_node`, keeping this module dumb."""
+        if self.iam_deny_policies is None:
+            return UNKNOWN
+        return tuple(self.iam_deny_policies[name]
+                     for name in sorted(self.iam_deny_policies)
+                     if self.iam_deny_policies[name].get("attachment_point") == node)
 
     # -- hierarchy name resolution --------------------------------------------
 

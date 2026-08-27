@@ -68,6 +68,23 @@ DOCUMENT_CHECK_OWNERS = {
     # current grant); it stays silent unless a proposal both defines a custom
     # role and binds it, which none of these fixtures does.
     "gcp_grounding.iam_scope": {"check_role_scope_diff"},
+    # The allow-x-deny interaction family: the plan arc is silent unless one
+    # plan carries both a deny policy and a binding, the estate arc is silent
+    # unless a grant-bearing proposal expands to an escalation-class
+    # permission (or the deny table is captured), and the wake arc is silent
+    # unless a plan deletes or updates a deny policy — none of which these
+    # fixtures do.
+    "gcp_grounding.iam_deny_checks": {"check_deny_shadow_plan",
+                                      "check_deny_shadow_estate",
+                                      "check_deny_wake_plan"},
+    # The effective org-policy fold: engaged only by a document that carries
+    # org-policy content (an org_policy kind naming an unambiguous constraint,
+    # or a plan with a google_org_policy_policy resource). Over THESE fixtures
+    # it abstains rather than folding — snapshot.json captures neither
+    # org_policies nor resource_hierarchy — and that abstention is pinned in
+    # the expected verdict sets below, exactly as org_checks' own abstention
+    # is.
+    "gcp_grounding.org_effective": {"check_org_effective"},
     # A whole-document check that answered for another domain's document
     # kind would break the verdict-set equality below; that is what pins
     # its silence on these fixtures.
@@ -150,6 +167,10 @@ def _org_bad_expected():
         # gcp_grounding.org_checks IS part of this checkout, so its claim check
         # runs — and abstains, because this snapshot captures no org policies.
         ("unverified", "org_enforcement", "constraints/compute.disableSerialPortAccess"),
+        # gcp_grounding.org_effective likewise: the effective-state fold needs
+        # org_policies and resource_hierarchy, and this snapshot captures
+        # neither, so the document check abstains naming the uncaptured table.
+        ("unverified", "org_effective", str(POLICIES / "org_policy_bad.json")),
     ]
 
 
@@ -180,6 +201,10 @@ def _tf_full_expected():
         ("grounded" if HAVE_Z3 else "unverified", "cel", CEL_GOOD),
         ("grounded", "constraint", "constraints/compute.disableSerialPortAccess"),
         ("grounded", "constraint", "constraints/compute.vmExternalIpAccess"),
+        # The effective-state fold engages (the plan carries two
+        # google_org_policy_policy resources) and abstains: this snapshot
+        # captures neither org_policies nor resource_hierarchy.
+        ("unverified", "org_effective", str(POLICIES / "tf_plan_full.json")),
     ]
 
 

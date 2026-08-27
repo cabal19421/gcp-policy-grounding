@@ -1,0 +1,20 @@
+{
+  "etag": "BwYnDenyCond=",
+  "name": "policies/cloudresourcemanager.googleapis.com%2Fprojects%2Facme-prod/denypolicies/maintenance-window",
+  "rules": [
+    {
+      "denyRule": {
+        "denialCondition": {
+          "expression": "request.time < timestamp('2027-01-01T00:00:00Z')",
+          "title": "outside business hours"
+        },
+        "deniedPermissions": [
+          "iam.googleapis.com/serviceAccounts.getAccessToken"
+        ],
+        "deniedPrincipals": [
+          "principalSet://goog/public:all"
+        ]
+      }
+    }
+  ]
+}

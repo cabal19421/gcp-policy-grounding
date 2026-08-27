@@ -1,0 +1,52 @@
+{
+  "format_version": "1.2",
+  "planned_values": {
+    "root_module": {
+      "resources": [
+        {
+          "address": "google_iam_deny_policy.guardrail",
+          "mode": "managed",
+          "name": "guardrail",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "type": "google_iam_deny_policy",
+          "values": {
+            "name": "block-sa-tokens",
+            "parent": "cloudresourcemanager.googleapis.com%2Fprojects%2Facme-prod",
+            "rules": [
+              {
+                "deny_rule": [
+                  {
+                    "denied_permissions": [
+                      "iam.googleapis.com/serviceAccounts.getAccessToken"
+                    ],
+                    "denied_principals": [
+                      "principalSet://goog/public:all"
+                    ],
+                    "exception_principals": [
+                      "principal://iam.googleapis.com/projects/-/serviceAccounts/ci@acme-prod.iam.gserviceaccount.com"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "address": "google_project_iam_binding.ci_token_creator",
+          "mode": "managed",
+          "name": "ci_token_creator",
+          "provider_name": "registry.terraform.io/hashicorp/google",
+          "type": "google_project_iam_binding",
+          "values": {
+            "members": [
+              "serviceAccount:ci@acme-prod.iam.gserviceaccount.com"
+            ],
+            "project": "acme-prod",
+            "role": "roles/iam.serviceAccountTokenCreator"
+          }
+        }
+      ]
+    }
+  },
+  "terraform_version": "1.9.5"
+}
