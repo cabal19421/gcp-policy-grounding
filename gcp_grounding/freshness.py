@@ -258,6 +258,23 @@ def _annotate(existing: str, addition: str) -> str:
 _DEMOTED = "every category it supplies is demoted to 'uncaptured'"
 
 
+def _named(source_id: str, origin: str) -> str:
+    """``source 'X' (Y)`` — the source and where it was read from.
+
+    The parenthesis is dropped when the origin is the SOURCE ID SPELLED AGAIN,
+    which is what a source loaded straight from a path records: ``source
+    'infra/prod/terraform.tfstate' (infra/prod/terraform.tfstate)`` says one
+    thing twice and pushes the fact the verdict is actually about off the end
+    of the line. An origin that differs is the case the echo exists for and is
+    still printed, and a source with no origin at all still says so — "nobody
+    recorded where this came from" is not the same as "it came from itself".
+    """
+    if not origin:
+        return f"source '{source_id}' (no origin recorded)"
+    return f"source '{source_id}'" if origin == source_id \
+        else f"source '{source_id}' ({origin})"
+
+
 # -- who supplies what --------------------------------------------------------
 
 
@@ -313,11 +330,11 @@ def check_freshness(ledger: SourceLedger, *, now: datetime,
     verdicts: list[Verdict] = []
     for source_id in sorted(ledger.sources):
         record = ledger.sources[source_id]
-        origin = record.origin or "no origin recorded"
+        named = _named(source_id, record.origin)
         if not record.captured_at:
             verdicts.append(Verdict(
                 "unverified", "staleness", source_id, 0,
-                f"source '{source_id}' ({origin}) declares no capture time, so its "
+                f"{named} declares no capture time, so its "
                 f"age cannot be checked against the {limit} freshness limit - "
                 f"{_DEMOTED}"))
             continue
@@ -325,7 +342,7 @@ def check_freshness(ledger: SourceLedger, *, now: datetime,
         if captured is None:
             verdicts.append(Verdict(
                 "unverified", "staleness", source_id, 0,
-                f"source '{source_id}' ({origin}) records capture time "
+                f"{named} records capture time "
                 f"'{record.captured_at}', which is not an aware ISO-8601 timestamp, "
                 f"so its age cannot be checked against the {limit} freshness limit - "
                 f"a naive stamp is refused rather than assumed UTC; {_DEMOTED}"))
@@ -335,7 +352,7 @@ def check_freshness(ledger: SourceLedger, *, now: datetime,
             continue
         verdicts.append(Verdict(
             "unverified", "staleness", source_id, 0,
-            f"source '{source_id}' ({origin}) was captured at "
+            f"{named} was captured at "
             f"'{record.captured_at}', {_describe(age)} before now, which is past "
             f"the {limit} freshness limit - {_DEMOTED}"))
     return tuple(verdicts)
@@ -420,7 +437,7 @@ def state_supersession(
                 and found_lineage != record.lineage:
             verdicts.append(Verdict(
                 "unverified", "staleness:serial", source_id, 0,
-                f"source '{source_id}' ({record.origin}) was captured from tfstate "
+                f"{_named(source_id, record.origin)} was captured from tfstate "
                 f"lineage '{record.lineage}', but the file on disk carries lineage "
                 f"'{found_lineage}' - a different lineage is a different state "
                 f"history, so this capture does not describe it; {_DEMOTED}"))
@@ -432,7 +449,7 @@ def state_supersession(
         if found_serial > record.serial:
             verdicts.append(Verdict(
                 "unverified", "staleness:serial", source_id, 0,
-                f"source '{source_id}' ({record.origin}) was captured at tfstate "
+                f"{_named(source_id, record.origin)} was captured at tfstate "
                 f"serial {record.serial}, but the file on disk is at serial "
                 f"{found_serial} - the state has been applied {found_serial - record.serial} "
                 f"time(s) since this capture, so it is superseded; {_DEMOTED}"))

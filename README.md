@@ -1353,7 +1353,8 @@ decision recap: DENIED (exit 1) — because:
   ⚠ [sec:vpc_firewall] masked-allow-only-known-domains: refuted by
       proposed_firewall_rules[1] (google_compute_firewall.allow_rdp_broad)
       action='allow' direction='INGRESS' … name='allow-rdp-broad' …
-      source_range='10.198.52.0/28' source_range_mask='255.255.255.240' …
+      protocol='tcp' source_range='10.198.52.0/28'
+      source_range_mask='255.255.255.240'
 (the full narrative is above, before the report)
 
 summary — what just happened:
@@ -1919,14 +1920,14 @@ permission) pair verbatim:
 ```text
 decision recap: DENIED (exit 1) — because:
   ⚠ [sec:iam] every-deny-covers-token-creation: refuted by deny_rules[0]
-      (google_iam_deny_policy.guard_token_mint) condition=''
+      (google_iam_deny_policy.guard_token_mint)
       denied_principal='principalSet://goog/public:all' has_condition=False
       has_principal_exceptions=True
-      permission='iam.serviceAccounts.getAccessToken' policy='' rule_index=0
+      permission='iam.serviceAccounts.getAccessToken' rule_index=0
   ⚠ [sec:iam] no-principal-threads-the-guardrail: refuted by
       deny_rule_exceptions[0] (google_iam_deny_policy.guard_token_mint)
       exception_principal='principal://iam.googleapis.com/projects/-/serviceAccounts/payroll-ci@acme-pay-prod.iam.gserviceaccount.com'
-      policy='' rule_index=0
+      rule_index=0
 (the full narrative is above, before the report)
 
 summary — what just happened:

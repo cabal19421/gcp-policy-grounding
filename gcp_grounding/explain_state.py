@@ -412,7 +412,8 @@ def _source_block(ledger: Any, records: Sequence[Any],
         for note in _notes(record):
             lines.append(f"    note: {note}")
     lines.append("  coverage:")
-    lines.extend(f"    {line}" for line in provenance.summarize(ledger).splitlines())
+    lines.extend(f"    {line}"
+                 for line in provenance.summarize(ledger, embed=True).splitlines())
     return lines
 
 
