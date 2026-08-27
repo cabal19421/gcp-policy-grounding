@@ -398,6 +398,22 @@ def test_refute_promise_contradicted_on_open_and_grounded_on_good():
     assert witness["collection"] == "proposed_firewall_rules"
     assert witness["record"]["port"] == 22
 
+    # THE RENDER IS TIGHTENED ONCE, AT MINT TIME, because every surface that
+    # reprints a refutation reprints this one string. The protocol reads as its
+    # name — the row stores the IANA number the solver needs, and 'protocol=6'
+    # asks its reader to go and look 6 up — and the "no tag" empty strings the
+    # cross product mints for a rule that names no tag are dropped: they are
+    # not what the promise refused over, and two of them push the fields that
+    # are off the end of the line.
+    assert "protocol='tcp'" in opened.message
+    assert "protocol=6" not in opened.message
+    assert "source_tag=" not in opened.message
+    assert "target_tag=" not in opened.message
+    # The RECORD is untouched — only its rendering shrank.
+    assert witness["record"]["protocol"] == 6
+    assert witness["record"]["source_tag"] == ""
+    assert witness["record"]["target_tag"] == ""
+
 
 def test_polarity_mirror_flips_the_buckets():
     """The same AST under assert_satisfiable yields the opposite verdict."""

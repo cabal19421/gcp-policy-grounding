@@ -524,7 +524,15 @@ def test_origins_path_is_the_single_definition_of_where_the_sidecar_lives():
 # -- the coverage summary -----------------------------------------------------
 
 
-def test_summarize_has_one_line_per_declared_category_and_the_census():
+def test_summarize_has_one_line_per_declared_category_and_only_the_census_it_has():
+    """A count of ZERO prints nothing.
+
+    ``artifacts: 0`` / ``unrecognized terraform types: 0`` / ``deliberately
+    unmapped types: 0`` are three lines that say "there were none" — three
+    lines a reader scrolls past to reach the rows that carry content, on every
+    run of a capture that mapped everything it saw. The disputes tail has
+    always worked this way; these three now do too.
+    """
     ledger, _ = _firewall_ledger()
     rendered = provenance.summarize(ledger)
     lines = rendered.splitlines()
@@ -533,9 +541,43 @@ def test_summarize_has_one_line_per_declared_category_and_the_census():
         matching = [line for line in lines if line.strip().startswith(category)]
         assert len(matching) == 1, f"{category} should have exactly one line"
         assert "partial" in matching[0]
-    assert "unrecognized terraform types" in rendered
-    assert "deliberately unmapped types" in rendered
     assert provenance.SCHEMA in rendered
+
+    assert not ledger.artifacts and ledger.census.total() == 0
+    for tail in ("artifacts:", "unrecognized terraform types:",
+                 "deliberately unmapped types:"):
+        assert tail not in rendered, f"{tail!r} said nothing and printed anyway"
+
+    # And a census with something in it is untouched: the heading, its count
+    # and every row.
+    builder = provenance.LedgerBuilder()
+    builder.source("state", "tfstate", scope="partial")
+    builder.declare("firewall_rules", scope="partial", source_kinds=("tfstate",))
+    builder.saw_unmapped("google_pubsub_topic", 2)      # nobody mapped it
+    builder.saw_unmapped("google_storage_bucket")       # deliberately unmapped
+    counted = provenance.summarize(builder.build())
+    assert "unrecognized terraform types: 1" in counted
+    assert "google_pubsub_topic x2" in counted
+    assert "deliberately unmapped types: 1" in counted
+    assert "google_storage_bucket x1" in counted
+
+
+def test_summarize_embeds_without_restating_the_source_rows():
+    """``embed=True`` is for a caller that already printed its own source
+    lines — ``explain_state`` prints richer ones — so the table's poorer copy
+    of them goes, and nothing else does."""
+    ledger, _ = _firewall_ledger()
+    full = provenance.summarize(ledger).splitlines()
+    embedded = provenance.summarize(ledger, embed=True).splitlines()
+
+    source_rows = [line for line in full if line.startswith("  source ")]
+    assert source_rows, "the full render must still carry them"
+    assert not [line for line in embedded if line.startswith("  source ")]
+    assert embedded == [line for line in full if line not in source_rows], \
+        "embedding drops the source rows and changes nothing else"
+    for kept in (f"source coverage ({provenance.SCHEMA})", "  merged captured_at: ",
+                 "  firewall_rules"):
+        assert any(line.startswith(kept) for line in embedded)
 
 
 def test_summarize_says_so_when_nothing_was_declared():

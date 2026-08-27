@@ -483,11 +483,18 @@ class LoadedSource:
         :func:`load_current` always supplies and which ``merge`` prefers, so
         this flattened claim never licenses a category the ledger described
         differently.
+
+        NO NOTE. The record used to carry ``"<kind> source loaded in memory"``,
+        which every explain surface then printed under the source line — and
+        "loaded in memory" is what happened to EVERY source in the list, so it
+        distinguished nothing while crowding out the notes that do (the
+        terraform ``partial`` cap, the state serial and lineage). The kind and
+        the origin the sentence restated are already the line's own first two
+        columns.
         """
         return SourceRecord(source_id=self.source_id, kind=self.fidelity(),
                             origin=self.path, captured_at=self.captured_at,
-                            scope=self.declared_scope(),
-                            note=f"{self.kind} source loaded in memory")
+                            scope=self.declared_scope())
 
     def category_scopes(self) -> dict[str, str]:
         """``category → scope``, so the merge composes THIS source's real

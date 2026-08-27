@@ -85,7 +85,7 @@ from __future__ import annotations
 import re
 import urllib.parse
 from dataclasses import dataclass
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 from . import evidence, iam_deny
 from .claims import PUBLIC_PRINCIPALS
@@ -715,6 +715,21 @@ def _classified(permission: str) -> str:
             else permission)
 
 
+def _classified_list(permissions: Sequence[str]) -> str:
+    """A permission LIST rendered for one finding, capped like every other list
+    here. When every permission carries the SAME escalation class the class is
+    named once at the end ("a, b (impersonation)") rather than repeated after
+    each name; a mixed list keeps its per-permission tags, because factoring a
+    class the whole list does not share would attribute it to permissions that
+    never earned it."""
+    classes = {ESCALATION_PERMISSIONS.get(p) for p in permissions}
+    if len(classes) == 1:
+        shared = classes.pop()
+        if shared:
+            return f"{_capped(permissions)} ({shared})"
+    return _capped(_classified(p) for p in permissions)
+
+
 def _unverified(target: str, message: str) -> Verdict:
     return Verdict("unverified", KIND, target, 0, message)
 
@@ -1077,6 +1092,14 @@ def _wake_findings(old_rules: list, new_rules: list, node: str, where: str,
     pairs, undecided = _estate_grant_pairs(node, snapshot)
     verdicts: list = []
     woken = 0
+    #: ONE finding per (grant, deny-rule), keyed ``(binding, member, rule,
+    #: status)``: a role expands to many permissions, and minting a verdict per
+    #: permission printed the same sentence about the same grant several times
+    #: over. The permissions are joined into the finding instead. The status is
+    #: part of the key because an escalation-class permission and an ordinary
+    #: one woken by the same rule are a block and a warning, and joining those
+    #: would either promote or demote one of them.
+    grouped: dict[tuple[str, str, int, str], list[str]] = {}
     for key, member, permission in pairs:
         old_state, old_reason, old_rule = _pair_covered(member, permission,
                                                         old_rules, snapshot)
@@ -1096,18 +1119,21 @@ def _wake_findings(old_rules: list, new_rules: list, node: str, where: str,
         escalation_class = ESCALATION_PERMISSIONS.get(permission)
         public = member in PUBLIC_PRINCIPALS
         status = "contradicted" if (escalation_class or public) else "grounded"
+        grouped.setdefault((key, member, old_rule, status), []).append(permission)
+    for (key, member, old_rule, status), permissions in grouped.items():
+        rendered = _classified_list(permissions)
         if status == "contradicted":
             verdicts.append(Verdict(
                 "contradicted", KIND, where, 0,
                 f"{where}: removing or narrowing rule {old_rule} wakes the "
-                f"dormant grant of {_classified(permission)} to {member} "
+                f"dormant grant of {rendered} to {member} "
                 f"({key}) — the deny policy was the only thing keeping a "
                 f"known escalation path inert"))
         else:
             verdicts.append(Verdict(
                 "grounded", KIND, where, 0,
                 f"{where}: warning — removing or narrowing rule {old_rule} "
-                f"wakes the dormant grant of {permission} to {member} "
+                f"wakes the dormant grant of {rendered} to {member} "
                 f"({key}); the removal may be intended — consequence for "
                 f"specific permissions belongs to the promise layer"))
     for reason in sorted(set(undecided)):
