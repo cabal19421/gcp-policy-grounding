@@ -640,7 +640,9 @@ def test_the_json_document_keeps_two_space_indent_and_real_unicode(
     monkeypatch.undo()
     assert code == 0
     assert "sec" not in json.loads(out)
-    assert "promises in force" not in err
+    # The sec BLOCK's own header — the closing summary restates the same field
+    # as a labelled row, so the bare phrase no longer tells the two apart.
+    assert "promises in force (" not in err
     missing = [r for r in harness_records
                if "sec evidence channel is unavailable" in r.getMessage()]
     # Both users of the channel say so, and truthiness is the assertion:
