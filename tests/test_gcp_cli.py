@@ -306,7 +306,9 @@ def test_explain_fails_open_on_an_unparsable_file(capsys, tmp_path):
                           "--snapshot", str(SNAPSHOT), "--explain")
     assert code == 0  # the unparsable file is unverified, not a crash
     if HAVE_Z3:
-        assert "no constraints were generated" in err
+        # Nothing could be read, so no check reached the solver and the census
+        # section is absent entirely — see the census module's own tests.
+        assert "z3 constraints generated this run" not in err
     else:
         assert "z3 is not available" in err
 
@@ -534,7 +536,9 @@ def test_explain_routes_each_document_kind_to_its_own_extractor(
                            str(_write(tmp_path, name, doc)),
                            "--snapshot", str(SNAPSHOT), "--explain")
         assert "[cel]" not in err
-        assert "no z3 constraints were generated this run" in err
+        # Neither kind mints a CEL claim and neither reaches a census family,
+        # so the section is omitted rather than borrowing the arm above.
+        assert "z3 constraints generated this run" not in err
 
     def boom(doc):
         raise RuntimeError("the plan extractor exploded")

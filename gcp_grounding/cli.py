@@ -320,11 +320,19 @@ for ``--format json``), in reading order:
   carrying the source sentence with its file:line, the s-expression and the
   two pinned witnesses, plus one ``not enforcing`` line per promise that
   never compiled;
-- then the reference blocks, unchanged: the z3 constraints this run generated
-  — the translated formula per ``cel`` condition and the new⊈old
-  satisfiability assertion when a ``--baseline`` comparison ran, re-derived
-  deterministically so the dumped formulas are exactly the ones the checks
-  decided — and the state block.
+- then the reference blocks: the SOLVER CENSUS — one line per formula family
+  this run executed, in family and then anchor order: the obligation of every
+  compiled promise that reached the solver, the translated formula per ``cel``
+  condition, the new⊈old satisfiability assertion when a ``--baseline``
+  comparison ran, and the assembled packet assertion of every firewall and
+  Cloud Armor check that built one. The promise and packet formulas are the ones
+  the executing checks built, recorded where they were built (see
+  :mod:`gcp_grounding.solver_census`); the other two are re-derived from the
+  document, which is all either one reads. THE WHOLE SECTION IS OMITTED when
+  z3 is available and no family ran — a header over nothing says less than the
+  narrative around it already does — while the z3-unavailable line stays,
+  because there it explains every degraded verdict above it. Then the state
+  block.
 
 The narrative prints BEFORE the stdout report, so the combined output reads
 top to bottom as one story ending in the report itself. A document the
@@ -445,7 +453,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from . import (discovery, drift, engine, explain_state, freshness, gate, merge,
-               provenance, provider_schema, redact, sources)
+               provenance, provider_schema, redact, solver_census, sources)
 # Imported by NAME rather than as the module, because ``baseline`` is also the
 # name of a CLI flag and of more than one local here — a shadowed module is a
 # NameError waiting for the one branch nobody exercised.
@@ -704,7 +712,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="report format on stdout (default: text)")
     verify.add_argument(
         "--explain", action="store_true",
-        help="dump the z3 constraints generated this run to stderr")
+        help="write the decision narrative to stderr, including a census of "
+             "every formula family this run put to the solver")
     verify.add_argument(
         "--hook", action="store_true",
         help="read an editor-agent PostToolUse event JSON on stdin and ground "
@@ -1185,6 +1194,9 @@ class _Ground:
     current: Any = None
     result: Any = None
     problem: str | None = None
+    #: The solver census this pass recorded, on an ``--explain`` run only —
+    #: None everywhere else, where nothing was recording.
+    census: Any = None
 
 
 def _state_configured(settings: discovery.Settings) -> bool:
@@ -1465,12 +1477,23 @@ def _ground(args: argparse.Namespace, settings: discovery.Settings,
     resolution and a ``--provider-schema`` FLAG would be silently ignored.
     Restored in a ``finally`` so one in-process ``main`` call never leaks its
     answer into the next (the test suite invokes ``main`` repeatedly).
+
+    THE SOLVER CENSUS RECORDS ONLY ON AN ``--explain`` RUN, around this same
+    one grounding call, because that is the only run that renders it. A run
+    without the flag records nothing and is handed the real z3 module by
+    identity, so what it decides — and every byte it prints — is what it always
+    was.
     """
     previous = provider_schema.activate(
         provider_schema.runtime_from_settings(settings))
     try:
-        return _ground_routed(args, settings, snapshot, notes, path=path,
-                              rules=rules, carried=carried)
+        if not getattr(args, "explain", False):
+            return _ground_routed(args, settings, snapshot, notes, path=path,
+                                  rules=rules, carried=carried)
+        with solver_census.recording() as census:
+            ground = _ground_routed(args, settings, snapshot, notes, path=path,
+                                    rules=rules, carried=carried)
+        return dataclasses.replace(ground, census=census)
     finally:
         provider_schema.activate(previous)
 
@@ -1940,8 +1963,14 @@ def _narrative_lines(path: str, baseline: str | None, ground: _Ground,
                      carried, *, hook: bool) -> list[str]:
     """The ``--explain`` story, in reading order: what was proposed, the
     decision and its reasons, the promises in force, then the reference blocks
-    (the z3 constraints and the state provenance) exactly as they have always
-    rendered. One blank line separates the narrative sections."""
+    (the solver census and the state provenance) exactly where they have always
+    rendered. One blank line separates the narrative sections.
+
+    The census is the run's own — :func:`_ground` recorded it around this run's
+    grounding pass — and is the whole of that block: a run that executed no
+    formula contributes no lines here, and the state provenance follows the one
+    separating blank line either way.
+    """
     lines = _proposed_lines(path)
     lines.append("")
     lines.extend(_decision_lines(ground.report, hook=hook))
@@ -1950,7 +1979,7 @@ def _narrative_lines(path: str, baseline: str | None, ground: _Ground,
         lines.append("")
         lines.extend(sec)
     lines.append("")
-    lines.extend(_explain_lines(path, baseline))
+    lines.extend(_explain_lines(path, baseline, ground.census, rules))
     lines.extend(_state_explain_lines(ground, settings, ""))
     return lines
 
@@ -4048,39 +4077,122 @@ def _summary_section_lines(path: str, report: GroundingReport,
     return lines
 
 
-# -- --explain: the z3 constraints generated this run --------------------------
+# -- --explain: the solver census ---------------------------------------------
+
+#: Where a rendered s-expression is cut, ellipsis included. Long enough to show
+#: what a formula quantifies over and how it is shaped, short enough that one
+#: formula stays one readable line.
+_CENSUS_SEXPR_CAP = 160
 
 
-def _explain_lines(file: str, baseline: str | None) -> list[str]:
-    """Re-derive the z3 formulas the constraint layer built for *file* (and
-    *baseline*, if the subset comparison ran) and render their s-expressions."""
+def _explain_lines(file: str, baseline: str | None, census: Any = None,
+                   rules: Any = ()) -> list[str]:
+    """The solver census: every formula family this run executed, one line each.
+
+    Two sources, and neither of them re-guesses a formula a check decided:
+
+    * the CEL translations and the ``--baseline`` subset assertion, re-derived
+      from the document through the constraint layer's own encoders exactly as
+      they always have been (a document is all either one reads, so re-deriving
+      is the same construction, not a second one);
+    * *census* — the obligations and packet assertions the run's own checks
+      built, recorded where they were built by
+      :mod:`gcp_grounding.solver_census`, because nothing outside those checks
+      can see them.
+
+    THE WHOLE SECTION IS OMITTED when z3 is available and no family ran at all:
+    with nothing to enumerate, a header and a placeholder say only that this run
+    had no solver work in it, which the rest of ``--explain`` already says
+    better. A family that ran and produced no constraint — a condition outside
+    the supported CEL subset, a baseline the subset comparison is not defined
+    over — keeps its existing line, because that line is what the run has to say
+    about the verdict it abstained with. The z3-unavailable line stays for the
+    same reason: there it is the explanation for every degraded verdict above.
+
+    Ordered by family and then by anchor, so two runs over the same inputs print
+    the same lines in the same order.
+    """
     solver = get_solver()
     z3 = _z3_module(solver)
-    lines = [f"z3 constraints generated this run [{solver.backend}]:"]
+    header = f"z3 constraints generated this run [{solver.backend}]:"
     if z3 is None:
-        lines.append("  (z3 is not available — no constraints were generated; "
-                     "cel and subset checks degraded to 'unverified')")
-        return lines
+        return [header,
+                "  (z3 is not available — no constraints were generated; "
+                "cel and subset checks degraded to 'unverified')"]
+    rows: list[tuple[str, str, str]] = []  # (family, anchor, line)
     doc, error = _read_json(file)
-    if error is not None:
-        lines.append(f"  ({error} — no constraints were generated)")
-        return lines
-    kind = detect_kind(doc)
-    for claim in _claims_for_explain(doc, kind):
-        if claim.kind != "cel":
-            continue
-        try:
-            formula = _CelToZ3(z3, claim.value).translate()
-        except UnsupportedCel as exc:
-            lines.append(f"  [cel] {claim.location}: no constraint — CEL outside "
-                         f"the supported subset ({exc})")
-        else:
-            lines.append(f"  [cel] {claim.location}: {formula.sexpr()}")
-    if baseline is not None and kind == "iam_policy":
-        lines.append(_explain_subset(z3, doc, baseline))
-    if len(lines) == 1:
-        lines.append("  (no z3 constraints were generated this run)")
-    return lines
+    if error is None:
+        kind = detect_kind(doc)
+        for claim in _claims_for_explain(doc, kind):
+            if claim.kind != "cel":
+                continue
+            anchor = str(claim.location)
+            try:
+                formula = _CelToZ3(z3, claim.value).translate()
+            except UnsupportedCel as exc:
+                rows.append(("cel", anchor,
+                             f"  [cel] {anchor}: no constraint — CEL outside "
+                             f"the supported subset ({exc})"))
+            else:
+                rows.append(("cel", anchor,
+                             f"  [cel] {anchor}: {formula.sexpr()}"))
+        if baseline is not None and kind == "iam_policy":
+            rows.append(("subset", "iam-policy",
+                         _explain_subset(z3, doc, baseline)))
+    rows.extend(_census_rows(census, rules))
+    if not rows:
+        return []
+    rows.sort(key=lambda row: (row[0], row[1]))
+    return [header] + [line for _family, _anchor, line in rows]
+
+
+def _census_rows(census: Any, rules: Any) -> list[tuple[str, str, str]]:
+    """``(family, anchor, line)`` for every formula the run's checks recorded.
+
+    A promise's line names the mode its obligation was built under and the
+    collections its formula was grounded over; a packet assertion's names the
+    rule address (or the document, for a check that decides about no single
+    claim) the check filed it against. The s-expression is the recorded one,
+    cut at :data:`_CENSUS_SEXPR_CAP`.
+    """
+    rows: list[tuple[str, str, str]] = []
+    for entry in census.entries() if census is not None else ():
+        label = entry.anchor
+        if entry.family.startswith("sec:"):
+            label = f"{entry.anchor} ({_promise_shape(rules, entry)})"
+        rows.append((entry.family, entry.anchor,
+                     f"  [{entry.family}] {label}: {_capped(entry.sexpr)}"))
+    return rows
+
+
+def _promise_shape(rules: Any, entry: Any) -> str:
+    """``<mode> over <collections>`` for the promise *entry* was recorded for.
+
+    The mode is the one the obligation was actually built under; the collections
+    come from the promise's own ast. A checkout without the sec layer, or a
+    promise no longer in the rule set, costs the collections and nothing else.
+    """
+    try:
+        sec_ast = importlib.import_module("gcp_grounding.sec_ast")
+        for rule in rules or ():
+            promise = getattr(rule, "promise", None)
+            if getattr(promise, "id", None) != entry.anchor:
+                continue
+            used = tuple(sec_ast.collections_used(promise.ast))
+            if used:
+                return f"{entry.detail} over {', '.join(used)}"
+            break
+    except Exception:  # noqa: BLE001 — the census never costs a graded run
+        logger.debug("--explain: a promise's collections could not be named",
+                     exc_info=True)
+    return entry.detail
+
+
+def _capped(sexpr: str) -> str:
+    """*sexpr* cut to :data:`_CENSUS_SEXPR_CAP` characters, ellipsis included."""
+    if len(sexpr) <= _CENSUS_SEXPR_CAP:
+        return sexpr
+    return sexpr[:_CENSUS_SEXPR_CAP - 1] + "…"
 
 
 def _explain_subset(z3: Any, doc: Mapping[str, Any], baseline: str) -> str:

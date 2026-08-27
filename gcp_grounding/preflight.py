@@ -55,7 +55,7 @@ import json
 import os
 from typing import Any, Mapping
 
-from . import registry
+from . import registry, solver_census
 from .claims import iam_policy_claims, org_policy_claims
 from .constraints import check_cel, check_constraint_value, check_policy_subset
 from .core.log import get_logger
@@ -351,7 +351,7 @@ def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
                 # None means "not applicable to this document kind" — adding
                 # nothing is the abstain-flood fix; a rule that should have
                 # decided and could not returns an `unverified` Verdict instead.
-                v = rule.evaluate(rule_ctx)
+                v = solver_census.evaluate_rule(rule, rule_ctx)
                 if v is not None:
                     report.add(v)
 

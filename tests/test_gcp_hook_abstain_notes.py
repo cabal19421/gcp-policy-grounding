@@ -271,26 +271,34 @@ def test_notes_name_the_absent_solver(policies_dir, estate_snapshot_path,
         assert_passed(control)
 
 
-def test_explain_and_notes_do_not_truncate_each_other(abstain_document,
-                                                      estate_snapshot_path):
+def test_explain_and_notes_do_not_truncate_each_other(policies_dir,
+                                                      snapshot_variant):
     """Both blocks write to stderr; both must arrive whole.
 
     ``--explain`` prints before the ``report.ok`` check and the notes print
     inside it, so the explain block comes first — and the assertions pin both
     of its lines, not just its header, so a truncation of either block is
     visible here.
+
+    THE SUBJECT IS A DOCUMENT THAT REACHES THE SOLVER, over a snapshot missing
+    ``principals`` so it abstains as well: the ``--explain`` census enumerates
+    the formulas a run executed and is omitted outright when a run executed
+    none, so one of the four unreadable documents above would leave this with
+    only one block to compare.
     """
-    path = abstain_document("garbled")
-    outcome = run_hook(hook_event(path), snapshot=estate_snapshot_path,
+    outcome = run_hook(hook_event(policies_dir / "iam_policy_good.json"),
+                       snapshot=snapshot_variant(drop=["principals"]),
                        extra_argv=("--explain", "--abstain-notes"))
     assert outcome.exit_code == 0, f"neither channel blocks\n{outcome}"
     assert outcome.stdout == "", f"both channels are stderr-only\n{outcome}"
     assert "z3 constraints generated this run" in outcome.stderr, (
         f"expected the --explain block\n{outcome}")
-    assert "no constraints were generated" in outcome.stderr, (
+    body = ("  [cel] bindings[2].condition.expression: " if HAVE_Z3
+            else "z3 is not available")
+    assert body in outcome.stderr, (
         f"expected the --explain block's body, not only its header\n{outcome}")
     assert HEADER in outcome.stderr, f"expected the abstain block\n{outcome}"
-    assert ABSTAIN_REASONS["garbled"] in outcome.stderr, (
+    assert "snapshot did not capture principals" in outcome.stderr, (
         f"expected the abstain block's body, not only its header\n{outcome}")
     assert outcome.stderr.index("z3 constraints generated this run") < \
         outcome.stderr.index(HEADER), (

@@ -62,7 +62,7 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Mapping
 
-from . import evidence
+from . import evidence, solver_census
 from .core.log import get_logger
 from .core.report import Verdict
 
@@ -305,6 +305,18 @@ def _label(fn: Any) -> str:
     return f"{module}.{name}"
 
 
+def _census_anchor(ctx: CheckContext, args: "tuple[Any, ...]") -> str:
+    """What a census entry from this invocation is filed under: the address of
+    the claim under check — its own value, which is the identity the check's
+    verdicts carry, falling back to where in the document it was read — or the
+    document itself for a whole-document or pair check, which decide about no
+    single claim."""
+    subject = args[0] if args else None
+    value = getattr(subject, "value", None)
+    location = getattr(subject, "location", None)
+    return str(value or location or ctx.source or "")
+
+
 def _as_verdicts(result: Any) -> "list[Verdict]":
     """Normalise a provider return (``None`` / one ``Verdict`` / a sequence)."""
     if result is None:
@@ -428,7 +440,8 @@ def _invoke(fn: Any, ctx: CheckContext, *args: Any,
     one keeps owning it.
     """
     try:
-        with evidence.ledger() as led:
+        with evidence.ledger() as led, solver_census.check_scope(
+                _label(fn), _census_anchor(ctx, args)):
             verdicts = _guarded_call(fn, ctx, *args)
     except evidence.NotEvaluated as exc:
         logger.debug("provider %s abstained on %s — %s", _label(fn), exc.what,

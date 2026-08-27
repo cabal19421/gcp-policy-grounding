@@ -2128,9 +2128,11 @@ state" above) — the same inputs, written once, so the command line shrinks to
 the proposal alone. The demo spells them out because the mapping *is* the
 lesson.
 
-Useful flags on `verify-policy`: `--explain` (the decision narrative, the z3
-constraints built this run, the state block, and the closing `summary — what
-just happened:` naming every input with the layer that supplied it and every
+Useful flags on `verify-policy`: `--explain` (the decision narrative, a census
+of every formula family this run put to the solver — one line each, under
+`z3 constraints generated this run`, and absent altogether on a run that solved
+nothing — the state block, and the closing `summary — what just happened:`
+naming every input with the layer that supplied it and every
 proposal block in one English sentence),
 `--format json` (the stable machine report), `--abstain-notes`
 (surface what the gate could NOT decide on an otherwise-passing run). To

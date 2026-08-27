@@ -48,6 +48,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Optional
 
+from . import solver_census
 from .claims import Claim
 from .core.log import get_logger
 from .core.report import Verdict
@@ -65,8 +66,16 @@ class UnsupportedCel(Exception):
 
 def _z3_module(solver: ConstraintSolver):
     """The z3 module the solver's own detection imported — or None on the
-    builtin backend. Reuses core.solver's detection; no second import path."""
-    return getattr(solver, "_z3", None)
+    builtin backend. Reuses core.solver's detection; no second import path.
+
+    THE ONE FUNNEL every check gets its z3 through, which is why the solver
+    census is applied here: inside a check the census is recording,
+    :func:`gcp_grounding.solver_census.instrument` hands back a module that
+    records the assertion each solver is asked to decide. Outside one — every
+    run without ``--explain``, and every check outside the census families —
+    this is the real module by identity, exactly as before.
+    """
+    return solver_census.instrument(getattr(solver, "_z3", None))
 
 
 # -- (a) CEL condition satisfiability -----------------------------------------
