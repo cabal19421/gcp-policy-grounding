@@ -402,36 +402,50 @@ def test_a_rest_policys_members_are_joined_and_its_condition_noted(capsys):
 
 
 def test_a_deny_policy_names_its_permissions_principals_and_carve_outs(capsys):
-    """The deny shape: what is denied, to whom, and who is exempted — the
-    exemption read from the ``deny_rule_exceptions`` rows, joined to the rule by
-    the same (block, rule index) the two collections share."""
+    """Scenario 6a, end to end: what is denied, to whom, and who is exempted —
+    the exemption read from the ``deny_rule_exceptions`` rows, joined to the
+    rule by the same (block, rule index) the two collections share.
+
+    The arc's plan carries planned values and no ``resource_changes``, so it
+    states no change action and the guardrail reads as the creation it is: a
+    "creates" here is the document's own silence about actions, never a guess
+    about one. The same carve-out told by a plan that STATES the update reads as
+    the delta instead (see the change-story block below).
+    """
     plan = EXAMPLES / "terraform-denypolicy" / "plan_threading.json"
     _code, _out, err = invoke(capsys, "verify-policy", "--proposal", str(plan),
                               "--snapshot",
                               str(EXAMPLES / "terraform-denypolicy" /
                                   "snapshot.json"), "--explain")
     said = [line for line in sentences(err) if "deny policy" in line]
-    assert len(said) == 1
-    assert said[0].startswith(
+    assert said == [
         "google_iam_deny_policy.guard_token_mint: creates a deny policy "
         "denying iam.serviceAccounts.getAccessToken, "
-        "iam.serviceAccounts.getOpenIdToken to principalSet://goog/public:all")
-    assert ", excepting principal://iam.googleapis.com/projects/-/" \
-           "serviceAccounts/payroll-ci@acme-pay-prod.iam.gserviceaccount.com" \
-           in said[0]
+        "iam.serviceAccounts.getOpenIdToken to principalSet://goog/public:all, "
+        "excepting principal://iam.googleapis.com/projects/-/serviceAccounts/"
+        "payroll-ci@acme-pay-prod.iam.gserviceaccount.com"]
 
 
-def test_a_removed_deny_policy_reads_as_a_deletion(capsys):
-    """The removal arc leads with the plan's own change action. Its planned
-    values are gone by design, so reporting the block as unreadable — or as
-    creating the denial it is taking away — would both be wrong."""
+def test_a_removed_deny_policy_reads_as_the_guardrail_it_takes_away(capsys):
+    """Scenario 6b, end to end: the removal arc names the denial it is
+    REMOVING.
+
+    The block's planned values are gone by design — that is what a deletion is —
+    so the guardrail is read off the entry's own ``change.before``, through the
+    same deny collections the proposal tier grades a new policy with. Announcing
+    the denial as though it were being made, or reporting the block as
+    unreadable, would both be wrong, and "deletes the deny policy" alone leaves
+    the reader to go and look up what was in it.
+    """
     plan = EXAMPLES / "terraform-denypolicy" / "plan_remove_deny.json"
     _code, _out, err = invoke(capsys, "verify-policy", "--proposal", str(plan),
                               "--snapshot",
                               str(EXAMPLES / "terraform-denypolicy" /
                                   "snapshot.json"), "--explain")
     assert sentences(err) == [
-        "google_iam_deny_policy.guard_token_mint: deletes the deny policy"]
+        "google_iam_deny_policy.guard_token_mint: deletes the deny policy "
+        "denying iam.serviceAccounts.getAccessToken, "
+        "iam.serviceAccounts.getOpenIdToken to principalSet://goog/public:all"]
 
 
 def test_a_conditional_deny_rule_says_it_is_conditional(capsys):
@@ -549,6 +563,230 @@ def test_the_sentences_are_ordered_by_block_and_bounded(capsys):
     assert len(said) == 9                       # eight blocks, then the count
     assert said[:-1] == sorted(said[:-1])
     assert said[-1] == "+5 more"
+
+
+# -- the change story: what a delete or an update DOES --------------------------
+#
+# A create is its rows and nothing else. A delete and an update are not: the
+# rows a delete plans are gone, and the rows an update plans say where the
+# change lands, never what it moved. Both are told here from ``change.before``,
+# read through the SAME collection extractors — the funnel
+# ``iam_deny_checks.check_deny_wake_plan`` already reads the old side of a
+# change with. So the assertions below are about the same join the create
+# sentences are: the English names the rows a collection really read, and a
+# before state nobody could read says exactly that instead of borrowing the new
+# state's words.
+
+
+NARROWED = AGENTIC / "network" / "B11_fw_narrowing.tfplan.json"
+WIDENED = AGENTIC / "network" / "A01_fw_world_ssh_rdp.tfplan.json"
+BLIND_UPDATE = AGENTIC / "benign" / "tfplan_firewall_narrow.json"
+FULL_PLAN = POLICIES / "tf_plan_full.json"
+DENY_SNAPSHOT = EXAMPLES / "terraform-denypolicy" / "snapshot.json"
+
+#: The carve-out of scenario 6a, as the plan that THREADS it: one deny rule,
+#: with and without the payroll-CI exception.
+PAYROLL_CI = ("principal://iam.googleapis.com/projects/-/serviceAccounts/"
+              "payroll-ci@acme-pay-prod.iam.gserviceaccount.com")
+GUARD_RULE = {
+    "denied_permissions": ["iam.googleapis.com/serviceAccounts.getAccessToken"],
+    "denied_principals": ["principalSet://goog/public:all"],
+}
+
+#: The rule of scenario 1, so a deletion of it reads against a shape the README
+#: quotes as a creation elsewhere.
+WORLD_SSH = {
+    "name": "allow-ssh-world",
+    "network": "projects/acme-prod/global/networks/prod-vpc",
+    "direction": "INGRESS", "priority": 1000, "disabled": False,
+    "source_ranges": ["0.0.0.0/0"],
+    "allow": [{"protocol": "tcp", "ports": ["22"]}],
+}
+
+
+def deny_policy(rule: dict) -> dict:
+    """One ``google_iam_deny_policy``'s planned values, around one deny rule."""
+    return {"name": "guard-token-mint",
+            "parent": "cloudresourcemanager.googleapis.com%2F"
+                      "projects%2Facme-pay-prod",
+            "rules": [{"deny_rule": [rule]}]}
+
+
+def org_policy(enforce: bool) -> dict:
+    """One ``google_org_policy_policy``'s planned values, at one polarity."""
+    return {"name": "organizations/123456789012/policies/"
+                    "iam.disableServiceAccountKeyCreation",
+            "parent": "organizations/123456789012",
+            "spec": [{"rules": [{"enforce": enforce}]}]}
+
+
+def changed_plan(tmp_path: Path, name: str, address: str, rtype: str,
+                 action: str, before, after) -> Path:
+    """A one-resource plan stating ONE change action, in ``terraform show
+    -json``'s own shape: ``planned_values`` carries the new state (a deletion
+    plans none) and ``resource_changes`` states the action with both sides."""
+    resource = {"address": address, "mode": "managed",
+                "name": address.split(".")[-1],
+                "provider_name": "registry.terraform.io/hashicorp/google",
+                "type": rtype}
+    planned = [dict(resource, values=after)] if after is not None else []
+    path = tmp_path / f"{name}.json"
+    path.write_text(json.dumps({
+        "format_version": "1.2", "terraform_version": "1.9.5",
+        "planned_values": {"root_module": {"resources": planned}},
+        "resource_changes": [dict(resource, change={
+            "actions": [action], "before": before, "after": after})],
+    }), encoding="utf-8")
+    return path
+
+
+def test_a_deleted_binding_names_the_grant_it_takes_away(capsys):
+    """A removed member reads as the grant that goes with it — the role and the
+    principal, off the binding rows the before state yielded, and "removes"
+    because a binding is taken out of a policy rather than deleted outright."""
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(FULL_PLAN), "--snapshot", str(SNAPSHOT),
+                              "--explain")
+    assert ("google_project_iam_member.deprecated_ci: removes the IAM binding "
+            "granting roles/editor to "
+            "serviceAccount:ci@acme-prod.iam.gserviceaccount.com"
+            ) in sentences(err)
+
+
+def test_a_deleted_firewall_rule_names_what_it_was_allowing(capsys, tmp_path):
+    """The opening a deletion closes, in the words the rule's own rows carry —
+    a firewall rule that is going away is exactly the change whose planned
+    values cannot describe it."""
+    plan = changed_plan(tmp_path, "fw_delete",
+                        "google_compute_firewall.allow_ssh_world",
+                        "google_compute_firewall", "delete", WORLD_SSH, None)
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal", str(plan),
+                              "--snapshot", str(AGENTIC_SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        "google_compute_firewall.allow_ssh_world: deletes the firewall rule "
+        "allowing INGRESS tcp/22 from 0.0.0.0/0 on "
+        "projects/acme-prod/global/networks/prod-vpc"]
+
+
+def test_a_deleted_org_policy_names_the_control_it_removes(capsys, tmp_path):
+    """The constraint and the polarity the block was setting, from its own
+    ``org_policy_rules`` row."""
+    plan = changed_plan(tmp_path, "org_delete",
+                        "google_org_policy_policy.sa_key_guard",
+                        "google_org_policy_policy", "delete", org_policy(True),
+                        None)
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal", str(plan),
+                              "--snapshot", str(DENY_SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        "google_org_policy_policy.sa_key_guard: deletes the Org Policy setting "
+        "constraints/iam.disableServiceAccountKeyCreation enforce=true"]
+
+
+def test_a_deletion_whose_before_state_is_unreadable_says_so(capsys, tmp_path):
+    """A delete stating no before state at all: the block is named, the deletion
+    is stated, and nothing is claimed about what was in it. Borrowing another
+    block's content — or reading the deletion as a creation — is the failure
+    mode this line exists to prevent."""
+    plan = changed_plan(tmp_path, "deny_delete_blind",
+                        "google_iam_deny_policy.guard_token_mint",
+                        "google_iam_deny_policy", "delete", None, None)
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal", str(plan),
+                              "--snapshot", str(DENY_SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        "google_iam_deny_policy.guard_token_mint: deletes the deny policy "
+        "whose prior content could not be read"]
+
+
+def test_the_carve_out_of_6a_told_as_an_update_is_the_delta(capsys, tmp_path):
+    """Scenario 6a's story, spelled by a plan that STATES the update: the
+    threading reads as the principal it adds to the guardrail's exceptions, and
+    names the rule it was threaded through.
+
+    The plan the arc itself ships carries planned values only — it states no
+    change action, so 6a reads as the creation it is (the test above pins that
+    sentence end to end). Where a plan does state the update, the summary owes
+    the reader the difference rather than the new state restated.
+    """
+    plan = changed_plan(tmp_path, "deny_thread",
+                        "google_iam_deny_policy.guard_token_mint",
+                        "google_iam_deny_policy", "update",
+                        deny_policy(GUARD_RULE),
+                        deny_policy({**GUARD_RULE,
+                                     "exception_principals": [PAYROLL_CI]}))
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal", str(plan),
+                              "--snapshot", str(DENY_SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        f"google_iam_deny_policy.guard_token_mint: adds {PAYROLL_CI} to the "
+        f"exceptionPrincipals of the deny rule denying "
+        f"iam.serviceAccounts.getAccessToken"]
+
+
+def test_an_updated_org_policy_reads_as_the_flag_it_flips(capsys, tmp_path):
+    """A scalar field's delta: the new value with the old one beside it. The
+    flipped control is the whole of what the change does, and a line saying only
+    that the block "sets enforce=false" would read the same whether or not it
+    was already false."""
+    plan = changed_plan(tmp_path, "org_update",
+                        "google_org_policy_policy.sa_key_guard",
+                        "google_org_policy_policy", "update", org_policy(True),
+                        org_policy(False))
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal", str(plan),
+                              "--snapshot", str(DENY_SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        "google_org_policy_policy.sa_key_guard: sets enforce=false (was true)"]
+
+
+def test_a_moved_source_range_is_a_narrowing_or_a_widening(capsys):
+    """The set-valued delta, and the one claim about coverage this block makes:
+    "narrows" and "widens" are COMPUTED over the ranges the rows carry, so the
+    same two fixtures read opposite ways round."""
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(NARROWED), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        "google_compute_firewall.prod_web_admin: narrows source ranges from "
+        "0.0.0.0/0 to 10.0.0.0/8"]
+
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(WIDENED), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        "google_compute_firewall.prod_web_admin: widens source ranges from "
+        "10.0.0.0/8 to 0.0.0.0/0"]
+
+
+def test_an_update_whose_before_state_could_not_be_read_states_the_new_one(
+        capsys):
+    """This plan's ``change.before`` is a mapping the firewall collection
+    abstains over (it carries no allow or deny entry), so there is no old set of
+    rows to difference. The line says that, and then says what the rule now
+    allows — the new state stated as new, never as a delta nobody computed."""
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(BLIND_UPDATE), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        "google_compute_firewall.ingest_https: updates the firewall rule whose "
+        "prior content could not be read — now allowing INGRESS tcp/443 from "
+        "10.0.0.0/8 on acme-prod-vpc"]
+
+
+def test_an_update_whose_new_state_could_not_be_read_states_the_old_one(
+        capsys, tmp_path):
+    """The same refusal the other way round. Here the rule's NEW values carry
+    no allow or deny entry, so the collection abstains over them: the block was
+    not emptied, it was not read, and differencing against an abstention would
+    report the first. The old state is stated as the old state instead."""
+    plan = changed_plan(tmp_path, "fw_blind_after",
+                        "google_compute_firewall.allow_ssh_world",
+                        "google_compute_firewall", "update", WORLD_SSH,
+                        {key: value for key, value in WORLD_SSH.items()
+                         if key != "allow"})
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal", str(plan),
+                              "--snapshot", str(AGENTIC_SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        "google_compute_firewall.allow_ssh_world: updates the firewall rule "
+        "whose new content could not be read — it was allowing INGRESS tcp/22 "
+        "from 0.0.0.0/0 on projects/acme-prod/global/networks/prod-vpc"]
 
 
 # -- the result row ------------------------------------------------------------
