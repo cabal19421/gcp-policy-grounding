@@ -92,11 +92,20 @@ the change actually touches, never an estate-wide sweep.
 
 ## Quick start
 
-Sixty seconds from clone to a blocked terraform change, fully offline:
+Sixty seconds from clone to a blocked terraform change, fully offline — two
+commands, install and run:
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+./run_demo.sh 1
+```
 
+`run_demo.sh` is the demo runner: it runs one scenario's arc end to end,
+echoing each step's story and command, and checking every step's exit against
+the one this page documents (`./run_demo.sh --list` names every scenario).
+Scenario 1 is exactly the two commands below, which is what the runner runs:
+
+```bash
 # compile the bundled plain-English security promises into enforced rules
 # (EXITS 1 by design: the corpus includes a deliberately rejected document)
 .venv/bin/gcp-ground compile-requirements tests/fixtures/gcp/sec_requirements \
@@ -767,6 +776,9 @@ as a change would approve the past instead of the future.
 - `sec_requirements/` — the default requirements directory: markdown
   requirement documents (there is a `TEMPLATE.md`), which
   `gcp-ground compile-requirements` turns into `*.promises.json` artifacts.
+- `run_demo.sh` — the demo runner: one scenario of "Running the demo" per
+  invocation, each step checked against the exit this page documents. Plain
+  bash; it needs nothing but the venv below.
 - `tests/` — offline test suite; fixtures under `tests/fixtures/gcp/`. No
   network, no GCP credentials. z3-only assertions are not skipped when z3 is
   missing: the suite BRANCHES on the capability and asserts the honest
@@ -784,6 +796,15 @@ python3 -m venv .venv
 
 Everything below is fully offline — frozen fixture snapshots, no credentials,
 no network. Run from the repo root after the Development setup above.
+
+Every scenario in the table below is also one command: `./run_demo.sh 3c` runs
+that arc end to end — its `compile-requirements` step included — echoing each
+step's story and command before running it, and comparing the exit it observes
+to the exit this page documents for it. A DENIED step exits 1 *by design*, so
+the runner never treats a nonzero exit as failure by itself; it ends with a
+per-scenario verdict line and exits nonzero only if some step's exit diverged
+from what is written here. `./run_demo.sh --list` enumerates the scenarios,
+reading them from the table below.
 
 ### The scenarios at a glance
 
@@ -922,6 +943,8 @@ One command grounds the change, and each of the five inputs is one flag:
 - `--proposal` — the proposed change, agent- or human-authored;
 - `--explain` — the decision narrative.
 
+Through the runner, compile step included: `./run_demo.sh 1`.
+
 ```bash
 # 7. The terraform finale. EXPECTED TO EXIT 1: the two added blocks are the
 #    finding. (Run step 1 first — --requirements reads what it compiled.)
@@ -1006,6 +1029,9 @@ committed):
     --explain
 ```
 
+Through the runner, each arc carrying its own compile step:
+`./run_demo.sh 2a` is 8+8a, `./run_demo.sh 2b` is 8+8b.
+
 **Case A is APPROVED (exit 0) with the accident surfaced.** The scope-diff
 check found the same binding in the terraform state, diffed the custom role's
 permissions against the predefined role's snapshot enumeration, and the
@@ -1082,6 +1108,10 @@ scenario's own corpus for its two extra runs):
     --explain
 ```
 
+Through the runner: `./run_demo.sh 3` is 9b and `./run_demo.sh 3b` is 9c —
+9a is the state the two are read against, not a proposed change, so the
+at-a-glance table gives it no scenario of its own.
+
 **9a — the base is DENIED (exit 1), three findings.** Run the *current*
 configuration through the gate and the masked pair is named from both
 directions. `[firewall_exposure]` reads one rule's own text — no snapshot, no
@@ -1156,6 +1186,9 @@ and exact for base-anchored subranges, while a subset not anchored at a
 partner base (say `10.198.51.128/25`) is conservatively refuted rather than
 admitted. The 9a–9c commands above take no `--requirements` and their
 documented outputs are unchanged.
+
+Through the runner, the 9d compile riding along in each:
+`./run_demo.sh 3c` is 9d+9e, `./run_demo.sh 3d` is 9d+9f.
 
 ```bash
 # 9d. Compile the scenario corpus — EXPECTED TO EXIT 0: the one promise
@@ -1297,6 +1330,9 @@ provider schema" and name no release:
     --explain
 ```
 
+Through the runner: `./run_demo.sh 4` is 10a, `4b` is 10b, `4c` is 10c, and
+`4d` is the schema-less run at 10d below.
+
 **10a is DENIED (exit 1) on the typo alone**, and the recap — the last lines
 on your terminal — is the finding:
 
@@ -1405,6 +1441,10 @@ IPs" as an **empty allowlist** (the most restrictive list there is); and the
 flattened `org_policy_rules` rows do not record which *side* of a list a value
 sat on, so the list-shaped promises judge values-on-the-policy — stricter than
 their sentences, over-blocking rather than under-blocking.
+
+Through the runner, the step-11 compile riding along in each:
+`./run_demo.sh 5` is the compliant estate, `5a` … `5f` are the six bad edits
+and `5g` is the benign counterpart.
 
 ```bash
 # 11. Compile the scenario corpus — EXPECTED TO EXIT 0: all eleven promises
@@ -1604,6 +1644,9 @@ exception") rather than passing over records nobody read.
 `sa-key-creation-stays-effectively-enforced` is estate-tier, judged over
 `effective_org_policy_bool` — the folded effective state at the proposal's
 node and every captured descendant.
+
+Through the runner, the step-12 compile and the clock pin riding along in
+each: `./run_demo.sh 6` is 12a, `6a` is 12b, `6b` is 12c, `6c` is 12d.
 
 ```bash
 # 12. Compile the scenario corpus — EXPECTED TO EXIT 0: all three promises
