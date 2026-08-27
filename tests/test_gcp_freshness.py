@@ -167,9 +167,21 @@ def test_eight_days_is_stale_and_six_is_not_with_no_ceiling_argument():
     assert "8 days" in verdict.message            # the age, in whole days
     assert "7 days" in verdict.message            # the limit
     assert "api-capture" in verdict.message
-    assert "cloudasset.googleapis.com" in verdict.message
+    assert "cloudasset.googleapis.com" in verdict.message   # an origin that ADDS
     assert CAPTURED in verdict.message
     assert "uncaptured" in verdict.message
+
+    # ... and an origin that is the source id spelled again is NOT echoed. A
+    # source loaded straight from a path records the path as both, and "source
+    # 'X' (X)" says one thing twice at the front of the sentence the reader is
+    # here for.
+    echo = provenance.LedgerBuilder()
+    echo.source("infra/prod.tfstate", "tfstate", origin="infra/prod.tfstate",
+                captured_at=CAPTURED, scope="partial")
+    echo.declare("firewall_rules", scope="partial", source_kinds=("tfstate",))
+    [echoed] = freshness.check_freshness(echo.build(), now=at(days=8))
+    assert echoed.message.startswith("source 'infra/prod.tfstate' was captured at")
+    assert "(infra/prod.tfstate)" not in echoed.message
 
     assert freshness.check_freshness(ledger, now=at(days=6)) == ()
     assert freshness.MAX_AGE_DEFAULT == timedelta(days=7)
