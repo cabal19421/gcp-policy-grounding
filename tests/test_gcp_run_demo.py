@@ -22,13 +22,20 @@ proposals committed under ``examples/``:
 * a step that exits anything else fails the scenario and the runner exits
   nonzero, which is the property the whole thing exists for.
 
-The two arcs run here (``3c`` and ``4``) are the two whose documented exits do
-not depend on the clock: the runner drops any exported ``GCP_GROUNDING_*``
-before running an arc (the arcs name every input by flag), so it is the wall
-clock that decides snapshot freshness, and these two decide the same either
-side of the seven-day ceiling. Arcs are driven with ``GCP_GROUND`` pointing at
-the interpreter running this suite, so the arc is judged by the same checkout
-and the same z3 capability the rest of the suite measures.
+The three arcs run here (``3c``, ``4`` and ``w``) are the ones whose documented
+exits do not depend on the clock: the runner drops any exported
+``GCP_GROUNDING_*`` before running an arc (the arcs name every input by flag),
+so it is the wall clock that decides snapshot freshness, and these decide the
+same either side of the seven-day ceiling. Arcs are driven with ``GCP_GROUND``
+pointing at the interpreter running this suite, so the arc is judged by the same
+checkout and the same z3 capability the rest of the suite measures.
+
+``w`` is the teaching walkthrough the README's "How the gate thinks" section
+quotes end to end, and it is the one arc whose steps are *documentation* — the
+section prints the compile's output, the artifact and the verify run's tail, so
+an arc that stopped exiting as written would leave a page quoting a run nobody
+can reproduce. Its three steps are pinned by count as well as by verdict,
+because the section walks through each of them by name.
 """
 
 import os
@@ -139,6 +146,22 @@ def test_an_arc_whose_step_is_documented_to_deny_passes_on_exit_1():
     assert "expected exit: 1" in proc.stdout
     assert ": exit 1, as documented" in proc.stdout
     assert "scenario 4: PASS — 1/1 steps exited as the README documents" \
+        in proc.stdout
+
+
+def test_the_walkthrough_arc_compiles_then_denies_both_document_kinds():
+    # w: compile the one-promise corpus (exit 0), then judge the same promise
+    # over a REST IAM policy and over a terraform configuration — both DENIED
+    # by design, which is what the "How the gate thinks" section walks through.
+    proc = demo("w")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "compile-requirements examples/walkthrough" in proc.stdout
+    assert proc.stdout.count(": exit 0, as documented") == 1
+    assert proc.stdout.count(": exit 1, as documented") == 2
+    for proposal in ("examples/walkthrough/policy.json",
+                     "examples/walkthrough/proposal.tf.json"):
+        assert f"--proposal {proposal}" in proc.stdout
+    assert "scenario w: PASS — 3/3 steps exited as the README documents" \
         in proc.stdout
 
 

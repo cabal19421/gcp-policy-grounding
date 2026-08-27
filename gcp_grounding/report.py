@@ -57,6 +57,29 @@ _MARKS = (("contradicted", "⚠"), ("ungrounded", "✗"),
 #: offline" are claims about the snapshot, true only as of its capture.
 _STAMPED = ("grounded", "unverified")
 
+#: The compile channel. A promise the compiler could not translate is recorded
+#: on it AND on the promise's own domain channel, which is right for a consumer
+#: reading either one and wrong for a reader, who gets the same sentence twice.
+_COMPILE_KIND = "sec:compile"
+
+
+def _compile_twins(verdicts) -> set[tuple[str, str, str]]:
+    """The ``sec:<domain>`` verdicts a same-message :data:`_COMPILE_KIND`
+    verdict already accounts for.
+
+    RENDERING ONLY. :meth:`PolicyReport.to_dict` still carries both — the two
+    channels exist so a consumer can filter on either — and the header counts
+    are the four buckets over every verdict, unchanged. What is suppressed is
+    the second PRINTED line of a sentence the reader has just read.
+    """
+    compiled = {(v.status, v.message) for v in verdicts
+                if isinstance(v.kind, str) and v.kind == _COMPILE_KIND}
+    if not compiled:
+        return set()
+    return {(v.status, v.kind, v.message) for v in verdicts
+            if isinstance(v.kind, str) and v.kind.startswith("sec:")
+            and v.kind != _COMPILE_KIND and (v.status, v.message) in compiled}
+
 
 @dataclass(frozen=True)
 class PolicyReport:
@@ -147,8 +170,11 @@ class PolicyReport:
             f"grounded={c['grounded']} ungrounded={c['ungrounded']} "
             f"contradicted={c['contradicted']} unverified={c['unverified']}"
         ]
+        twins = _compile_twins(self.report.verdicts)
         for status, mark in _MARKS:
             for v in self.report.by_status(status):
+                if (v.status, v.kind, v.message) in twins:
+                    continue
                 stamp = f" [snapshot {self.captured_at}]" if status in _STAMPED else ""
                 tip = f"  (did you mean: {', '.join(v.suggestions)}?)" if v.suggestions else ""
                 lines.append(f"  {mark} [{v.kind}] {v.message}{stamp}{tip}")

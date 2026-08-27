@@ -50,6 +50,7 @@ README.md's at-a-glance table. Every arc runs against frozen fixtures.
 | `./run_demo.sh 6a` | The carve-out: payroll CI added to the guardrail's `exceptionPrincipals`. DENIED: both deny promises violated, the escaping (principal, permission) quoted verbatim. |
 | `./run_demo.sh 6b` | The removal: a rendered plan deleting the deny policy — the dormant grant wakes. DENIED by `[iam_deny_shadow]`; the promises abstain by name. |
 | `./run_demo.sh 6c` | The hygiene sweep: a folder-level `reset` that reads as a no-op. DENIED: `sa-key-creation-stays-effectively-enforced` refuted over the effective collection. |
+| `./run_demo.sh w` | The teaching walkthrough: one promise judged over a REST IAM policy and over the terraform that grants the same thing. DENIED twice — README.md's "How the gate thinks" quotes every artifact of this arc. |
 
 ## Verify a change yourself
 
@@ -118,8 +119,9 @@ JSON — the form CI should use — needs none.
 
 ## Everything else
 
-[README.md](README.md) covers the rest: the three inputs and how the API
-snapshot and terraform are merged and cross-checked (drift), the completeness
-boundary, reading provenance, the provider schema, capturing a snapshot from a
-live estate, hook mode, shell-command scanning, and a walked narrative per demo
-scenario.
+[README.md](README.md) covers the rest, starting with "How the gate thinks" —
+what a solver is, what your policies are flattened into, and one worked
+encoding — then the three inputs and how the API snapshot and terraform are
+merged and cross-checked (drift), the completeness boundary, reading provenance,
+the provider schema, capturing a snapshot from a live estate, hook mode,
+shell-command scanning, and a walked narrative per demo scenario.

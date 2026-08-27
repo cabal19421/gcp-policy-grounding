@@ -234,6 +234,15 @@ def test_step_four_falls_back_to_the_shape_default(tmp_path):
     loaded, _notes = sources.load_source(snapshot_path)
 
     assert loaded.ledger.scope_of("firewall_rules").scope == "undeclared"
+    # The merged record carries NO note. It used to say "<kind> source loaded
+    # in memory" — true of every source in the list, so it distinguished
+    # nothing while every explain surface printed it under the source line,
+    # crowding out the notes that do (the terraform 'partial' cap, the state
+    # serial and lineage). The kind and the origin that sentence restated are
+    # the line's own first two columns.
+    record = loaded.record()
+    assert record.note == ""
+    assert record.origin == snapshot_path and record.kind
 
 
 def test_a_corrupt_sidecar_falls_back_with_a_verdict_and_never_to_complete(tmp_path):

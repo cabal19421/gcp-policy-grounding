@@ -155,6 +155,12 @@ compile_denypolicy() {
         --snapshot examples/terraform-denypolicy/snapshot.json --out demo/compiled-denypolicy
 }
 
+compile_walkthrough() {
+    step 0 "compile the walkthrough's one-promise corpus — the artifact the 'How the gate thinks' section quotes" \
+        "${GROUND[@]}" compile-requirements examples/walkthrough \
+        --snapshot tests/fixtures/gcp/agentic_snapshot.json --out demo/compiled-walkthrough
+}
+
 # -- the verify steps, one helper per scenario directory ----------------------
 
 verify_roles() {  # <expected-exit> <story> <proposal>
@@ -205,6 +211,19 @@ verify_denypolicy() {  # <expected-exit> <story> <proposal>
         --proposal "examples/terraform-denypolicy/$3" \
         --snapshot examples/terraform-denypolicy/snapshot.json \
         --requirements demo/compiled-denypolicy \
+        --explain
+}
+
+# The state file is named on the command line rather than left to sibling
+# auto-detection: the section quotes this run's summary, and an auto-detected
+# path prints absolute and layer '[auto]', which is not reproducible on
+# another machine.
+verify_walkthrough() {  # <expected-exit> <story> <proposal>
+    step "$1" "$2" "${GROUND[@]}" verify-policy \
+        --proposal "examples/walkthrough/$3" \
+        --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+        --terraform-state examples/walkthrough/terraform.tfstate \
+        --requirements demo/compiled-walkthrough \
         --explain
 }
 
@@ -309,6 +328,11 @@ arc() {
     6c)
         compile_denypolicy
         verify_denypolicy 1 "the hygiene sweep: a folder-level reset, judged over the effective collection" plan_reset_payments.json
+        ;;
+    w)
+        compile_walkthrough
+        verify_walkthrough 1 "the worked encoding: the same promise over a REST IAM allow policy, whose three (role, member) rows the section unrolls by hand" policy.json
+        verify_walkthrough 1 "the end-to-end walkthrough: the terraform binding that grants roles/owner to an outsider" proposal.tf.json
         ;;
     *)
         return 3

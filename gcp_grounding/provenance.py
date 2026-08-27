@@ -1185,22 +1185,36 @@ COLLECTION_CATEGORIES = {
 # -- the human coverage table -------------------------------------------------
 
 
-def summarize(ledger: SourceLedger) -> str:
+def summarize(ledger: SourceLedger, *, embed: bool = False) -> str:
     """The human coverage table: one line per declared category, then the
     artifacts, then the unrecognized-type census.
 
     A FUNCTION and not a second module: this is what ``capture-terraform``
     prints and what the explain surface embeds, and two renderings of one
     ledger would be two chances to describe the same coverage differently.
+
+    *embed* is for a caller that has ALREADY printed its own source lines —
+    :mod:`gcp_grounding.explain_state` prints richer ones, carrying each
+    source's age, its per-domain scopes and its fact count — and drops this
+    table's per-source rows, which under that heading restate a strictly poorer
+    version of the block immediately above them. Every coverage row, the
+    census and the disputes are unchanged, and ``capture-terraform``, which has
+    no source block of its own, still prints them.
+
+    A count of ZERO prints nothing. ``artifacts: 0`` and the two census tails
+    are three words each for "there were none", and the disputes tail has
+    always worked this way; a reader looking for what was captured should not
+    have to read three lines to learn that nothing was.
     """
     lines = [f"source coverage ({ledger.schema})"]
     stamp = ledger.merged_captured_at()
-    for source_id in sorted(ledger.sources):
-        record = ledger.sources[source_id]
-        within = f" within {record.boundary}" if record.boundary else ""
-        lines.append(f"  source {source_id} [{record.kind}] {record.origin or '-'}"
-                     f" scope={record.scope}{within}"
-                     f" captured_at={record.captured_at or '-'}")
+    if not embed:
+        for source_id in sorted(ledger.sources):
+            record = ledger.sources[source_id]
+            within = f" within {record.boundary}" if record.boundary else ""
+            lines.append(f"  source {source_id} [{record.kind}] {record.origin or '-'}"
+                         f" scope={record.scope}{within}"
+                         f" captured_at={record.captured_at or '-'}")
     lines.append(f"  merged captured_at: {stamp or '-'}")
     lines.append("  category                              scope       keys  dropped  reasons")
     for category in ledger.declared_categories():
@@ -1211,17 +1225,20 @@ def summarize(ledger: SourceLedger) -> str:
                      f"{scope.dropped:>7}  {reasons}{taint}")
     if not ledger.categories:
         lines.append("  (no category was declared - nothing may be concluded from absence)")
-    lines.append(f"  artifacts: {len(ledger.artifacts)}")
-    for artifact in ledger.artifacts:
-        lines.append(f"    {artifact.path} [{artifact.kind or '-'}] "
-                     f"{artifact.size} bytes sha256={artifact.sha256[:12] or '-'}")
+    if ledger.artifacts:
+        lines.append(f"  artifacts: {len(ledger.artifacts)}")
+        for artifact in ledger.artifacts:
+            lines.append(f"    {artifact.path} [{artifact.kind or '-'}] "
+                         f"{artifact.size} bytes sha256={artifact.sha256[:12] or '-'}")
     census = ledger.census
-    lines.append(f"  unrecognized terraform types: {len(census.unrecognized)}")
-    for name in sorted(census.unrecognized):
-        lines.append(f"    {name} x{census.unrecognized[name]}")
-    lines.append(f"  deliberately unmapped types: {len(census.unmapped)}")
-    for name in sorted(census.unmapped):
-        lines.append(f"    {name} x{census.unmapped[name]}")
+    if census.unrecognized:
+        lines.append(f"  unrecognized terraform types: {len(census.unrecognized)}")
+        for name in sorted(census.unrecognized):
+            lines.append(f"    {name} x{census.unrecognized[name]}")
+    if census.unmapped:
+        lines.append(f"  deliberately unmapped types: {len(census.unmapped)}")
+        for name in sorted(census.unmapped):
+            lines.append(f"    {name} x{census.unmapped[name]}")
     if ledger.disputes:
         lines.append(f"  disputes: {len(ledger.disputes)}")
         for dispute in ledger.disputes:

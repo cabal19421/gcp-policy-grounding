@@ -595,8 +595,26 @@ def _incomplete_view(snapshot: Any) -> str:
             if not ledger.scope_of(name).existence_licensed]
     if not weak:
         return ""
-    named = ", ".join(f"'{name}' is {ledger.scope_of(name).scope}"
-                      f"{_taint_note(ledger.scope_of(name))}" for name in weak)
+    # GROUPED BY THE CLAUSE, not listed one clause per category. Every category
+    # a single terraform capture supplies is 'partial' for the same reason and
+    # every category a stale one supplies is tainted the same way, so the
+    # per-name list spent nine copies of one sentence to say one thing; the
+    # names still travel, because which category to re-capture is the only
+    # actionable part. Where SEVERAL weak categories share the clause AND
+    # nothing else was declared, "all of them" says what the names say and the
+    # list collapses entirely; a single category is named, because "all 1 of
+    # them" is a list of one written the long way round.
+    groups: dict[str, list[str]] = {}
+    for name in weak:
+        scope = ledger.scope_of(name)
+        groups.setdefault(f"{scope.scope}{_taint_note(scope)}", []).append(name)
+    if len(groups) == 1 and len(weak) > 1 and len(weak) == len(declared):
+        [clause] = groups
+        return (f"all {len(declared)} of this view's declared categories are "
+                f"{clause}, so none of them can license a negative")
+    named = "; ".join(f"{', '.join(repr(name) for name in names)} "
+                      f"{'is' if len(names) == 1 else 'are'} {clause}"
+                      for clause, names in groups.items())
     return (f"{len(weak)} of this view's {len(declared)} declared category(ies) "
             f"cannot license a negative ({named})")
 
@@ -633,14 +651,22 @@ def _estate_incomplete(ctx: CheckContext, identity: str, category: str,
 def _downgraded(verdict: Verdict, identity: str, reason: str) -> Verdict:
     """A ``grounded`` re-graded to ``unverified`` naming the incomplete view;
     every other status is returned unchanged. A finding stands on a partial
-    view — only a CLEAN answer needs the whole table."""
+    view — only a CLEAN answer needs the whole table.
+
+    The check is named by its KIND — the bracketed word the report already
+    prints this verdict under, and the only name for a check a reader of the
+    output has ever been given. ``gcp_grounding.armor_checks.check_security_policy``
+    is an import path: it locates the source file for whoever is editing this
+    tree and names nothing for whoever is reading the run. *identity* is still
+    the fallback, for a verdict that carries no kind at all.
+    """
     if verdict.status != "grounded":
         return verdict
     return Verdict(
         "unverified", verdict.kind, verdict.target, verdict.lineno,
         verdict.message + NOT_DECIDED.format(reason=(
-            f"{identity} did not declare which category its conclusion needs "
-            f"complete, or declared itself safe over a subset, and this view is "
-            f"not complete: {reason}. An undeclared category must cost a clean "
-            f"pass, not buy one")),
+            f"the {verdict.kind or identity} check did not declare which category "
+            f"its conclusion needs complete, or declared itself safe over a "
+            f"subset, and this view is not complete: {reason}. An undeclared "
+            f"category must cost a clean pass, not buy one")),
         suggestions=verdict.suggestions)

@@ -1,0 +1,17 @@
+{
+  "version": 3,
+  "etag": "BwYcQ0hSbW8=",
+  "bindings": [
+    {
+      "role": "roles/bigquery.dataViewer",
+      "members": ["group:data-eng@acme.example"]
+    },
+    {
+      "role": "roles/owner",
+      "members": [
+        "user:alice@acme.example",
+        "user:mallory@outsider.example"
+      ]
+    }
+  ]
+}

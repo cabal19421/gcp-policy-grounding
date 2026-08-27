@@ -432,6 +432,41 @@ def test_a_requires_complete_check_with_no_category_runs_but_is_not_trusted(monk
     assert "[not decided:" in out[0].message
     assert "firewall_rules" in out[0].message and "partial" in out[0].message
     assert "must cost a clean pass, not buy one" in out[0].message
+    # THE CHECK IS NAMED BY ITS KIND — the bracketed word the report already
+    # prints this verdict under, and the only name for a check a reader of the
+    # output has ever been given. Its dotted import path locates a source file
+    # for whoever is editing this tree and names nothing for whoever is
+    # reading the run.
+    assert "the firewall check did not declare" in out[0].message
+    assert ESTATE_IDENTITY not in out[0].message
+    assert "gcp_grounding." not in out[0].message
+    # One weak category is NAMED: "all 1 of them" is a list of one written the
+    # long way round.
+    assert "'firewall_rules' is partial" in out[0].message
+
+    # Where SEVERAL share the clause and nothing else was declared, the list
+    # collapses. Every category a single terraform capture supplies is partial
+    # for the same reason, and the per-name list spent one sentence per
+    # category to say one thing.
+    CALLS.clear()
+    uniform = _snapshot(_ledger(categories={
+        "firewall_rules": _partial_scope(), "iam_bindings": _partial_scope(),
+        "org_policies": _partial_scope()}))
+    [collapsed] = registry.run_document_checks(_ctx(uniform))
+
+    assert CALLS == ["estate"]
+    assert "all 3 of this view's declared categories are partial" in collapsed.message
+    assert "'firewall_rules' is partial" not in collapsed.message
+    # ... but a view whose categories are weak for DIFFERENT reasons keeps
+    # every name, grouped under the clause it shares.
+    CALLS.clear()
+    mixed = _snapshot(_ledger(categories={
+        "firewall_rules": _partial_scope(), "iam_bindings": _partial_scope(),
+        "org_policies": CategoryScope(scope="uncaptured", source_kinds=("api",))}))
+    [grouped] = registry.run_document_checks(_ctx(mixed))
+
+    assert "'firewall_rules', 'iam_bindings' are partial" in grouped.message
+    assert "'org_policies' is uncaptured" in grouped.message
 
 
 def test_a_subset_safe_check_keeps_its_finding_over_a_partial_view(monkeypatch):

@@ -29,7 +29,45 @@ Existence questions are decided by a Datalog pass over a frozen JSON snapshot
 of the GCP estate (offline, deterministic, no credentials). Satisfiability and
 comparison questions — "is this CEL condition ever true?", "does the new policy
 grant a strict subset of the old one?" — go to **z3** when installed, and
-degrade to explicit `unverified` when not.
+degrade to explicit `unverified` when not. If Datalog and z3 are not names you
+work with, ["How the gate thinks"](#how-the-gate-thinks) below is that split in
+plain English, with one policy carried through it end to end.
+
+## Contents
+
+- [What it checks — supported policy surfaces](#what-it-checks--supported-policy-surfaces)
+- [Quick start](#quick-start)
+- [How the gate thinks](#how-the-gate-thinks) — no background required
+  - [The two engines, in plain English](#the-two-engines-in-plain-english)
+  - [What each policy surface becomes: collections and sorts](#what-each-policy-surface-becomes-collections-and-sorts)
+  - [The IAM encoding, worked end to end](#the-iam-encoding-worked-end-to-end)
+  - [Adopting a new GCP policy type](#adopting-a-new-gcp-policy-type)
+  - [Authoring a new security requirement](#authoring-a-new-security-requirement)
+  - [The walkthrough: one promise, one change, one verdict](#the-walkthrough-one-promise-one-change-one-verdict)
+- [The three inputs](#the-three-inputs)
+  - [1. What the engine compares](#1-what-the-engine-compares)
+  - [2. Two overlapping ways to get the current state](#2-two-overlapping-ways-to-get-the-current-state)
+  - [3. Pointing the tool at terraform](#3-pointing-the-tool-at-terraform)
+  - [4. The completeness boundary, in practice](#4-the-completeness-boundary-in-practice)
+  - [5. New resource versus never looked](#5-new-resource-versus-never-looked)
+  - [6. Reading provenance](#6-reading-provenance)
+  - [7. What this still does not mean](#7-what-this-still-does-not-mean)
+- [The pieces, in one sentence](#the-pieces-in-one-sentence)
+- [Why the API snapshot, when everything is terraform](#why-the-api-snapshot-when-everything-is-terraform)
+- [The provider schema: judging against the provider that actuates](#the-provider-schema-judging-against-the-provider-that-actuates)
+- [Authoring promises: what the compiler proves, what you review](#authoring-promises-what-the-compiler-proves-what-you-review)
+- [Capturing the API snapshot from a live estate](#capturing-the-api-snapshot-from-a-live-estate)
+- [Proposing a terraform change — agent or human](#proposing-a-terraform-change--agent-or-human)
+- [Layout](#layout)
+- [Development](#development)
+- [Running the demo](#running-the-demo)
+  - [The scenarios at a glance](#the-scenarios-at-a-glance)
+  - [7. The terraform finale: every input named by its flag](#7-the-terraform-finale-every-input-named-by-its-flag)
+  - [8. Scenario two: the custom-role swap](#8-scenario-two-the-custom-role-swap)
+  - [9. Scenario three: the masked deny](#9-scenario-three-the-masked-deny)
+  - [10. Scenario four: the attribute the provider doesn't know](#10-scenario-four-the-attribute-the-provider-doesnt-know)
+  - [11. Scenario five: the org-policy rollback](#11-scenario-five-the-org-policy-rollback)
+  - [12. Scenario six: the deny that guarded the estate](#12-scenario-six-the-deny-that-guarded-the-estate)
 
 ## What it checks — supported policy surfaces
 
@@ -222,11 +260,714 @@ a kind no collection here covers (the perimeter and the Cloud Armor policy
 above) contributes no sentence at all. The list stops at eight blocks and
 counts the rest.
 
+A block a plan is **deleting or updating** is described by what the change
+does, not by the state it plans — a deletion plans no state at all, and an
+update's planned values say where the change lands rather than what it moved.
+Both are read from the plan's own `change.before`, through those same
+collections, the way the deny-wake check already reads the old side of a
+change. So a deletion names what it takes away
+(`deletes the deny policy denying iam.serviceAccounts.getAccessToken … to
+principalSet://goog/public:all`, in scenario 6b below), and an update names the
+difference, field by field: `narrows source ranges from 0.0.0.0/0 to
+10.0.0.0/8`, `sets enforce=false (was true)`, `adds principal://…/payroll-ci@…
+to the exceptionPrincipals of the deny rule denying
+iam.serviceAccounts.getAccessToken`. "narrows" and "widens" are computed over
+the ranges themselves; ranges that moved sideways read as "changes". A before
+state no collection could read says that and nothing more.
+
+**On a terminal** — and only on a terminal — `--explain` wraps every block to
+the narrower of your terminal width and 100 columns, indenting continuations
+under the item they belong to, and colours three things: each verdict's status
+mark (`✓ ⚠ ✗ ?`), the decision, and the provenance lines that qualify what sits
+above them. Piped, redirected, captured by CI or read by a hook, none of that
+happens: the plain bytes are the surface this page quotes and the tests pin,
+and they go out exactly as they were assembled. `NO_COLOR` (set to anything, per
+the convention) and `TERM=dumb` turn the colour off while leaving the wrapping
+alone — a reader who wants no escape codes still wants readable line lengths.
+
 — the violated promise is one of six English sentences compiled from
 `tests/fixtures/gcp/sec_requirements/`, and the refutation names the exact
 terraform block to fix. The full walkthrough, including what each flag is and
 every other act (hallucination did-you-mean, shell-command scanning, hook
 mode), is under **Running the demo** below.
+
+## How the gate thinks
+
+Everything above is *what* the gate decides. This section is *how*, written for
+someone who has never met a solver: the two engines and what each is good for,
+what a GCP policy turns into before either engine sees it, how to teach the gate
+a policy type it does not know yet, how to write a new requirement, and one
+complete worked example. Every artifact quoted below — rows, formulas,
+s-expressions, terminal output — came out of running the commands printed beside
+it; `./run_demo.sh w` runs the whole thing.
+
+### The two engines, in plain English
+
+**SMT** stands for *satisfiability modulo theories*. Picture a tireless auditor
+who is handed two things: a rule, and a filing cabinet of facts. The auditor
+never gets bored, never skims, and answers exactly one question — *is there any
+way to satisfy this rule?* — with one of three answers: a concrete
+counterexample, a proof that no counterexample exists, or "I could not decide
+this in the time I had". "Modulo theories" is the part that makes the auditor
+useful for policy: it knows arithmetic, strings, and fixed-width integers as
+*subjects*, so `10.198.51.0/24` contains `10.198.51.7` and
+`"user:mallory@outsider.example"` does not end in `"@acme.example"` are
+questions it settles by construction rather than by enumeration. The auditor in
+this repo is **z3**; it is optional, and where it is absent every answer that
+needed it becomes `unverified` naming z3 rather than a guess.
+
+**Grounding** is the step before any of that. Every name a policy uses — a role,
+a permission, a principal, an org-policy constraint, a terraform resource type —
+must point at a thing in an inventory before one line of logic runs. The
+inventory is the API snapshot: a frozen JSON capture of what your estate
+actually contains. A name that is not in the inventory does not get a
+best-effort reading; it gets `ungrounded` and a nearest-name suggestion. This is
+the mechanism behind the claim in the first paragraph of this page: the reason
+`roles/bigquery.reader` fails here is not that a list of known-bad names caught
+it, but that `roles/bigquery.reader` is absent from an enumeration of every role
+the estate defines.
+
+**Two engines, two jobs.** The existence questions go to a **librarian** who
+checks the catalog: *does this role exist? this principal? this constraint?*
+Catalog lookups are closed-world and cheap, and they are answered by a Datalog
+pass over the snapshot — deterministic, offline, no credentials, and no solver
+needed. The satisfiability questions go to the **auditor**: *can any record
+break this rule? is this IAM condition ever true? does the new policy grant a
+strict subset of the old one?* Those go to z3. The librarian runs first, because
+an auditor reasoning about a role that does not exist is producing arithmetic
+about fiction.
+
+**Neuro-symbolic** names the division of labour, and it is the whole design.
+The *neuro* half — a language model, or a hurried human — is what writes
+policy: fluent, fast, and structurally unable to tell you which of the names it
+just produced are real. The *symbolic* half is the librarian and the auditor:
+slow, literal, incapable of writing anything, and incapable of being confidently
+wrong about whether a name is in a list. The gate never asks a model to check a
+model. It takes the fluent artifact and puts every name and every claim in it
+through machinery whose only answers are the four buckets — `grounded`,
+`ungrounded`, `contradicted`, `unverified` — with `unverified` doing the work
+that a guess would otherwise do.
+
+None of the three metaphors is a simplification you will have to unlearn: the
+auditor is `z3.Solver().check()` returning `sat` with a model, `unsat`, or
+`unknown`; the librarian is `reasoner.ground_existence` over
+`knowledge.GcpSnapshot`; the inventory is the `roles`, `permissions`,
+`principals`, `constraints` and `resource_types` tables of the snapshot file you
+pass to `--snapshot`.
+
+### What each policy surface becomes: collections and sorts
+
+The auditor cannot read a GCP policy document. It reads **records**: flat rows of
+typed scalars. So every supported policy surface is first *flattened* into one or
+more named **collections**, and a requirement is written as a quantifier over a
+collection. This table is the full registry — the four base collections
+(`gcp_grounding/sec_ast.py`) plus the eleven the domain layer registers
+(`gcp_grounding/sec_domains.py`):
+
+| Policy surface | Collection | Tier | Fields (`name:Sort`) |
+| --- | --- | --- | --- |
+| IAM allow policy | `iam_bindings` | proposal | `role:Str`, `member:Str`, `condition:Str`, `has_condition:Bool` |
+| IAM allow policy, old vs new | `new_iam_bindings` / `old_iam_bindings` | pair | same four fields |
+| IAM custom role | `proposed_role_permissions` | proposal | `role:Str`, `permission:Str` |
+| IAM deny policy (v2) | `deny_rules` | proposal | `policy:Str`, `rule_index:Int`, `denied_principal:Str`, `permission:Str`, `has_principal_exceptions:Bool`, `has_condition:Bool`, `condition:Str` |
+| IAM deny policy (v2) | `deny_rule_exceptions` | proposal | `policy:Str`, `rule_index:Int`, `exception_principal:Str` |
+| Organization Policy, per document | `org_policy_rules` | proposal | `constraint:Str`, `is_list:Bool`, `enforce:Bool`, `value:Str` |
+| Organization Policy, effective fold | `effective_org_policy_bool` | estate | `node:Str`, `constraint:Str`, `enforce:Bool` |
+| Organization Policy, effective fold | `effective_org_policy_values` | estate | `node:Str`, `constraint:Str`, `polarity:Str`, `value:Str`, `all_values:Bool` |
+| VPC firewall rule, proposed | `proposed_firewall_rules` | proposal | `name:Str`, `network:Str`, `direction:Str`, `action:Str`, `priority:Int`, `disabled:Bool`, `source_range:Cidr`, `source_range_mask:Ip4`, `destination_range:Cidr`, `destination_range_mask:Ip4`, `source_tag:Str`, `target_tag:Str`, `protocol:Proto`, `port:Port` |
+| VPC firewall rule, in the estate | `firewall_rules` | estate | the same fourteen fields |
+| Hierarchical firewall rule | `hier_firewall_rules` | estate | `policy:Str`, `node:Str`, `priority:Int`, `action:Str`, `direction:Str`, `src_range:Cidr`, `src_range_mask:Ip4`, `protocol:Proto`, `port:Port` |
+| Cloud Armor rule | `armor_rules` | proposal | `policy:Str`, `priority:Int`, `action:Str`, `preview:Bool`, `src_range:Cidr`, `src_range_mask:Ip4`, `expr:Str` |
+| VPC-SC perimeter membership | `perimeter_resources` | proposal | `perimeter:Str`, `resource:Str`, `section:Str` |
+| VPC-SC restricted services | `perimeter_restricted_services` | proposal | `perimeter:Str`, `service:Str`, `section:Str` |
+
+Three things to read off it.
+
+**The sorts are a closed set** — `Bool`, `Str`, `Int`, `Ip4`, `Cidr`, `Port`,
+`Proto`, `Real` — and each maps to one z3 sort: `Str` is a string, `Bool` a
+boolean, `Int` an integer, and `Ip4`/`Cidr`/`Port`/`Proto` are fixed-width
+bitvectors (32, 32, 16 and 8 bits), which is what makes `cidr_contains` and
+`port_in` exact rather than approximate. Every `Cidr` field declares a companion
+`<field>_mask` of sort `Ip4`, and a promise naming a `Cidr` field whose
+collection lacks that companion is refused when its AST is validated — a range
+without its mask is half a fact.
+
+**The tier says what a rule needs.** A `proposal` collection is built from the
+document under review alone. A `pair` collection needs the old and the new
+document. An `estate` collection needs the snapshot, and a rule over one abstains
+by name whenever the snapshot's coverage of the matching category is incomplete —
+a promise that quantifies over the estate is never allowed to report a clean bill
+of health from a view that saw part of it.
+
+**Rows are flat, one per scalar combination.** The term language has no tuples,
+so a firewall rule with two source ranges and two ports becomes four rows, and a
+binding with three members becomes three rows. This is what lets a quantifier say
+what an author means. Its cost is stated rather than hidden: a dimension with no
+value contributes *no key* rather than a filler, which is the first of the four
+reasoning rules below.
+
+### The IAM encoding, worked end to end
+
+`examples/walkthrough/policy.json` is a real IAM allow policy, exactly as GCP's
+`getIamPolicy` returns one:
+
+```text
+{
+  "version": 3,
+  "etag": "BwYcQ0hSbW8=",
+  "bindings": [
+    {
+      "role": "roles/bigquery.dataViewer",
+      "members": ["group:data-eng@acme.example"]
+    },
+    {
+      "role": "roles/owner",
+      "members": [
+        "user:alice@acme.example",
+        "user:mallory@outsider.example"
+      ]
+    }
+  ]
+}
+```
+
+**Step one: rows.** `sec_rules.iam_bindings` mints one record per
+(binding, member) pair — the flattening — and sorts them by `(role, member)` so
+the row order, and therefore the witness a refutation names, does not depend on
+document order. Two bindings, three members, three rows:
+
+```text
+iam_bindings[0]  role='roles/bigquery.dataViewer'  member='group:data-eng@acme.example'    condition=''  has_condition=False
+iam_bindings[1]  role='roles/owner'                member='user:alice@acme.example'        condition=''  has_condition=False
+iam_bindings[2]  role='roles/owner'                member='user:mallory@outsider.example'  condition=''  has_condition=False
+```
+
+`condition` is `''` and `has_condition` is `False` because neither binding
+carries a condition — an empty string is the truthful "no expression" for a
+`Str`, and the companion boolean is what a promise tests when it needs to tell
+"no condition" from "a condition that reads as empty". The extractor is
+extract-faithfully-or-refuse: a binding that is not an object, a missing role, a
+non-list `members`, or *any* key other than `role` / `members` / `condition`
+returns no rows and a reason naming the offending binding. That last one is the
+`member`-versus-`members` typo guard, and it exists because a policy with a
+singular `member:` key is a policy whose grants the gate would otherwise silently
+fail to see.
+
+**Step two: the promise.** `examples/walkthrough/requirements.md` holds one
+sentence and one block:
+
+````text
+## Owner stays inside the company domain
+
+No binding may grant roles/owner to a principal outside domain acme.example.
+
+```promise
+id: owner-stays-inside-acme
+vocab: role roles/owner
+vocab: principal domain:acme.example
+smt:
+  exists b in iam_bindings
+    and
+      cmp eq field b.role str "roles/owner"
+      not
+        suffix field b.member "@acme.example"
+```
+````
+
+`mode: refute` (set in the document's frontmatter) is the polarity: the block
+describes the pattern that must **not** hold.
+
+**Step three: compile.** The compiler grounds both `vocab:` values against the
+snapshot, type-checks the AST, proves the formula is satisfiable and
+non-tautological, mints one compliant and one violating example from the
+solver's own models, and writes the artifact:
+
+```bash
+.venv/bin/gcp-ground compile-requirements examples/walkthrough \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json --out demo/compiled-walkthrough
+```
+
+```text
+GCP policy grounding examples/walkthrough PASSED [z3]  grounded=3 ungrounded=0 contradicted=0 unverified=0
+  ✓ [role] requirement:owner-stays-inside-acme#vocabulary[0]: role 'roles/owner' exists in the snapshot [snapshot 2026-07-25T08:00:00Z]
+  ✓ [principal] requirement:owner-stays-inside-acme#vocabulary[1]: principal 'domain:acme.example' exists in the snapshot [snapshot 2026-07-25T08:00:00Z]
+  ✓ [sec:compile] examples/walkthrough/requirements.md:25: 'No binding may grant roles/owner to a principal outside domain acme.example.' [snapshot 2026-07-25T08:00:00Z]
+```
+
+The artifact is the review boundary, and `show_promises.py` is how you read it:
+
+```bash
+python3 show_promises.py demo/compiled-walkthrough
+```
+
+```text
+document: examples/walkthrough/requirements.md  (sha256 8c45d6883945…, snapshot 2026-07-25T08:00:00Z, encoder gcp-sec-encode/1)
+
+========================================================================
+✓ ENFORCED  [iam/proposal/refute/high]  owner-stays-inside-acme
+  “No binding may grant roles/owner to a principal outside domain acme.example.”
+    — examples/walkthrough/requirements.md:25
+  compiled rule (canonical s-expression):
+    (exists ((b iam_bindings)) (and (not (suffix b.member "@acme.example")) (eq b.role "roles/owner")))
+  compliant witness (z3-model): b.member='C', b.role=''
+  violating witness (z3-model): b.member='A', b.role='roles/owner'
+```
+
+The s-expression is rendered from the stored AST, not from anything the solver
+returned, and its `and` arguments are in canonical (sorted) order rather than
+authored order — which is why `not` precedes `eq` here and `cmp eq` came first in
+the markdown. The two witnesses are z3's own choice of strings: `'A'` is the
+shortest string z3 could find that does not end in `"@acme.example"`, and `'C'`
+the shortest role name that is not `roles/owner`. They are pinned into the
+artifact and re-classified on every load — if an edit or a solver upgrade ever
+changes what the formula decides, the rule refuses to load — but their exact
+spelling belongs to the solver, so nothing should pin *them*.
+
+**Step four: the ground formula.** At evaluation time the quantifier is
+**unrolled** over the real rows. There is no `exists` left, no variable left, and
+nothing for the solver to search: `field b.role` becomes the literal string in
+each row. One `and` per row, `or` over the rows, because `exists` is a
+disjunction:
+
+```text
+(or (and (not (str.suffixof "@acme.example" "group:data-eng@acme.example"))
+         (= "roles/bigquery.dataViewer" "roles/owner"))
+    (and (not (str.suffixof "@acme.example" "user:alice@acme.example"))
+         (= "roles/owner" "roles/owner"))
+    (and (not (str.suffixof "@acme.example" "user:mallory@outsider.example"))
+         (= "roles/owner" "roles/owner")))
+```
+
+Line by line, which is the point of showing it at all:
+
+- **Row 0** (`roles/bigquery.dataViewer` → `group:data-eng@acme.example`). The
+  member *does* end in `@acme.example`, so `str.suffixof` is true and `not` makes
+  the first conjunct false; the role comparison is false as well. The row cannot
+  satisfy the pattern, and it could not have done so for either reason alone.
+- **Row 1** (`roles/owner` → `user:alice@acme.example`). The role matches, so the
+  second conjunct is true — but alice is inside the domain, so the first conjunct
+  is false. This is the row that shows the promise is narrower than "no
+  `roles/owner`": an owner grant inside the domain is admitted.
+- **Row 2** (`roles/owner` → `user:mallory@outsider.example`). Both conjuncts
+  true. The pattern is satisfied.
+- The `or` is therefore **true**: the forbidden pattern occurs.
+
+**Step five: the verdict.** `mode: refute` means the obligation handed to the
+solver is `Not(formula)` — one line, `sec_probes.obligation`, and the only place
+polarity is ever applied. `Not(true)` is `false`, so the obligation does not
+hold, and the promise is `contradicted`. The gate then re-evaluates the formula
+one row at a time to find *which* row witnesses the violation, in collection then
+index order, and reports the first that does — `iam_bindings[2]`, mallory's row,
+when this policy is judged. The witness is a real row of your document, quoted
+back, never a generated example.
+
+#### Four rules a human needs to reason about any promise
+
+1. **A missing field is an abstention, not a default.** Rows are deliberately
+   ragged: a dimension with nothing truthful to say omits its key rather than
+   inventing `0.0.0.0/0` or `""`. If a promise then mentions that field, the
+   encoder raises and the whole rule abstains with
+   `iam_bindings[0].member is missing from the record — not decided`. It does not
+   skip the row, because skipping a row is how a `forall` promise passes
+   vacuously over exactly the record nobody could read.
+2. **An empty collection has to earn its verdict.** `exists` over zero rows
+   encodes to `false`, so a refute-mode promise over an empty collection would
+   ground — a clean pass over nothing. The evidence floor
+   (`sec_rules._normalize_extraction`) forbids that: an extractor returning no
+   records must say *which* empty it means — positively observed empty, or
+   unreadable / never looked. Unreadable and never-looked become `unverified`.
+   Observed-empty grounds, and the attestation is printed in the verdict, so
+   "there was nothing there, and that settles it" never travels silently.
+3. **Refute mode is `Not(formula)`, and only that.** `assert_satisfiable` hands
+   the formula through unchanged; `refute` negates it. Nothing else in the
+   pipeline inverts a meaning, which is why the polarity is a required header
+   rather than something inferred from the sentence.
+4. **A witness is a real model, never an illustration.** A compile-time witness
+   is a satisfying assignment z3 produced for the promise's own formula. An
+   evaluation-time witness is a row of your document. Where a witness address is
+   solver-minted — the public source address in `[firewall_exposure]`, say —
+   this page masks it `(…)` and says so, because it is an example the solver
+   happened to pick and not a constant of your rule.
+
+### Adopting a new GCP policy type
+
+The gate learns a policy surface in five steps. Each has a worked precedent in
+the tree; read the precedent before writing anything.
+
+1. **Decide the fields and their sorts.** One row per scalar combination, sorts
+   from the closed set, every `Cidr` paired with its `Ip4` mask — the precedent
+   is `_DENY_RULE_FIELDS` in `gcp_grounding/sec_domains.py`, whose comment says
+   for each field why it is spelled the way it is.
+2. **Declare a `CollectionSpec`.** Name, tier (`proposal` / `pair` / `estate`),
+   and the field mapping — the precedent is the `COLLECTION_SPECS` tuple in the
+   same file, which registers unconditionally so that a promise naming a
+   collection whose claims module is missing abstains loudly instead of failing
+   as an unknown collection.
+3. **Write a guarded extractor.** A function from `RuleContext` to rows that
+   raises `_Undecidable` on anything it does not recognize — the precedent is
+   `_firewall_records` plus the `_guarded` wrapper at the bottom of
+   `sec_domains.py`, which turns `_Undecidable`, `evidence.NotEvaluated` and even
+   an unexpected crash into a `missing_reason` so a broken domain abstains
+   instead of taking the gate down.
+4. **Register both.** `sec_ast.register_collection` for the spec and
+   `sec_rules.register_extractor` for the extractor, both called from the single
+   idempotent `sec_domains.register()` — the precedent is that function, and it
+   is today the only caller of either registrar in the tree.
+5. **Write one promise against it.** A markdown file quantifying over the new
+   collection, compiled and run — the precedent is
+   `examples/terraform-roles/requirements.md`, one promise over
+   `proposed_role_permissions`, with `examples/terraform-roles/proposal_b.tf.json`
+   as its violating document.
+
+If you want a coding assistant to draft the extractor, hand it the block below
+verbatim along with the precedent files. It is the set of constraints the review
+gate here will hold the result to, and most of them are the difference between a
+gate and a rubber stamp.
+
+```text
+INSTRUCTION BLOCK — a new collection + extractor for this repository.
+
+Read gcp_grounding/sec_domains.py and gcp_grounding/sec_rules.py first, and
+follow their conventions rather than inventing new ones. The generated code
+must obey all of the following. Where two of them conflict, abstaining wins.
+
+1.  ABORT, DO NOT GUESS. Any shape you do not positively recognize raises
+    _Undecidable with a message naming the offending object and ending in a
+    phrase saying what was not decided. Never fall through, never `continue`
+    past a record you could not parse, never `except: pass`.
+2.  NEVER FABRICATE A ROW, AND NEVER DEFAULT A FIELD. A dimension with no
+    truthful value omits its key from the record; it does not get 0, "",
+    0.0.0.0/0 or None. The one exception is a Str dimension whose real-world
+    meaning is "none", which may be "" — document why at the field.
+3.  RETURN THROUGH THE EVIDENCE FLOOR. Returning zero rows is only legal with
+    a reason attached: evidence.observed_empty(what, detail) when you looked
+    and it was empty, or a missing_reason when it was unreadable or never
+    looked. An extractor that returns () with no reason gets one synthesized
+    for it and the rule abstains — never lean on that fallback; say which of
+    the two empties you mean.
+4.  READ THROUGH gcp_grounding.evidence. Use evidence.rows / evidence.scalar /
+    evidence.examined so that "present but empty" and "absent" reach the ledger
+    as different facts. Raise evidence.NotEvaluated with both a `what` and a
+    `reason`.
+5.  VALIDATE THE PLAN ENVELOPE BEFORE THE CENSUS. For a terraform arm, check
+    the document is a readable plan before counting anything, and abstain
+    naming the malformed key. A readable plan carrying no resource of your kind
+    is still an abstention, not a pass: "the plan mentions no X" and "the
+    obligation holds over every X" are different facts.
+6.  REFUSE count / for_each. A block whose multiplicity is undecided yields no
+    row and one abstention naming the block. Same for a resource whose address
+    or key you cannot resolve.
+7.  THREAD THE WITNESS ADDRESS. Put the source block address on every row under
+    sec_rules.WITNESS_ADDRESS_FIELD. It must NOT appear in the CollectionSpec
+    fields, so no promise can quantify over it; its only consumer is the
+    refutation message.
+8.  SORT DETERMINISTICALLY. Sort rows by their declared fields in declared
+    order, with absent keys sorting last, so the witness a refutation names is
+    stable across runs and machines.
+9.  SORTS COME FROM THE CLOSED SET only: Bool, Str, Int, Ip4, Cidr, Port,
+    Proto, Real. Every Cidr field declares a companion <field>_mask of sort
+    Ip4. No new sorts.
+10. IDS ARE KEBAB-CASE. Any promise id you write matches ^[a-z0-9][a-z0-9-]*$.
+    Collection and field names are snake_case.
+11. TEST EVERY ABSTENTION PATH. One test per raise: each must assert the
+    missing_reason text, not merely that the rows are empty. Also test the
+    happy path's exact row tuple and its order. A branch that can abstain and
+    has no test pinning that abstention is not finished.
+12. EXPECT A MUTATION ENTRY. This repository runs a mutation contract: a
+    must-kill entry in tests/mutation_entries.py names a source slice and the
+    test that dies when it is mutated. Say which slice of your extractor is
+    load-bearing and which test kills it; do not add the entry yourself unless
+    you were asked to.
+
+Do not add a dependency. Do not make a network call. Do not shell out to
+terraform or gcloud. If the task cannot be done under these constraints, say
+so and stop rather than relaxing one of them.
+```
+
+### Authoring a new security requirement
+
+A requirement is a Markdown file dropped in `sec_requirements/`. No Python. The
+smallest useful file is a frontmatter block, a heading, one sentence and one
+promise block:
+
+````text
+---
+domain: iam
+state: proposal
+mode: refute
+---
+
+## No public principals
+
+No binding may include allUsers or allAuthenticatedUsers.
+
+```promise
+id: no-public-principals
+smt:
+  exists b in iam_bindings
+    in field b.member set["allAuthenticatedUsers", "allUsers"]
+```
+````
+
+The heading opens the requirement; the first non-empty line under it is the
+sentence pinned verbatim into the artifact and printed back on every run that
+enforces it; the fenced `promise` block is the encoding. `id` is required and
+kebab-case, `mode` is required (in the block or the frontmatter) because a
+compiler that inferred polarity could silently invert a security rule, and
+`smt:` is last with its body indented two spaces per level.
+`sec_requirements/README.md` is the canonical grammar: every node keyword, every
+term, every header key, and the full collection table.
+
+That file carries no `vocab:` line, and the omission is deliberate: `allUsers`
+and `allAuthenticatedUsers` are not principals in anybody's estate, so grounding
+them would reject the promise for naming a name no snapshot can hold. Every name
+that *is* an estate name gets a `vocab:` line; a promise that leaves one out
+because it is not one should say so in a `note:`.
+
+Then compile it, and expect to be rejected. **The rejections are the feature**,
+and there are three worth knowing before you write:
+
+- **Ungrounded vocabulary.** Every `vocab:` value is pushed through the same
+  existence reasoner that catches a typo'd role in a policy. Name a role that
+  does not exist and the document fails to compile, with a did-you-mean. A rule
+  about a name that is not real cannot fire on anything.
+- **Unsatisfiable.** The compiler proves some record *could* violate the rule. A
+  formula no record can ever satisfy is rejected, because it is a rule that can
+  never fire — usually a typed mistake, like comparing a `Str` field to a value
+  the field never takes.
+- **Tautology.** The compiler proves some record *could* comply. A rule that
+  forbids nothing is rejected as vacuous, and this is the one that matters most:
+  a vacuous security rule is worse than no rule, because it reads as coverage on
+  a dashboard.
+
+What no prover can do stays yours: whether the formula means what the sentence
+says. The pinned violating witness is the review surface built for exactly that
+question — read it and ask *is this what I meant to forbid?* "Authoring
+promises: what the compiler proves, what you review" below states both review
+duties in full.
+
+To have a coding assistant draft promises, give it the block below, the
+collection table from this section, and `sec_requirements/README.md`.
+
+```text
+INSTRUCTION BLOCK — drafting security promises for this repository.
+
+You are writing Markdown requirement documents, not code. Each document is one
+or more sections; each section is a heading, one plain-English sentence, and
+one fenced `promise` block.
+
+INPUTS YOU MUST BE GIVEN, and must not invent if you were not:
+  * the collection field tables (collection name, tier, field names and sorts);
+  * the estate snapshot, or the list of role / permission / principal /
+    constraint names it contains.
+
+FORMAT
+  * Sentence first, then the promise block. The sentence is what a reviewer
+    reads and what the gate prints back; write it as a rule a security engineer
+    would recognize, not as a description of the formula.
+  * `id:` is required, unique in the document, and matches ^[a-z0-9][a-z0-9-]*$
+    — kebab-case, no underscores, no capitals.
+  * `mode:` is required, in the block or in the frontmatter. `refute` means the
+    formula describes the pattern that must NOT hold; `assert_satisfiable`
+    means it describes a pattern that must be able to hold. Choose it
+    deliberately and state which you chose in a `note:` if it is not obvious.
+  * `state:` is the tier of the collections you quantify over: `proposal`
+    (the document alone), `pair` (old and new), `estate` (the snapshot).
+  * `smt:` comes last; its body is prefix notation, two spaces per nesting
+    level, tabs rejected.
+
+GROUNDING
+  * Every role, permission, principal and constraint the formula names gets a
+    `vocab:` line naming it. That line is what the compiler grounds against the
+    snapshot; a name with no vocab line is an ungrounded literal hiding in a
+    string comparison.
+  * The one exception is a literal that is deliberately NOT an estate name —
+    `allUsers` and `allAuthenticatedUsers` are in no snapshot's principal list,
+    so a vocab line for one would reject the promise. Leave it out and say why
+    in a `note:`; never leave one out to dodge a rejection.
+  * Never name a role, permission or principal you have not been shown in the
+    snapshot. If you need one that is not there, stop and say so.
+
+FIELDS
+  * Use only the fields the collection declares, spelled exactly. Quantifying
+    over a field the rows may omit makes the rule abstain at evaluation time —
+    if that is a real risk for your rule, say so in a `note:`.
+  * Prefer the narrowest collection that can express the rule. A promise over
+    an estate-tier collection abstains whenever snapshot coverage is
+    incomplete, which is often.
+
+DISCIPLINE
+  * One requirement per section. Do not fold two rules into one formula with a
+    disjunction; two refutations name two different things to fix.
+  * If the sentence cannot be expressed in the term language, write the section
+    with NO promise block. It compiles to `unverified` with the sentence
+    quoted, which is the correct outcome. Do not approximate it.
+  * Add a `note:` wherever the formula is stricter or looser than the English —
+    that gap is the single most useful thing you can leave a reviewer.
+
+THEN RUN THE COMPILER: `gcp-ground compile-requirements <dir> --snapshot <snap>`.
+Treat every rejection as the compiler being right until you can explain
+precisely why it is wrong. "Vocabulary is not grounded" means the name is not
+real. "Unsatisfiable" means no record can ever violate your rule. "Tautology"
+means it forbids nothing. In all three cases the fix is the promise, not the
+compiler. Never edit a compiled artifact by hand.
+```
+
+### The walkthrough: one promise, one change, one verdict
+
+Everything the section has described, on four committed files.
+`./run_demo.sh w` runs the whole arc — the compile of step three above, then the
+verify below and its REST-policy counterpart — and checks each step's exit
+against the one this page documents.
+
+**The current state.** `examples/walkthrough/terraform.tfstate` — one applied
+binding, granting a read role to an internal group:
+
+```text
+{
+  "version": 4,
+  "terraform_version": "1.9.5",
+  "serial": 3,
+  "lineage": "9f4b21c7-6e58-4d13-8a70-2c5e91b7d604",
+  "outputs": {},
+  "resources": [
+    {
+      "mode": "managed",
+      "type": "google_project_iam_binding",
+      "name": "analysts",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwYcQ0hSbW8=",
+            "id": "acme-prod/roles/bigquery.dataViewer",
+            "members": ["group:data-eng@acme.example"],
+            "project": "acme-prod",
+            "role": "roles/bigquery.dataViewer"
+          },
+          "sensitive_attributes": []
+        }
+      ]
+    }
+  ]
+}
+```
+
+**The rule.** `examples/walkthrough/requirements.md`, the one promise printed in
+full above, compiled by step one of the arc into `demo/compiled-walkthrough` with
+the s-expression and the two witnesses shown there.
+
+**The change.** `examples/walkthrough/proposal.tf.json` — the same binding, plus
+one an outside contractor was added to:
+
+```text
+{
+  "resource": {
+    "google_project_iam_binding": {
+      "analysts": {
+        "members": ["group:data-eng@acme.example"],
+        "project": "acme-prod",
+        "role": "roles/bigquery.dataViewer"
+      },
+      "contractor_owner": {
+        "members": ["user:mallory@outsider.example"],
+        "project": "acme-prod",
+        "role": "roles/owner"
+      }
+    }
+  }
+}
+```
+
+**The run.**
+
+```bash
+.venv/bin/gcp-ground verify-policy \
+    --proposal examples/walkthrough/proposal.tf.json \
+    --snapshot tests/fixtures/gcp/agentic_snapshot.json \
+    --terraform-state examples/walkthrough/terraform.tfstate \
+    --requirements demo/compiled-walkthrough \
+    --explain
+```
+
+Exit 1, and the last lines on the terminal:
+
+```text
+decision recap: DENIED (exit 1) — because:
+  ⚠ [sec:iam] owner-stays-inside-acme: refuted by iam_bindings[1]
+      (google_project_iam_binding.contractor_owner)
+      member='user:mallory@outsider.example' role='roles/owner'
+(the full narrative is above, before the report)
+
+summary — what just happened:
+  terraform state on disk : examples/walkthrough/terraform.tfstate [cli]
+  promises in force       : 1 enforcing, 0 not — from demo/compiled-walkthrough [cli]
+      owner-stays-inside-acme
+        “No binding may grant roles/owner to a principal outside domain
+          acme.example.”
+  provider                : no schema configured — resource shapes not checked
+  proposed change         : examples/walkthrough/proposal.tf.json — a terraform
+      configuration (2 resources): 2 google_project_iam_binding
+      google_project_iam_binding.analysts: grants roles/bigquery.dataViewer to
+        group:data-eng@acme.example
+      google_project_iam_binding.contractor_owner: grants roles/owner to
+        user:mallory@outsider.example
+  result                  : DENIED (exit 1)
+    it violated these promises:
+      owner-stays-inside-acme
+        “No binding may grant roles/owner to a principal outside domain
+          acme.example.”
+```
+
+(the recap verdict, every summary row, every promise sentence and every
+proposed-change sentence is one line on your terminal; this page wraps them.
+Nothing here is masked `(…)`: unlike a solver-minted witness address, every
+value in this refutation is quoted from the document itself, which is why the
+member and the role can be named verbatim)
+
+**What happened, stage by stage.**
+
+1. **Kind detection.** The document's own shape decides which extractor reads it
+   — a `resource` object of terraform block types here, a `bindings` array in the
+   REST policy of step two. Same collection, two different extractors; a file
+   matching no known shape is reported as unjudged rather than guessed at.
+2. **Rows.** The terraform arm of `iam_bindings` rebuilds rows from the claims
+   `tf_claims` already emits for the document, and threads each block's address
+   onto its row. Two blocks, one member each, two rows:
+   `iam_bindings[0]` is `google_project_iam_binding.analysts`
+   (`roles/bigquery.dataViewer` → `group:data-eng@acme.example`) and
+   `iam_bindings[1]` is `google_project_iam_binding.contractor_owner`
+   (`roles/owner` → `user:mallory@outsider.example`). It is built from the same
+   claims, not from a second parse of the file, so the rows a promise sees and
+   the rows the built-in checks see cannot drift apart.
+3. **The librarian.** `google_project_iam_binding` is a real terraform resource
+   type, `roles/bigquery.dataViewer` and `roles/owner` are real roles, and
+   `group:data-eng@acme.example` is a real principal — five green existence
+   verdicts, the resource type counted once per block.
+   `user:mallory@outsider.example` is not in the snapshot; here it
+   abstains rather than blocking, and says why: this fixture snapshot is older
+   than the seven-day freshness ceiling, so its `principals` table is demoted to
+   `uncaptured`, and a table nobody vouches for cannot prove an absence. Under a
+   snapshot inside the ceiling, whose coverage of `principals` is licensed, the
+   same line is an `ungrounded` finding that blocks on its own.
+4. **The ground formula.** The quantifier unrolls over the two rows exactly as it
+   did over the three earlier: `or` of two `and`s. Row 0 fails on the role, row 1
+   satisfies both conjuncts, so the pattern occurs.
+5. **The auditor.** `refute` makes the obligation `Not(pattern occurs)`. It does
+   not hold; the promise is `contradicted`. The per-row re-evaluation names
+   `iam_bindings[1]` and the report quotes the row's own fields and the block
+   address — `google_project_iam_binding.contractor_owner` is the line to edit.
+6. **The decision.** One contradicted verdict is enough: DENIED, exit 1. The
+   summary names the state file and the layer that supplied it, the promise
+   corpus, the census of the change, and last the result with the violated
+   promise's sentence repeated — because the sentence a change was denied for is
+   the one thing a reader must not have to hunt for.
+
+The same promise, over the REST policy this section unrolled by hand, is step two
+of the arc and reaches the same verdict on `iam_bindings[2]`. One rule, one
+sentence, two document kinds, no second encoding.
 
 ## The three inputs
 
@@ -510,17 +1251,25 @@ sources:                                    # every source read, highest fidelit
     category                              scope       keys  dropped  reasons
     firewall_rules                        partial        4        0  -
     iam_bindings                          partial        1        0  -
-settings:                                   # every setting, and WHICH layer supplied it
-  primary = estate/api-snapshot.json [config /checkout/.gcp-grounding.json]
+settings:                                   # what somebody SET, and WHICH layer set it
+  primary         = estate/api-snapshot.json [config /checkout/.gcp-grounding.json]
   terraform_state = infra/prod/terraform.tfstate [cli]
-  precedence = - [default]
-  max_age = 7d [env]
+  max_age         = 7d [env]
+  12 settings at defaults: origins, extra, terraform_plan, terraform_dir,
+      precedence, drift_policy, completeness, now, provider_schema,
+      schema_policy, targets, requirements
 targets:                                    # which source won, and HOW the row was matched
   iam_bindings //cloudresourcemanager.googleapis.com/projects/acme-prod
       -> estate/api-snapshot.json [explicit-flag]
       resolved - a current counterpart was found and compared against
 drift: none - no source disagreed about a row that was looked up
 ```
+
+Every setting is named on every run, and the shape says which is which: a
+setting somebody set gets its own row with the layer that set it, and the rest
+are listed together on the one `settings at defaults` line. An input nobody can
+see is an input nobody can audit — but fourteen rows of `- [default]` bury the
+two that were chosen.
 
 `[explicit-flag]`, `[config-map]`, `[tf-address]` and `[tf-attributes]` are the
 *how*: "the terraform address matched" and "the name matched after self-link
@@ -720,22 +1469,19 @@ Writing a promise — by hand, or drafted by the optional LLM assist — does no
 mean writing tests for it. Per promise, at compile time, automatically:
 
 1. **Grammar and types** — sorts, bounds, unknown keywords: outright rejection.
-2. **Vocabulary grounding** — every role, permission, principal and constraint
-   the promise *names* is checked against the estate snapshot; a hallucinated
-   name fails to compile, with a did-you-mean.
-3. **Satisfiability, proven** — the solver confirms some record *could*
-   violate the rule; a rule that can never fire is rejected.
-4. **Non-tautology, proven** — some record *could* comply; a rule that forbids
-   nothing is rejected as vacuous. A vacuous security rule is worse than none,
-   because it reads as coverage.
-5. **Auto-generated test vectors** — the compiler extracts a concrete
+2. **Vocabulary grounding, satisfiability and non-tautology, each proven** — a
+   hallucinated name, a rule no record could ever violate, and a rule that
+   forbids nothing are all rejected rather than enforced. "Authoring a new
+   security requirement" above works through what each of the three rejections
+   means and why being refused is the point.
+3. **Auto-generated test vectors** — the compiler extracts a concrete
    compliant example and a concrete violating example from the solver's own
    models and pins them into the artifact as literals. They are re-classified
    on every recompile and at every load, forever: if a solver upgrade, an
    edit, or tampering ever changes what the formula decides, the pinned
    witnesses stop classifying and the rule **refuses to load** rather than
    silently meaning something else.
-6. **Independence probing** across promises, and the `--check` CI drift gate.
+4. **Independence probing** across promises, and the `--check` CI drift gate.
 
 Two things remain yours, because no prover can do them:
 
@@ -899,6 +1645,7 @@ reading them from the table below.
 | 6a | The carve-out: payroll CI added to the guardrail's `exceptionPrincipals` (step 12) | `examples/terraform-denypolicy/plan_threading.json` | DENIED — both deny promises VIOLATED, the escaping (principal, permission) quoted verbatim; the threading warning beside them |
 | 6b | The removal: a rendered plan deleting the deny policy — the dormant grant wakes (step 12) | `examples/terraform-denypolicy/plan_remove_deny.json` | DENIED — `[iam_deny_shadow]` contradicted, naming the woken grant and its escalation class; the promises abstain by name |
 | 6c | The hygiene sweep: a folder-level `reset` that reads as a no-op (step 12) | `examples/terraform-denypolicy/plan_reset_payments.json` | DENIED — `sa-key-creation-stays-effectively-enforced` refuted over the effective collection, naming the folder node and the block |
+| w | The teaching walkthrough: one promise, one REST policy, one terraform binding, every artifact quoted in "How the gate thinks" | `examples/walkthrough/policy.json`, `examples/walkthrough/proposal.tf.json` | DENIED twice — `owner-stays-inside-acme` VIOLATED over both document kinds, the refutation naming the offending row |
 
 Two variations worth showing live: rerun 4 with `--schema-policy annotate`
 (the identical finding demoted to a warning at exit 0 — the hook-warns-while-
@@ -1338,7 +2085,8 @@ decision recap: DENIED (exit 1) — because:
   ⚠ [sec:vpc_firewall] masked-allow-only-known-domains: refuted by
       proposed_firewall_rules[1] (google_compute_firewall.allow_rdp_broad)
       action='allow' direction='INGRESS' … name='allow-rdp-broad' …
-      source_range='10.198.52.0/28' source_range_mask='255.255.255.240' …
+      protocol='tcp' source_range='10.198.52.0/28'
+      source_range_mask='255.255.255.240'
 (the full narrative is above, before the report)
 
 summary — what just happened:
@@ -1904,14 +2652,14 @@ permission) pair verbatim:
 ```text
 decision recap: DENIED (exit 1) — because:
   ⚠ [sec:iam] every-deny-covers-token-creation: refuted by deny_rules[0]
-      (google_iam_deny_policy.guard_token_mint) condition=''
+      (google_iam_deny_policy.guard_token_mint)
       denied_principal='principalSet://goog/public:all' has_condition=False
       has_principal_exceptions=True
-      permission='iam.serviceAccounts.getAccessToken' policy='' rule_index=0
+      permission='iam.serviceAccounts.getAccessToken' rule_index=0
   ⚠ [sec:iam] no-principal-threads-the-guardrail: refuted by
       deny_rule_exceptions[0] (google_iam_deny_policy.guard_token_mint)
       exception_principal='principal://iam.googleapis.com/projects/-/serviceAccounts/payroll-ci@acme-pay-prod.iam.gserviceaccount.com'
-      policy='' rule_index=0
+      rule_index=0
 (the full narrative is above, before the report)
 
 summary — what just happened:
@@ -1990,14 +2738,11 @@ grants:
 decision recap: DENIED (exit 1) — because:
   ⚠ [iam_deny_shadow] google_iam_deny_policy.guard_token_mint: removing or
       narrowing rule 0 wakes the dormant grant of
-      iam.serviceAccounts.getAccessToken (impersonation) to
+      iam.serviceAccounts.getAccessToken, iam.serviceAccounts.getOpenIdToken
+      (impersonation) to
       serviceAccount:payroll-ci@acme-pay-prod.iam.gserviceaccount.com
       (//cloudresourcemanager.googleapis.com/projects/acme-pay-prod) — the
       deny policy was the only thing keeping a known escalation path inert
-  ⚠ [iam_deny_shadow] google_iam_deny_policy.guard_token_mint: removing or
-      narrowing rule 0 wakes the dormant grant of
-      iam.serviceAccounts.getOpenIdToken (impersonation) to
-      serviceAccount:payroll-ci@acme-pay-prod.iam.gserviceaccount.com …
 (the full narrative is above, before the report)
 
 summary — what just happened:
@@ -2016,16 +2761,24 @@ summary — what just happened:
   provider                : no schema configured — resource shapes not checked
   proposed change         : examples/terraform-denypolicy/plan_remove_deny.json
       — a terraform plan: 1 google_iam_deny_policy
-      google_iam_deny_policy.guard_token_mint: deletes the deny policy
+      google_iam_deny_policy.guard_token_mint: deletes the deny policy denying
+        iam.serviceAccounts.getAccessToken, iam.serviceAccounts.getOpenIdToken
+        to principalSet://goog/public:all
   result                  : DENIED (exit 1)
-    blocked by 2 built-in findings: [iam_deny_shadow]
+    blocked by 1 built-in finding: [iam_deny_shadow]
 ```
 
 — and the summary is where the promises' abstention is visible as an absence:
 three promises are in force, none of them refused, and the block is reported
-as built-in findings alone. The sentence leads with the plan's own change
-action: the block has no planned values to describe, and "deletes" is the one
-thing about it the plan does state.
+as built-in findings alone. One finding, not one per permission: the grant is
+what woke, the role it carries expands to two impersonation permissions, and
+both are named in the sentence that reports the grant. The sentence says what
+the deletion takes AWAY:
+the block plans no values (that is what a deletion is), so the guardrail is
+read off the entry's own `change.before` — the same old side the wake
+computation grades — through the same deny collections a new policy is
+described with. "deletes the deny policy" on its own would leave the reader to
+go and look up what was in it.
 
 No allow policy changed anywhere — effective permissions increased with no
 grant edited, which is exactly the shape no per-document gate can see. The

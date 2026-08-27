@@ -590,6 +590,22 @@ def _render_model(z3, obl, model) -> str:
     return " ".join(parts) if parts else "<counter-model>"
 
 
+#: The one record field whose value is a CODE rather than something an operator
+#: wrote: the flattening stores a layer-4 match's IANA protocol number, and
+#: ``protocol=6`` asks its reader to go and look 6 up. Spelled back through
+#: :data:`gcp_grounding.sec_domains.PROTOCOL_NUMBERS` — the table the number came
+#: out of, read in reverse rather than restated here.
+_PROTOCOL_FIELD = "protocol"
+
+
+def _protocol_names() -> Mapping:
+    """``{6: "tcp", 17: "udp", ...}`` — empty where ``sec_domains`` is not part
+    of this checkout, which leaves the number printed as the number."""
+    domains = _optional("sec_domains")
+    numbers = getattr(domains, "PROTOCOL_NUMBERS", {}) if domains else {}
+    return {number: name for name, number in numbers.items()}
+
+
 def _fmt_record(collection: str, index: int, record: Mapping) -> str:
     """``"collection[i] (address) k=v ..."`` with keys sorted, for the witness
     message.
@@ -598,11 +614,28 @@ def _fmt_record(collection: str, index: int, record: Mapping) -> str:
     :data:`WITNESS_ADDRESS_FIELD` — the terraform block address its extractor
     threaded through — and is excluded from the ``k=v`` fields: it locates the
     record, it is not a value the obligation was decided over.
+
+    TIGHTENED ONCE, HERE, AT MINT TIME, because every surface that reprints a
+    refutation reprints this string — the report line, the ``--explain``
+    narrative, the JSON message — so shortening it anywhere else would be three
+    chances to shorten it differently:
+
+    * a field whose value is the EMPTY STRING is dropped. The flattening mints
+      ``source_tag=''``/``target_tag=''`` for a rule that names no tag (the
+      "no tag" value of a ``Str`` field, so the cross product still has a row),
+      and a refutation that spends two fields saying "no tag" buries the ones
+      that carry the violation. The row itself is unchanged: the structured
+      witness :func:`last_witness` hands the evidence table still carries every
+      key, so nothing that reads the record loses a field.
+    * ``protocol`` is spelled as its name (see :data:`_PROTOCOL_FIELD`).
     """
     address = record[WITNESS_ADDRESS_FIELD] if WITNESS_ADDRESS_FIELD in record \
         else ""
-    fields = " ".join(f"{k}={v!r}" for k, v in sorted(record.items())
-                      if k != WITNESS_ADDRESS_FIELD)
+    names = _protocol_names()
+    fields = " ".join(
+        f"{key}={(names.get(value, value) if key == _PROTOCOL_FIELD else value)!r}"
+        for key, value in sorted(record.items())
+        if key != WITNESS_ADDRESS_FIELD and value != "")
     where = f"({address}) " if address else ""
     return f"{collection}[{index}] {where}{fields}".rstrip()
 

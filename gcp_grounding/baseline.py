@@ -126,6 +126,8 @@ __all__ = [
     "resolve",
     "derive",
     "status_verdict",
+    "stale_verdict",
+    "STALE_REASON",
     "key_mismatch_verdicts",
 ]
 
@@ -163,6 +165,15 @@ STATUS_KINDS = {
     "unresolved": "baseline:unresolved",
     "opaque": "baseline:opaque",
 }
+
+#: The one clause a stale row earns. Named once because
+#: :func:`stale_verdict` rolls those rows up per source and has to be able to
+#: tell this generic clause apart from anything else a row also said.
+STALE_REASON = "the source this row came from is past its age ceiling"
+
+#: How many row keys a rolled-up staleness verdict enumerates before it counts
+#: the rest.
+_STALE_KEY_CAP = 4
 
 #: The kind for "this document does not name its own resource and nobody told
 #: us which one it is".
@@ -1403,7 +1414,7 @@ def resolve(target: TargetRef, snapshot: GcpSnapshot | None,
     taint = ledger.taint_of(category, matched.key) if ledger is not None else ""
     if taint == "stale":
         flags.append("stale")
-        reasons.append("the source this row came from is past its age ceiling")
+        reasons.append(STALE_REASON)
     if document is None:
         flags.append("opaque")
         reasons.append(f"'{category}' has no counterpart DOCUMENT form, so a pair "
@@ -1437,6 +1448,37 @@ def status_verdict(entry: BaselineEntry) -> Verdict:
     reason = entry.reason or f"the baseline for '{target}' resolved {entry.status}"
     return Verdict("unverified", kind, target, 0,
                    f"{reason} [{entry.target.category} via {entry.how}]")
+
+
+def stale_verdict(source_id: str, entries: Sequence[BaselineEntry]) -> Verdict:
+    """ONE verdict for every row a single over-age source supplied.
+
+    Staleness is a property of the SOURCE and not of any one row, so a capture
+    past its ceiling used to mint the same sentence once per row it covered —
+    a wall of identical lines that hid the one number worth reading, which is
+    how many rows it covers. That count leads here, the keys ride along capped
+    (:data:`_STALE_KEY_CAP`), and any clause a row recorded BESIDE the generic
+    staleness one is carried through deduplicated: this collapses a repetition,
+    never a second thing a row had to say.
+    """
+    keys = [entry.key or entry.target.key for entry in entries]
+    shown = ", ".join(keys[:_STALE_KEY_CAP])
+    extra = len(keys) - _STALE_KEY_CAP
+    if extra > 0:
+        shown = f"{shown} +{extra} more"
+    extras: list[str] = []
+    for entry in entries:
+        for clause in (entry.reason or "").split("; "):
+            if clause and clause != STALE_REASON and clause not in extras:
+                extras.append(clause)
+    tail = f". {'; '.join(extras)}" if extras else ""
+    categories = ", ".join(sorted({entry.target.category for entry in entries}))
+    hows = ", ".join(sorted({entry.how or entry.target.how for entry in entries}))
+    return Verdict(
+        "unverified", STATUS_KINDS["stale"], source_id or (keys[0] if keys else ""), 0,
+        f"{len(keys)} row(s) came from '{source_id or 'an unattributed source'}', "
+        f"which is past its age ceiling, so their counterparts cannot justify a "
+        f"pass: {shown}{tail} [{categories} via {hows}]")
 
 
 def key_mismatch_verdicts(entries: Sequence[BaselineEntry],
@@ -1520,12 +1562,21 @@ def derive(document: Any, kind: str | None, current: Any, *,
         logger.debug("baseline.derive(%s): %d row(s) left byte-quiet because the "
                      "proposal does not change them: %s", source or kind,
                      len(dropped), ", ".join(dropped))
+    # Staleness rolls up per SOURCE (see :func:`stale_verdict`); every other
+    # status stays one verdict per row, because those ARE per-row facts.
+    stale: dict[str, list[BaselineEntry]] = {}
     for index in kept:
         entry = entries[index]
         ambiguity = ambiguities.get(index, ())
         collected.extend(ambiguity)
-        if not ambiguity and entry.status != "resolved":
-            collected.append(status_verdict(entry))
+        if ambiguity or entry.status == "resolved":
+            continue
+        if entry.status == "stale":
+            stale.setdefault(entry.source_id, []).append(entry)
+            continue
+        collected.append(status_verdict(entry))
+    for source_id, rows in stale.items():
+        collected.append(stale_verdict(source_id, rows))
     entries = [entries[index] for index in kept]
     collected.extend(key_mismatch_verdicts(entries, snapshot, ledger))
 

@@ -507,8 +507,13 @@ def test_a_stale_source_abstains_and_says_how_stale(repo):
     # by how much and against what — assert_abstained looks across the whole
     # unverified bucket, which is the channel an operator actually reads.
     assert_abstained(outcome, report, "2 days before now", "1 day")
-    stale = assert_recorded(report, kind="baseline:stale", target=FIREWALL)
+    # ONE staleness verdict per over-age SOURCE, not per row it supplied: the
+    # verdict is targeted at the source, counts the rows, and names them.
+    stale = assert_recorded(report, kind="baseline:stale",
+                            target=str(repo.snapshot_path))
     assert stale["status"] == "unverified"
+    assert FIREWALL in stale["message"]
+    assert "past its age ceiling" in stale["message"]
     # ... and this is NOT a pass: the abstention reached the agent.
     assert outcome.stderr != "", (
         f"a stale current state abstained in SILENCE, which is indistinguishable "
@@ -534,7 +539,10 @@ def test_the_default_age_ceiling_fires_with_no_flag_at_all(repo):
                     extra_argv=extra, env_overrides=clock)
 
     assert_abstained(outcome, report, "8 days before now", "7 days")
-    assert_recorded(report, kind="baseline:stale", target=FIREWALL)
+    rolled = assert_recorded(report, kind="baseline:stale",
+                             target=str(repo.snapshot_path))
+    assert rolled["message"].startswith("3 row(s) came from ")
+    assert FIREWALL in rolled["message"]
     assert outcome.stderr != "", outcome
 
 
