@@ -11,6 +11,10 @@ change a linter can't see: a firewall allow inserted ahead of the deny that
 used to cover it, a perimeter quietly flipped to dry-run, `roles/owner`
 granted outside your domain.
 
+**In a hurry?** [simple_readme.md](simple_readme.md) is the short version:
+install, one command per demo scenario, the shape of a real verify run, and how
+promises are authored and compiled. This page is everything else.
+
 Every claim a policy makes lands in one of four honest buckets:
 
 - **grounded** — the referenced role/permission/principal/constraint exists in
@@ -92,11 +96,20 @@ the change actually touches, never an estate-wide sweep.
 
 ## Quick start
 
-Sixty seconds from clone to a blocked terraform change, fully offline:
+Sixty seconds from clone to a blocked terraform change, fully offline — two
+commands, install and run:
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+./run_demo.sh 1
+```
 
+`run_demo.sh` is the demo runner: it runs one scenario's arc end to end,
+echoing each step's story and command, and checking every step's exit against
+the one this page documents (`./run_demo.sh --list` names every scenario).
+Scenario 1 is exactly the two commands below, which is what the runner runs:
+
+```bash
 # compile the bundled plain-English security promises into enforced rules
 # (EXITS 1 by design: the corpus includes a deliberately rejected document)
 .venv/bin/gcp-ground compile-requirements tests/fixtures/gcp/sec_requirements \
@@ -119,11 +132,35 @@ decision recap: DENIED (exit 1) — because:
       source (…) can reach tcp/22 through this rule
   ⚠ [sec:vpc_firewall] no-open-ssh-rdp-ingress: refuted by
       proposed_firewall_rules[1] (google_compute_firewall.allow_ssh_world) …
+(the full narrative is above, before the report)
+
+summary — what just happened:
+  terraform state on disk : examples/terraform/terraform.tfstate [cli]
+  promises in force       : 6 enforcing, 2 not — from demo/compiled [cli]
+      (impersonation-sre-only, no-open-ssh-rdp-ingress,
+      no-primitive-roles-outside-domain, no-public-principals,
+      perimeter-restricts-storage, +1 more)
+  provider                : no schema configured — resource shapes not checked
+  proposed change         : examples/terraform/main.tf.json — a terraform
+      configuration (8 resources): 3 google_compute_firewall,
+      2 google_project_iam_binding,
+      1 google_access_context_manager_service_perimeter,
+      1 google_compute_security_policy, 1 google_org_policy_policy
+  result                  : DENIED (exit 1)
+    it violated these promises: no-open-ssh-rdp-ingress,
+      no-primitive-roles-outside-domain
+    blocked by 1 built-in finding: [firewall_exposure]
 ```
 
 (the `(…)` holds a solver-minted example address — e.g. `(35.32.0.0)` — not a
-constant of the rule, so nothing should pin it; the trailing `…` covers the
-recap's third deny line, an `[sec:iam]` refutation)
+constant of the rule, so nothing should pin it; the `…` elsewhere covers the
+recap's third deny line, an `[sec:iam]` refutation, and the tail of two rows
+this page wraps — every summary row is one line on your terminal)
+
+The summary is the closing block of every `--explain` run: each input row
+names the settings layer that supplied it — `[cli]`, `[env]`, `[config
+<path>]`, `[auto]`, `[default]`, the same labels `--state-explain` prints —
+and the result row is last, so the decision stays the final word.
 
 — the violated promise is one of six English sentences compiled from
 `tests/fixtures/gcp/sec_requirements/`, and the refutation names the exact
@@ -743,6 +780,9 @@ as a change would approve the past instead of the future.
 - `sec_requirements/` — the default requirements directory: markdown
   requirement documents (there is a `TEMPLATE.md`), which
   `gcp-ground compile-requirements` turns into `*.promises.json` artifacts.
+- `run_demo.sh` — the demo runner: one scenario of "Running the demo" per
+  invocation, each step checked against the exit this page documents. Plain
+  bash; it needs nothing but the venv below.
 - `tests/` — offline test suite; fixtures under `tests/fixtures/gcp/`. No
   network, no GCP credentials. z3-only assertions are not skipped when z3 is
   missing: the suite BRANCHES on the capability and asserts the honest
@@ -760,6 +800,15 @@ python3 -m venv .venv
 
 Everything below is fully offline — frozen fixture snapshots, no credentials,
 no network. Run from the repo root after the Development setup above.
+
+Every scenario in the table below is also one command: `./run_demo.sh 3c` runs
+that arc end to end — its `compile-requirements` step included — echoing each
+step's story and command before running it, and comparing the exit it observes
+to the exit this page documents for it. A DENIED step exits 1 *by design*, so
+the runner never treats a nonzero exit as failure by itself; it ends with a
+per-scenario verdict line and exits nonzero only if some step's exit diverged
+from what is written here. `./run_demo.sh --list` enumerates the scenarios,
+reading them from the table below.
 
 ### The scenarios at a glance
 
@@ -898,6 +947,8 @@ One command grounds the change, and each of the five inputs is one flag:
 - `--proposal` — the proposed change, agent- or human-authored;
 - `--explain` — the decision narrative.
 
+Through the runner, compile step included: `./run_demo.sh 1`.
+
 ```bash
 # 7. The terraform finale. EXPECTED TO EXIT 1: the two added blocks are the
 #    finding. (Run step 1 first — --requirements reads what it compiled.)
@@ -982,6 +1033,9 @@ committed):
     --explain
 ```
 
+Through the runner, each arc carrying its own compile step:
+`./run_demo.sh 2a` is 8+8a, `./run_demo.sh 2b` is 8+8b.
+
 **Case A is APPROVED (exit 0) with the accident surfaced.** The scope-diff
 check found the same binding in the terraform state, diffed the custom role's
 permissions against the predefined role's snapshot enumeration, and the
@@ -1058,6 +1112,10 @@ scenario's own corpus for its two extra runs):
     --explain
 ```
 
+Through the runner: `./run_demo.sh 3` is 9b and `./run_demo.sh 3b` is 9c —
+9a is the state the two are read against, not a proposed change, so the
+at-a-glance table gives it no scenario of its own.
+
 **9a — the base is DENIED (exit 1), three findings.** Run the *current*
 configuration through the gate and the masked pair is named from both
 directions. `[firewall_exposure]` reads one rule's own text — no snapshot, no
@@ -1133,6 +1191,9 @@ partner base (say `10.198.51.128/25`) is conservatively refuted rather than
 admitted. The 9a–9c commands above take no `--requirements` and their
 documented outputs are unchanged.
 
+Through the runner, the 9d compile riding along in each:
+`./run_demo.sh 3c` is 9d+9e, `./run_demo.sh 3d` is 9d+9f.
+
 ```bash
 # 9d. Compile the scenario corpus — EXPECTED TO EXIT 0: the one promise
 #     grounds and admits (nothing here is booby-trapped).
@@ -1181,7 +1242,21 @@ fixture-snapshot noise — staleness, the two provenance notes, the
 network-existence abstention — none of it deciding anything. (The `holds`
 stanza also reprints the promise's pinned compliant/violating witness pair;
 those are compile-time solver models, masked `(…)` here as ever — nothing
-should pin them.)
+should pin them.) The closing summary is the approval's other shape, and it
+keeps the qualifier rather than printing the bare word:
+
+```text
+decision recap: APPROVED (exit 0) — grounded=4 unchecked=4 (narrative above)
+
+summary — what just happened:
+  terraform state on disk : examples/terraform-masked/terraform-after-removal.tfstate [cli]
+  promises in force       : 1 enforcing, 0 not — from demo/compiled-masked [cli]
+      (masked-allow-only-known-domains)
+  provider                : no schema configured — resource shapes not checked
+  proposed change         : examples/terraform-masked/narrowed.tf.json —
+      a terraform configuration (1 resource): 1 google_compute_firewall
+  result                  : APPROVED — 4 unchecked (exit 0)
+```
 
 **9f — the smuggle is DENIED (exit 1), and the promise is the only thing that
 catches it.** The extra `10.198.52.0/28` is private, so the exposure check
@@ -1196,6 +1271,17 @@ decision recap: DENIED (exit 1) — because:
       proposed_firewall_rules[1] (google_compute_firewall.allow_rdp_broad)
       action='allow' direction='INGRESS' … name='allow-rdp-broad' …
       source_range='10.198.52.0/28' source_range_mask='255.255.255.240' …
+(the full narrative is above, before the report)
+
+summary — what just happened:
+  terraform state on disk : examples/terraform-masked/terraform-after-removal.tfstate [cli]
+  promises in force       : 1 enforcing, 0 not — from demo/compiled-masked [cli]
+      (masked-allow-only-known-domains)
+  provider                : no schema configured — resource shapes not checked
+  proposed change         : examples/terraform-masked/narrowed_extra.tf.json —
+      a terraform configuration (1 resource): 1 google_compute_firewall
+  result                  : DENIED (exit 1)
+    it violated these promises: masked-allow-only-known-domains
 ```
 
 (the elided fields are the row's remaining constants — unlike a solver-minted
@@ -1248,6 +1334,9 @@ provider schema" and name no release:
     --explain
 ```
 
+Through the runner: `./run_demo.sh 4` is 10a, `4b` is 10b, `4c` is 10c, and
+`4d` is the schema-less run at 10d below.
+
 **10a is DENIED (exit 1) on the typo alone**, and the recap — the last lines
 on your terminal — is the finding:
 
@@ -1257,7 +1346,23 @@ decision recap: DENIED (exit 1) — because:
       is not an attribute or nested block of google_compute_firewall in the
       captured provider schema — 'terraform plan' under the provider this
       schema was captured from would refuse it
+(the full narrative is above, before the report)
+
+summary — what just happened:
+  terraform state on disk : none configured
+  promises in force       : none loaded
+  provider                : examples/terraform-schema/provider-schema.json
+      [cli] — google, 6 resource types
+  proposed change         : examples/terraform-schema/proposal_typo.tf.json —
+      a terraform configuration (3 resources): 1 google_compute_firewall,
+      1 google_project_iam_binding, 1 google_project_iam_custom_role
+  result                  : DENIED (exit 1)
+    blocked by 1 built-in finding: [tf_attribute]
 ```
+
+— note what the summary does NOT say: no requirements are configured in this
+scenario, so nothing is claimed about promises, and the denial is reported as
+a built-in finding, which is what it is.
 
 with the report line above it carrying the remediation: `(did you mean:
 source_ranges?)`. Note the honest side-effect in the abstentions: with
@@ -1341,6 +1446,10 @@ flattened `org_policy_rules` rows do not record which *side* of a list a value
 sat on, so the list-shaped promises judge values-on-the-policy — stricter than
 their sentences, over-blocking rather than under-blocking.
 
+Through the runner, the step-11 compile riding along in each:
+`./run_demo.sh 5` is the compliant estate, `5a` … `5f` are the six bad edits
+and `5g` is the benign counterpart.
+
 ```bash
 # 11. Compile the scenario corpus — EXPECTED TO EXIT 0: all eleven promises
 #     ground and admit (nothing in this corpus is booby-trapped).
@@ -1383,6 +1492,22 @@ decision recap: DENIED (exit 1) — because:
       (google_org_policy_policy.vm_no_external_ip)
       constraint='compute.vmExternalIpAccess' … is_list=True
       value='projects/acme-prod/zones/us-central1-a/instances/legacy-bastion'
+(the full narrative is above, before the report)
+
+summary — what just happened:
+  terraform state on disk : examples/terraform-orgpolicy/terraform.tfstate [cli]
+  promises in force       : 11 enforcing, 0 not — from demo/compiled-orgpolicy
+      [cli] (cloudrun-ingress-non-public, compute-disable-internet-neg,
+      compute-disable-serialport-access, deny-admin-roles,
+      egress-firewall-policy-high-strength-vpc-firewall, +6 more)
+  provider                : no schema configured — resource shapes not checked
+  proposed change         : examples/terraform-orgpolicy/proposal_serial_and_publicip.tf.json
+      — a terraform configuration (13 resources): 7 google_org_policy_policy,
+      3 google_compute_firewall, 2 google_project_iam_binding,
+      1 google_compute_network
+  result                  : DENIED (exit 1)
+    it violated these promises: compute-disable-serialport-access,
+      vm-public-ip-gcp
 ```
 
 — the flipped `enforce` refutes the serial-port control, and under deny-all
@@ -1426,7 +1551,27 @@ decision recap: DENIED (exit 1) — because:
       refuted by proposed_firewall_rules[1]
       (google_compute_firewall.egress_vendor_sync) action='allow'
       destination_range='0.0.0.0/0' … direction='EGRESS' …
+(the full narrative is above, before the report)
+
+summary — what just happened:
+  terraform state on disk : examples/terraform-orgpolicy/terraform.tfstate [cli]
+  promises in force       : 11 enforcing, 0 not — from demo/compiled-orgpolicy
+      [cli] (cloudrun-ingress-non-public, compute-disable-internet-neg,
+      compute-disable-serialport-access, deny-admin-roles,
+      egress-firewall-policy-high-strength-vpc-firewall, +6 more)
+  provider                : no schema configured — resource shapes not checked
+  proposed change         : examples/terraform-orgpolicy/proposal_egress_world.tf.json
+      — a terraform configuration (14 resources): 7 google_org_policy_policy,
+      4 google_compute_firewall, 2 google_project_iam_binding,
+      1 google_compute_network
+  result                  : DENIED (exit 1)
+    it violated these promises: egress-firewall-policy-high-strength-vpc-firewall
+    blocked by 1 built-in finding: [firewall_reopen]
 ```
+
+— the two-directions story restated in one place: the promise refutation under
+"it violated these promises", the estate check under the built-in count, and
+neither reported as the other.
 
 (the `(…)` hold solver-minted witness addresses — an example packet through
 the overlap, not constants of the rule, so nothing should pin them)
@@ -1504,6 +1649,9 @@ exception") rather than passing over records nobody read.
 `effective_org_policy_bool` — the folded effective state at the proposal's
 node and every captured descendant.
 
+Through the runner, the step-12 compile and the clock pin riding along in
+each: `./run_demo.sh 6` is 12a, `6a` is 12b, `6b` is 12c, `6c` is 12d.
+
 ```bash
 # 12. Compile the scenario corpus — EXPECTED TO EXIT 0: all three promises
 #     ground and admit (nothing here is booby-trapped).
@@ -1577,6 +1725,21 @@ decision recap: DENIED (exit 1) — because:
       deny_rule_exceptions[0] (google_iam_deny_policy.guard_token_mint)
       exception_principal='principal://iam.googleapis.com/projects/-/serviceAccounts/payroll-ci@acme-pay-prod.iam.gserviceaccount.com'
       policy='' rule_index=0
+(the full narrative is above, before the report)
+
+summary — what just happened:
+  terraform state on disk : none configured
+  promises in force       : 3 enforcing, 0 not — from demo/compiled-denypolicy
+      [cli] (every-deny-covers-token-creation,
+      no-principal-threads-the-guardrail,
+      sa-key-creation-stays-effectively-enforced)
+  provider                : no schema configured — resource shapes not checked
+  proposed change         : examples/terraform-denypolicy/plan_threading.json —
+      a terraform plan: 2 google_project_iam_binding, 1 google_iam_deny_policy,
+      1 google_org_policy_policy
+  result                  : DENIED (exit 1)
+    it violated these promises: every-deny-covers-token-creation,
+      no-principal-threads-the-guardrail
 ```
 
 The interaction check tells the same story from the grant's side, as a
@@ -1621,7 +1784,24 @@ decision recap: DENIED (exit 1) — because:
       narrowing rule 0 wakes the dormant grant of
       iam.serviceAccounts.getOpenIdToken (impersonation) to
       serviceAccount:payroll-ci@acme-pay-prod.iam.gserviceaccount.com …
+(the full narrative is above, before the report)
+
+summary — what just happened:
+  terraform state on disk : none configured
+  promises in force       : 3 enforcing, 0 not — from demo/compiled-denypolicy
+      [cli] (every-deny-covers-token-creation,
+      no-principal-threads-the-guardrail,
+      sa-key-creation-stays-effectively-enforced)
+  provider                : no schema configured — resource shapes not checked
+  proposed change         : examples/terraform-denypolicy/plan_remove_deny.json
+      — a terraform plan: 1 google_iam_deny_policy
+  result                  : DENIED (exit 1)
+    blocked by 2 built-in findings: [iam_deny_shadow]
 ```
+
+— and the summary is where the promises' abstention is visible as an absence:
+three promises are in force, none of them refused, and the block is reported
+as built-in findings alone.
 
 No allow policy changed anywhere — effective permissions increased with no
 grant edited, which is exactly the shape no per-document gate can see. The
@@ -1660,6 +1840,20 @@ decision recap: DENIED (exit 1) — because:
       (google_org_policy_policy.payments_default_sweep)
       constraint='iam.disableServiceAccountKeyCreation' enforce=False
       node='folders/665544332211'
+(the full narrative is above, before the report)
+
+summary — what just happened:
+  terraform state on disk : none configured
+  promises in force       : 3 enforcing, 0 not — from demo/compiled-denypolicy
+      [cli] (every-deny-covers-token-creation,
+      no-principal-threads-the-guardrail,
+      sa-key-creation-stays-effectively-enforced)
+  provider                : no schema configured — resource shapes not checked
+  proposed change         : examples/terraform-denypolicy/plan_reset_payments.json
+      — a terraform plan: 2 google_org_policy_policy,
+      2 google_project_iam_binding, 1 google_iam_deny_policy
+  result                  : DENIED (exit 1)
+    it violated these promises: sa-key-creation-stays-effectively-enforced
 ```
 
 — the refutation names the *effective* row (the folder node, the folded
@@ -1681,8 +1875,10 @@ state" above) — the same inputs, written once, so the command line shrinks to
 the proposal alone. The demo spells them out because the mapping *is* the
 lesson.
 
-Useful flags on `verify-policy`: `--explain` (dump the z3 constraints built
-this run), `--format json` (the stable machine report), `--abstain-notes`
+Useful flags on `verify-policy`: `--explain` (the decision narrative, the z3
+constraints built this run, the state block, and the closing `summary — what
+just happened:` naming every input with the layer that supplied it),
+`--format json` (the stable machine report), `--abstain-notes`
 (surface what the gate could NOT decide on an otherwise-passing run). To
 author real requirements, copy `sec_requirements/TEMPLATE.md`, write one
 sentence plus one fenced `promise` block per requirement, compile with
