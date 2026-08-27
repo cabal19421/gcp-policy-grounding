@@ -11,6 +11,10 @@ change a linter can't see: a firewall allow inserted ahead of the deny that
 used to cover it, a perimeter quietly flipped to dry-run, `roles/owner`
 granted outside your domain.
 
+**In a hurry?** [simple_readme.md](simple_readme.md) is the short version:
+install, one command per demo scenario, the shape of a real verify run, and how
+promises are authored and compiled. This page is everything else.
+
 Every claim a policy makes lands in one of four honest buckets:
 
 - **grounded** — the referenced role/permission/principal/constraint exists in
