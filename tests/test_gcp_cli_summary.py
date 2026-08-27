@@ -16,6 +16,12 @@ ordering assertions matter for a second reason: the decision has to stay the
 last thing on the terminal, and a block appended after the recap is exactly how
 that gets lost.
 
+The promises row carries that same burden one level deeper. Its ids are a block
+now — one line each, with the AUTHOR'S OWN sentence under them — so the join to
+assert is the sentence's: it is the text the compiled artifact stores, compared
+here against the artifact itself, and an artifact that stored none leaves the id
+alone rather than being handed English nobody wrote.
+
 Environment-honest like its neighbours: without z3 no promise compiles and no
 rule is admitted, so the enforcing/violated arms are SKIPPED there rather than
 silently asserting over an empty rule set.
@@ -24,11 +30,14 @@ silently asserting over an empty rule set.
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from gcp_grounding.cli import (REQUIREMENTS_ENV, SNAPSHOT_ENV,
-                               _result_lines, _summary_section_lines, main)
+                               _PROMISE_TEXT_CAP, _SUMMARY_BLOCK_CAP,
+                               _promise_block_lines, _result_lines,
+                               _summary_section_lines, main)
 from gcp_grounding.core.report import GroundingReport, Verdict
 from gcp_grounding.core.solver import get_solver
 from gcp_grounding.discovery import CONFIG_SCHEMA
@@ -189,6 +198,44 @@ def test_a_config_supplied_input_reports_the_file_that_supplied_it(
     assert row(err, "terraform state on disk") == f"{TF_STATE} [config {config}]"
 
 
+def test_several_state_files_are_one_per_line(capsys):
+    """Every summary row whose value is a LIST prints the list as a block: two
+    configured state files are two lines under a row that counts them, not one
+    comma-joined row a reader has to take apart."""
+    other = EXAMPLES / "terraform-masked" / "terraform.tfstate"
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(TF_PROPOSAL), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--terraform-state",
+                              str(TF_STATE), "--terraform-state", str(other),
+                              "--explain")
+    assert row(err, "terraform state on disk") == "2 files [cli]"
+    lines = section(err).splitlines()
+    start = lines.index("  terraform state on disk : 2 files [cli]")
+    assert lines[start + 1:start + 3] == [f"      {TF_STATE}", f"      {other}"]
+
+
+def test_several_schemas_are_one_per_line(capsys, tmp_path):
+    """The provider row the same way, each schema keeping its own clause — the
+    one that loaded and the one that did not."""
+    broken = tmp_path / "provider-schema.json"
+    broken.write_text("{not json", encoding="utf-8")
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(SCHEMA_PROPOSAL), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--provider-schema",
+                              str(PROVIDER_SCHEMA), "--provider-schema",
+                              str(broken), "--explain")
+    captured = json.loads(PROVIDER_SCHEMA.read_text(encoding="utf-8"))
+    types = len(captured["provider_schemas"]
+                ["registry.terraform.io/hashicorp/google"]["resource_schemas"])
+    assert row(err, "provider") == "2 schemas in force"
+    lines = section(err).splitlines()
+    start = lines.index("  provider                : 2 schemas in force")
+    assert lines[start + 1:start + 3] == [
+        f"      {PROVIDER_SCHEMA} [cli] — google, {types} resource types",
+        f"      {broken} [cli] — could not be read, so resource shapes were "
+        f"not checked"]
+
+
 # -- nothing configured --------------------------------------------------------
 
 
@@ -291,6 +338,219 @@ def test_an_unreadable_proposal_costs_the_census_and_nothing_else(
     assert row(err, "result").startswith("APPROVED")
 
 
+# -- the proposed change, in English -------------------------------------------
+#
+# The sentences are read back off the rows the run's own proposal-tier
+# collection extractors produced — the rows a refuted promise's witness message
+# quotes. So the assertions here are about the JOIN in both directions: a
+# sentence names a block the proposal block above listed, and a block whose rows
+# the run never read gets no sentence claiming otherwise.
+
+
+def sentences(err: str) -> list[str]:
+    """The English lines under the ``proposed change`` row, indent stripped."""
+    lines = section(err).splitlines()
+    start = next(i for i, line in enumerate(lines)
+                 if line.strip().startswith("proposed change"))
+    out = []
+    for line in lines[start + 1:]:
+        if line.strip().startswith("result"):
+            break
+        out.append(line.strip())
+    return out
+
+
+def test_an_iam_binding_block_reads_as_the_grant_it_makes(capsys):
+    """One line per binding block, naming the role, the members and the block —
+    the same address the recap's findings use, so the two join by eye."""
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(TF_PROPOSAL), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--explain")
+    assert ("google_project_iam_binding.contractor_owner: grants roles/owner "
+            "to user:mallory@outsider.example") in sentences(err)
+
+
+def test_a_firewall_block_reads_as_what_it_opens(capsys):
+    """Direction, protocol/port, ranges and network — the fields the
+    ``proposed_firewall_rules`` rows carry and nothing else. A deny rule opens
+    nothing, and says so."""
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(TF_PROPOSAL), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--explain")
+    said = sentences(err)
+    assert ("google_compute_firewall.allow_ssh_world: opens INGRESS tcp/22 "
+            "from 0.0.0.0/0 on projects/acme-prod/global/networks/prod-vpc"
+            ) in said
+    assert ("google_compute_firewall.deny_rdp: denies INGRESS tcp/3389 "
+            "from 0.0.0.0/0 on projects/acme-prod/global/networks/prod-vpc"
+            ) in said
+
+
+def test_a_rest_policys_members_are_joined_and_its_condition_noted(capsys):
+    """A REST allow policy has no block address to name, so its bindings are
+    grouped by the role and condition its rows carry: the members of one binding
+    join into one line, and a gated binding says when it applies."""
+    _code, _out, err = invoke(capsys, "verify-policy", str(GOOD),
+                              "--snapshot", str(SNAPSHOT), "--explain")
+    said = sentences(err)
+    assert ("grants roles/bigquery.dataViewer to group:data-eng@acme.example, "
+            "user:alice@acme.example") in said
+    gated = [line for line in said if "roles/storage.objectViewer" in line]
+    assert gated == ['grants roles/storage.objectViewer to serviceAccount:'
+                     'etl-runner@acme-prod.iam.gserviceaccount.com when '
+                     'request.time < timestamp("2027-01-01T00:00:00Z")']
+
+
+def test_a_deny_policy_names_its_permissions_principals_and_carve_outs(capsys):
+    """The deny shape: what is denied, to whom, and who is exempted — the
+    exemption read from the ``deny_rule_exceptions`` rows, joined to the rule by
+    the same (block, rule index) the two collections share."""
+    plan = EXAMPLES / "terraform-denypolicy" / "plan_threading.json"
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal", str(plan),
+                              "--snapshot",
+                              str(EXAMPLES / "terraform-denypolicy" /
+                                  "snapshot.json"), "--explain")
+    said = [line for line in sentences(err) if "deny policy" in line]
+    assert len(said) == 1
+    assert said[0].startswith(
+        "google_iam_deny_policy.guard_token_mint: creates a deny policy "
+        "denying iam.serviceAccounts.getAccessToken, "
+        "iam.serviceAccounts.getOpenIdToken to principalSet://goog/public:all")
+    assert ", excepting principal://iam.googleapis.com/projects/-/" \
+           "serviceAccounts/payroll-ci@acme-pay-prod.iam.gserviceaccount.com" \
+           in said[0]
+
+
+def test_a_removed_deny_policy_reads_as_a_deletion(capsys):
+    """The removal arc leads with the plan's own change action. Its planned
+    values are gone by design, so reporting the block as unreadable — or as
+    creating the denial it is taking away — would both be wrong."""
+    plan = EXAMPLES / "terraform-denypolicy" / "plan_remove_deny.json"
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal", str(plan),
+                              "--snapshot",
+                              str(EXAMPLES / "terraform-denypolicy" /
+                                  "snapshot.json"), "--explain")
+    assert sentences(err) == [
+        "google_iam_deny_policy.guard_token_mint: deletes the deny policy"]
+
+
+def test_a_conditional_deny_rule_says_it_is_conditional(capsys):
+    """``has_condition`` on the rows becomes ", conditionally" — a denial that
+    only sometimes applies must not read as one that always does."""
+    policy = POLICIES / "deny_policy_conditional.json"
+    _code, _out, err = invoke(capsys, "verify-policy", str(policy),
+                              "--snapshot", str(SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        "creates a deny policy denying iam.serviceAccounts.getAccessToken to "
+        "principalSet://goog/public:all, conditionally"]
+
+
+def test_an_org_policy_block_names_the_constraint_and_what_it_sets(capsys):
+    """A terraform Org Policy block's rows carry the constraint and the enforce
+    boolean, so the line says both — the flipped control the demo is about."""
+    proposal = EXAMPLES / "terraform-orgpolicy" / \
+        "proposal_serial_and_publicip.tf.json"
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(proposal), "--snapshot",
+                              str(EXAMPLES / "terraform-orgpolicy" /
+                                  "snapshot.json"), "--explain")
+    assert ("google_org_policy_policy.serial_port_disabled: sets "
+            "constraints/compute.disableSerialPortAccess enforce=false"
+            ) in sentences(err)
+
+
+def test_a_rest_org_policy_carries_its_node_polarity_and_reset(capsys, tmp_path):
+    """A REST Org Policy is read from its own ``constraint_enforcement`` claims,
+    which — unlike the terraform rows — keep the hierarchy node, the allowed and
+    denied lists and the reset switch apart."""
+    listed = tmp_path / "values.json"
+    listed.write_text(json.dumps({
+        "name": "organizations/123456789012/policies/compute.vmExternalIpAccess",
+        "spec": {"rules": [{"values": {
+            "allowedValues": ["projects/acme-prod/zones/z/instances/legacy"],
+            "deniedValues": ["projects/acme-prod/zones/z/instances/retired"]}}]},
+    }), encoding="utf-8")
+    _code, _out, err = invoke(capsys, "verify-policy", str(listed), "--snapshot",
+                              str(SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        "spec.rules[0]: allows value projects/acme-prod/zones/z/instances/"
+        "legacy for constraints/compute.vmExternalIpAccess at "
+        "organizations/123456789012",
+        "spec.rules[0]: denies value projects/acme-prod/zones/z/instances/"
+        "retired for constraints/compute.vmExternalIpAccess at "
+        "organizations/123456789012",
+    ]
+
+    reset = tmp_path / "reset.json"
+    reset.write_text(json.dumps({
+        "name": "folders/665544332211/policies/"
+                "iam.disableServiceAccountKeyCreation",
+        "spec": {"reset": True},
+    }), encoding="utf-8")
+    _code, _out, err = invoke(capsys, "verify-policy", str(reset), "--snapshot",
+                              str(SNAPSHOT), "--explain")
+    assert sentences(err) == [
+        "spec: resets constraints/iam.disableServiceAccountKeyCreation at "
+        "folders/665544332211 to the managed default"]
+
+
+def test_a_custom_role_block_counts_the_permissions_it_defines(capsys):
+    """The custom-role shape: the role's full name — the one value the rows
+    carry that the claims do not — and how many permissions it grants."""
+    proposal = EXAMPLES / "terraform-roles" / "proposal_a.tf.json"
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(proposal), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--explain")
+    assert ("google_project_iam_custom_role.data_viewer_scoped: defines custom "
+            "role projects/acme-prod/roles/dataViewerScoped with 4 permissions "
+            "(bigquery.datasets.get, bigquery.jobs.create, bigquery.tables.get,"
+            " bigquery.tables.getData)") in sentences(err)
+
+
+def test_a_block_whose_rows_were_never_read_says_so(capsys):
+    """A block of a shape this list speaks about that yielded no row says it
+    could not be read — the collection abstained over it, and the abstention is
+    a verdict above. Inventing a sentence for it is the failure mode."""
+    plan = EXAMPLES / "terraform-denypolicy" / "plan_reset_payments.json"
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal", str(plan),
+                              "--snapshot",
+                              str(EXAMPLES / "terraform-denypolicy" /
+                                  "snapshot.json"), "--explain")
+    assert ("google_org_policy_policy.payments_default_sweep: could not be "
+            "read — judged as a named abstention above") in sentences(err)
+
+
+def test_a_collection_the_run_never_extracted_contributes_nothing(capsys):
+    """The perimeter and the Cloud Armor policy of the demo proposal are listed
+    in the proposal block above and have no row shape here: they contribute no
+    sentence AND no apology line, because there is no collection whose rows they
+    would have been."""
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(TF_PROPOSAL), "--snapshot",
+                              str(AGENTIC_SNAPSHOT), "--explain")
+    said = sentences(err)
+    assert [line for line in said if "google_compute_security_policy" in line] == []
+    assert [line for line in said
+            if "google_access_context_manager" in line] == []
+    assert "could not be read" not in "\n".join(said)
+
+
+def test_the_sentences_are_ordered_by_block_and_bounded(capsys):
+    """Deterministic order by block address, and the decision block's own
+    elision shape past the cap — the rest is counted, never dropped in
+    silence."""
+    proposal = EXAMPLES / "terraform-orgpolicy" / \
+        "proposal_serial_and_publicip.tf.json"
+    _code, _out, err = invoke(capsys, "verify-policy", "--proposal",
+                              str(proposal), "--snapshot",
+                              str(EXAMPLES / "terraform-orgpolicy" /
+                                  "snapshot.json"), "--explain")
+    said = sentences(err)
+    assert len(said) == 9                       # eight blocks, then the count
+    assert said[:-1] == sorted(said[:-1])
+    assert said[-1] == "+5 more"
+
+
 # -- the result row ------------------------------------------------------------
 
 
@@ -351,13 +611,20 @@ def test_a_denial_keeps_promises_and_built_in_findings_apart(capsys, tmp_path):
     assert code == 1
     block = section(err)
     assert row(err, "result") == "DENIED (exit 1)"
-    assert ("it violated these promises: no-primitive-roles-outside-domain"
-            in block)
+    assert ("    it violated these promises:\n"
+            "      no-primitive-roles-outside-domain\n") in block
     assert "blocked by 1 built-in finding: [principal]" in block
-    # Neither vocabulary leaks into the other's clause.
+    # Neither vocabulary leaks into the other's clause. The violated clause is
+    # a block now — id lines at six spaces, the author's sentence at eight —
+    # so the id lines are what the built-in kind must stay out of. (The kind's
+    # word can legitimately appear INSIDE a sentence its author wrote; it is
+    # the reported ids that must be promise ids and nothing else.)
     violated = block[block.index("it violated these promises:"):]
-    violated = violated[:violated.index("\n")]
-    assert "principal" not in violated
+    violated = violated[:violated.index("    blocked by ")]
+    ids = [line.strip() for line in violated.splitlines()
+           if line.startswith("      ") and not line.startswith("       ")]
+    assert ids == ["no-primitive-roles-outside-domain"]
+    assert "principal" not in " ".join(ids)
     blocked = block[block.index("blocked by "):]
     blocked = blocked[:blocked.index("\n")]
     assert "no-primitive-roles-outside-domain" not in blocked
@@ -372,34 +639,185 @@ def test_the_result_row_never_reads_a_promise_id_off_a_built_in_verdict():
     report.add(Verdict("ungrounded", "sec:iam", "no-public-principals", 0,
                        "refuted by iam_bindings[0]"))
     lines = _result_lines(report)
-    assert lines[0] == "  result                  : DENIED (exit 1)"
-    assert lines[1] == "    it violated these promises: no-public-principals"
-    assert lines[2] == \
-        "    blocked by 1 built-in finding: [firewall_exposure]"
+    assert lines == ["  result                  : DENIED (exit 1)",
+                     "    it violated these promises:",
+                     "      no-public-principals",
+                     "    blocked by 1 built-in finding: [firewall_exposure]"]
 
 
-# -- the promises row ----------------------------------------------------------
+def test_the_violated_promises_are_one_per_line_with_their_sentences():
+    """One violated promise per line, the author's stored sentence under each,
+    and the built-in clause still LAST so the reasons stay in one order.
+
+    The sentences come from the rules the run admitted; a violated promise the
+    caller handed no rule for keeps its id and gets no sentence."""
+    report = GroundingReport()
+    for promise_id in ("no-public-principals", "no-open-ssh-rdp-ingress",
+                       "unregistered-promise"):
+        report.add(Verdict("ungrounded", "sec:iam", promise_id, 0, "refuted"))
+    lines = _result_lines(report, [_rule("no-public-principals", "No allUsers."),
+                                   _rule("no-open-ssh-rdp-ingress", "No 0.0.0.0/0.")])
+    assert lines == ["  result                  : DENIED (exit 1)",
+                     "    it violated these promises:",
+                     "      no-public-principals",
+                     "        “No allUsers.”",
+                     "      no-open-ssh-rdp-ingress",
+                     "        “No 0.0.0.0/0.”",
+                     "      unregistered-promise"]
+
+
+def test_the_violated_promises_are_bounded_like_every_other_block():
+    """Past the cap the rest is counted, never dropped in silence."""
+    report = GroundingReport()
+    for index in range(_SUMMARY_BLOCK_CAP + 2):
+        report.add(Verdict("ungrounded", "sec:iam", f"promise-{index}", 0, "no"))
+    lines = _result_lines(report)
+    assert lines[2:] == [f"      promise-{index}"
+                         for index in range(_SUMMARY_BLOCK_CAP)] + ["      +2 more"]
+
+
+# -- the promises row, and the author's own English under each id --------------
+#
+# The block under the row is ONE LINE PER PROMISE, and the line under an id is
+# the sentence the compiled artifact stored — the author's own words, the same
+# text show_promises.py renders. So the assertions here are about that join in
+# both directions: a sentence is the artifact's, read back off the rule objects
+# the run admitted, and an id whose artifact carried no sentence stands alone
+# rather than borrowing one.
+
+
+def promise_block(err: str) -> list[str]:
+    """The lines under the ``promises in force`` row, indent kept."""
+    lines = section(err).splitlines()
+    start = next(i for i, line in enumerate(lines)
+                 if line.strip().startswith("promises in force"))
+    out = []
+    for line in lines[start + 1:]:
+        if line.strip().startswith("provider"):
+            break
+        out.append(line)
+    return out
+
+
+def stored_sentences(compiled: Path) -> dict[str, str]:
+    """Every promise's stored sentence, read from the artifacts the way
+    ``show_promises.py`` reads them — the text the summary must not paraphrase.
+    """
+    return {promise["id"]: promise["source"]["text"]
+            for path in sorted(compiled.glob("*.promises.json"))
+            for promise in json.loads(path.read_text(encoding="utf-8"))["promises"]}
+
+
+def _rule(promise_id: str, text: str | None = "") -> SimpleNamespace:
+    """A stand-in for one admitted rule. ``text=None`` is the artifact that
+    carried no sentence — a shape :class:`sec_artifact.Promise` refuses to
+    hold, which is why the fallback is pinned through the renderer."""
+    source = SimpleNamespace() if text is None else SimpleNamespace(text=text)
+    return SimpleNamespace(promise=SimpleNamespace(id=promise_id, source=source))
 
 
 @_needs_z3
 def test_the_promises_row_agrees_with_the_promises_block(capsys, tmp_path):
     """One count of what enforces, shared with the block above it: the summary
     reads the same rules and the same carry verdicts, so it cannot call a
-    promise enforcing that the block called stalled."""
+    promise enforcing that the block called stalled. The ids are no longer on
+    the row — they are the block below it, one per line."""
     compiled = compiled_requirements(tmp_path)
     capsys.readouterr()
     _code, _out, err = invoke(capsys, "verify-policy", str(A10_POLICY),
                               "--snapshot", str(AGENTIC_SNAPSHOT),
                               "--requirements", str(compiled), "--explain")
     assert "promises in force (6 enforcing, 2 not" in err
-    value = row(err, "promises in force")
-    assert value.startswith(f"6 enforcing, 2 not — from {compiled} [cli] (")
-    # The list is bounded the way the decision block bounds its own: the first
-    # few ids spelled out, the remainder counted.
-    listed = value[value.index(" (") + 2:].rstrip(")").split(", ")
-    assert listed[-1] == "+1 more"
-    assert len(listed) == 6                # five ids, then the elision
-    assert "no-primitive-roles-outside-domain" in listed
+    assert row(err, "promises in force") == \
+        f"6 enforcing, 2 not — from {compiled} [cli]"
+
+
+@_needs_z3
+def test_each_promise_in_force_gets_a_line_and_the_authors_own_sentence(
+        capsys, tmp_path):
+    """One line per enforcing promise, ids sorted, and under each the sentence
+    the artifact stored — verbatim, compared against the artifact itself."""
+    compiled = compiled_requirements(tmp_path)
+    capsys.readouterr()
+    _code, _out, err = invoke(capsys, "verify-policy", str(A10_POLICY),
+                              "--snapshot", str(AGENTIC_SNAPSHOT),
+                              "--requirements", str(compiled), "--explain")
+    stored = stored_sentences(compiled)
+    enforcing = ["impersonation-sre-only", "no-open-ssh-rdp-ingress",
+                 "no-primitive-roles-outside-domain", "no-public-principals",
+                 "perimeter-restricts-storage", "sa-key-creation-disabled"]
+    expected = []
+    for promise_id in enforcing:
+        expected.append(f"      {promise_id}")
+        expected.append(f"        “{stored[promise_id]}”")
+    assert promise_block(err)[:len(expected)] == expected
+
+
+@_needs_z3
+def test_a_promise_that_is_not_enforcing_states_its_stored_reason(
+        capsys, tmp_path):
+    """The two that never became rules are listed too, each with the reason the
+    compile stored for it — the rejection reason, not a sentence of ours."""
+    compiled = compiled_requirements(tmp_path)
+    capsys.readouterr()
+    _code, _out, err = invoke(capsys, "verify-policy", str(A10_POLICY),
+                              "--snapshot", str(AGENTIC_SNAPSHOT),
+                              "--requirements", str(compiled), "--explain")
+    assert promise_block(err)[-4:] == [
+        "      not enforcing  bigquery-reader-only",
+        "        requirement was rejected at compile time (vocabulary is not "
+        "grounded: roles/bigquery.reader does not exist in the snapshot); it "
+        "did not run",
+        "      not enforcing  untranslated-security-review-before-merge",
+        "        no promise block — the sentence was not translated",
+    ]
+
+
+def test_a_promise_whose_artifact_stored_no_sentence_prints_its_id_alone():
+    """No sentence in the artifact, no sentence in the block: an id on its own
+    line is the answer, because the only other one is words nobody wrote."""
+    assert _promise_block_lines([_rule("silent-promise", None),
+                                 _rule("empty-promise", "")], ()) == [
+        "      empty-promise", "      silent-promise"]
+
+
+def test_a_long_sentence_is_truncated_at_the_cap_with_an_ellipsis():
+    """The rule is TRUNCATE, not wrap: one line per promise is the block's
+    whole shape, and a wrapped continuation reads as the next promise."""
+    assert _PROMISE_TEXT_CAP == 160
+    long = "No binding may grant " + "a" * 300
+    lines = _promise_block_lines([_rule("long-promise", long)], ())
+    assert lines[0] == "      long-promise"
+    assert lines[1] == f"        “{long[:160]}…”"
+    assert len(lines) == 2
+    # Whitespace is collapsed, so a sentence wrapped in its markdown source
+    # still prints as one line.
+    assert _promise_block_lines([_rule("wrapped", "No\n  owner\tgrants.")],
+                                ())[1] == "        “No owner grants.”"
+
+
+def test_the_promise_block_is_bounded_and_counts_what_it_elided():
+    """Both halves of the block cap at :data:`_SUMMARY_BLOCK_CAP`, and each
+    counts its own remainder — an elision that silently dropped promises would
+    read as a shorter corpus than the row above it counted."""
+    rules = [_rule(f"promise-{index}") for index in range(_SUMMARY_BLOCK_CAP + 3)]
+    stalled = [Verdict("unverified", "sec:iam", f"stalled-{index}", 0,
+                       f"anchor.md:{index}: 'a sentence' — it did not compile")
+               for index in range(_SUMMARY_BLOCK_CAP + 1)]
+    lines = _promise_block_lines(rules, stalled)
+    assert lines[_SUMMARY_BLOCK_CAP] == "      +3 more"
+    assert lines[-1] == "      +1 more not enforcing"
+    assert lines[-3:-1] == ["      not enforcing  stalled-7",
+                            "        it did not compile"]
+
+
+def test_one_stalled_promise_with_several_verdicts_is_listed_once():
+    """The row counts distinct promise ids; the block must not print one id
+    twice because two carry verdicts named it."""
+    stalled = [Verdict("unverified", "sec:iam", "stalled", 0, "x — first"),
+               Verdict("unverified", "sec:artifact", "stalled", 0, "x — second")]
+    assert _promise_block_lines((), stalled) == [
+        "      not enforcing  stalled", "        first"]
 
 
 # -- hook mode and the non-explain paths ---------------------------------------

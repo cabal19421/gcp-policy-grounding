@@ -71,13 +71,19 @@ flag (`demo/compiled` is what the scenario's compile step wrote):
 - `--requirements` — the promises compiled from your requirements directory;
 - `--explain` — the decision narrative.
 
-It exits 1, and every `--explain` run closes with a summary section whose input
-rows each name the settings layer that supplied them (`[cli]`, `[env]`,
-`[config <path>]`, `[auto]`, `[default]`) and whose last rows are the decision:
+It exits 1, and every `--explain` run closes with a summary whose input rows
+name the settings layer that supplied them (`[cli]`, `[env]`, `[config
+<path>]`, `[auto]`, `[default]`) and whose last rows are the decision. A list
+row prints one item per line, and each promise carries the sentence its author
+wrote, quoted from the compiled artifact:
 
 ```text
   result                  : DENIED (exit 1)
-    it violated these promises: no-open-ssh-rdp-ingress, no-primitive-roles-outside-domain
+    it violated these promises:
+      no-open-ssh-rdp-ingress
+        “No ingress firewall rule may allow tcp/22 or tcp/3389 from 0.0.0.0/0.”
+      no-primitive-roles-outside-domain
+        “No binding may grant roles/owner or roles/editor to any principal outside domain acme.example.”
     blocked by 1 built-in finding: [firewall_exposure]
 ```
 

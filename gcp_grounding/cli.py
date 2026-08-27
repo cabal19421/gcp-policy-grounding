@@ -337,8 +337,11 @@ promises in force, the captured provider schema, the proposed document with its
 census, and the result. Each input row names the settings layer that supplied it
 in the same ``[cli]``/``[env]``/``[config]``/``[auto]``/``[default]`` spelling
 ``--state-explain`` prints, and the result row comes LAST so the decision is
-still the terminal's final word. Hook stderr is unchanged, and so is every byte
-of a run without ``--explain``.
+still the terminal's final word. A row whose value is a list prints one item per
+line under it — each promise in force with the author's OWN sentence, as the
+compiled artifact stored it, under its id, and each violated promise of a denial
+the same way. Hook stderr is unchanged, and so is every byte of a run without
+``--explain``.
 
 ``--format json`` emits :func:`gcp_grounding.sec_evidence.sec_document` instead
 of :meth:`~gcp_grounding.report.PolicyReport.to_dict` whenever a requirements
@@ -3157,6 +3160,30 @@ _SUMMARY_WIDTH = max(len(label) for label in _SUMMARY_LABELS)
 #: decision block's cap, reused so the two surfaces elide alike.
 _SUMMARY_ID_CAP = _UNDECIDED_LINE_CAP
 
+#: How many items a summary row's own BLOCK spells out before it counts the
+#: rest. A row whose value is a list prints one item per line rather than
+#: joining them, and every such block in the section — the promises in force,
+#: the violated promises, the state files, the schemas, the proposal sentences
+#: (:data:`_SENTENCE_BLOCK_CAP`, which is this) — elides the same way: a reader
+#: who has learnt one block's shape has learnt them all.
+_SUMMARY_BLOCK_CAP = 8
+
+#: A block item's indent, and the indent of the stored text printed under one.
+#: Both are DEEPER than the four spaces the proposal block above indents its
+#: bare block addresses with, so a reader — or a test — scanning for one list
+#: never collects the other.
+_SUMMARY_ITEM_INDENT = " " * 6
+_SUMMARY_TEXT_INDENT = " " * 8
+
+#: How much of an author's stored sentence a summary line carries. The sentence
+#: is TRUNCATED here rather than wrapped: a wrapped continuation and the next
+#: promise's line look alike in a terminal, and one line per promise is the
+#: whole shape of the block.
+_PROMISE_TEXT_CAP = 160
+
+#: The ``provider`` row's answer when no schema is configured.
+_NO_SCHEMA = "no schema configured — resource shapes not checked"
+
 #: The verdict-kind prefix the compiled-requirements layer stamps on every
 #: promise verdict (``sec:iam``, ``sec:vpc_firewall``, ...). It is what tells a
 #: refuted PROMISE apart from a built-in finding, and the summary must never
@@ -3169,18 +3196,25 @@ def _summary_row(label: str, value: str) -> str:
     return f"  {label.ljust(_SUMMARY_WIDTH)} : {value}"
 
 
+def _capped_list(values: Sequence[str]) -> str:
+    """``a, b, c, +2 more`` — a list bounded at :data:`_SUMMARY_ID_CAP`, with the
+    remainder counted rather than spelled. Empty for an empty list."""
+    shown = list(values)[:_SUMMARY_ID_CAP]
+    if not shown:
+        return ""
+    rest = len(values) - len(shown)
+    tail = f", +{rest} more" if rest > 0 else ""
+    return f"{', '.join(shown)}{tail}"
+
+
 def _capped_ids(ids: Sequence[str]) -> str:
     """``(a, b, c, +2 more)`` — an id list bounded at :data:`_SUMMARY_ID_CAP`.
 
     Empty for an empty list, so a caller can concatenate it onto a sentence
     without a dangling pair of parentheses.
     """
-    shown = list(ids)[:_SUMMARY_ID_CAP]
-    if not shown:
-        return ""
-    rest = len(ids) - len(shown)
-    tail = f", +{rest} more" if rest > 0 else ""
-    return f" ({', '.join(shown)}{tail})"
+    listed = _capped_list(ids)
+    return f" ({listed})" if listed else ""
 
 
 def _layered(values: Sequence[str], layer: str) -> str:
@@ -3188,6 +3222,17 @@ def _layered(values: Sequence[str], layer: str) -> str:
     supplied them, in the same ``[origin]`` spelling ``--state-explain``
     prints."""
     return f"{', '.join(values)} [{layer}]"
+
+
+def _block_items(items: Sequence[str]) -> list[str]:
+    """*items*, ONE PER INDENTED LINE, bounded at :data:`_SUMMARY_BLOCK_CAP`
+    with the remainder counted rather than dropped."""
+    shown = list(items)[:_SUMMARY_BLOCK_CAP]
+    lines = [f"{_SUMMARY_ITEM_INDENT}{item}" for item in shown]
+    rest = len(items) - len(shown)
+    if rest > 0:
+        lines.append(f"{_SUMMARY_ITEM_INDENT}+{rest} more")
+    return lines
 
 
 def _state_summary(settings: discovery.Settings) -> str:
@@ -3199,10 +3244,24 @@ def _state_summary(settings: discovery.Settings) -> str:
     return _layered(paths, settings.origin_of("terraform_state"))
 
 
+def _state_rows(settings: discovery.Settings) -> list[str]:
+    """The ``terraform state on disk`` row, plus one line per file when more
+    than one was configured: a list joined into a row is a row a reader has to
+    parse, and the files are what they came here to see."""
+    paths = tuple(getattr(settings.options, "terraform_state", ()) or ())
+    if len(paths) <= 1:
+        return [_summary_row("terraform state on disk", _state_summary(settings))]
+    layer = settings.origin_of("terraform_state")
+    return ([_summary_row("terraform state on disk",
+                          f"{len(paths)} files [{layer}]")]
+            + _block_items(paths))
+
+
 def _promise_summary(settings: discovery.Settings, source: str | None,
                      rules, carried) -> str:
     """The ``promises in force`` value: how many compiled promises enforce, how
-    many do not, where they came from, and a bounded list of the enforcing ids.
+    many do not, and where they came from. The ids themselves are the block
+    under the row (:func:`_promise_block_lines`).
 
     The two counts are derived exactly as :func:`_requirements_notice` derives
     them — the enforcing ids are the registered rules', and a promise that never
@@ -3216,24 +3275,115 @@ def _promise_summary(settings: discovery.Settings, source: str | None,
     stalled = {verdict.target for verdict in carried
                if verdict.target not in registered}
     return (f"{len(enforcing)} enforcing, {len(stalled)} not — from "
-            f"{_layered((source,), settings.origin_of('requirements'))}"
-            f"{_capped_ids(sorted(enforcing))}")
+            f"{_layered((source,), settings.origin_of('requirements'))}")
 
 
-def _provider_summary(settings: discovery.Settings) -> str:
-    """The ``provider`` value: the captured schema this run judged resource
-    shapes against, or the plain no-schema answer.
+def _promise_text(text: Any) -> str:
+    """One stored sentence, whitespace collapsed and TRUNCATED at
+    :data:`_PROMISE_TEXT_CAP` with an ellipsis. Empty text stays empty, so a
+    caller can tell "the artifact stored nothing" from "the artifact stored
+    this" without inspecting the string."""
+    collapsed = " ".join(str(text or "").split())
+    if len(collapsed) <= _PROMISE_TEXT_CAP:
+        return collapsed
+    return f"{collapsed[:_PROMISE_TEXT_CAP]}…"
+
+
+def _promise_sentence(rule: Any) -> str:
+    """The author's OWN English for *rule*'s promise: ``promise.source.text``
+    as the compiled artifact stored it — the same sentence ``show_promises.py``
+    renders, read off the rule object this run admitted rather than from the
+    file on disk, which nothing here re-opens.
+
+    ``""`` when the artifact carried no sentence: the id then stands alone,
+    because the only other answer is a sentence nobody wrote.
+    """
+    source = getattr(getattr(rule, "promise", None), "source", None)
+    return _promise_text(getattr(source, "text", ""))
+
+
+def _promise_id_lines(ids: Sequence[str], sentences: Mapping[str, str]
+                      ) -> list[str]:
+    """One line per promise id, each with the author's stored sentence under
+    it, bounded like every other block in the section.
+
+    *sentences* is the id → stored-sentence map of the rules this run admitted;
+    an id it does not carry prints alone rather than borrowing a neighbour's
+    English.
+    """
+    lines: list[str] = []
+    for promise_id in list(ids)[:_SUMMARY_BLOCK_CAP]:
+        lines.append(f"{_SUMMARY_ITEM_INDENT}{promise_id}")
+        sentence = sentences.get(promise_id, "")
+        if sentence:
+            lines.append(f"{_SUMMARY_TEXT_INDENT}“{sentence}”")
+    rest = len(ids) - min(len(ids), _SUMMARY_BLOCK_CAP)
+    if rest > 0:
+        lines.append(f"{_SUMMARY_ITEM_INDENT}+{rest} more")
+    return lines
+
+
+def _stalled_reason(message: str) -> str:
+    """The stored reason inside a carry verdict's message.
+
+    ``sec_rules._carry_verdict`` renders a promise that never compiled as
+    ``<file>:<line>: <sentence> — <the reason the artifact stored>``, so the
+    tail is the rejection reason and the head is an anchor the promises block
+    above already printed. A message in some other shape is printed WHOLE
+    rather than cut at a separator it does not have: more of what the run
+    recorded is never a claim it did not make.
+    """
+    _head, separator, tail = message.partition(" — ")
+    return _promise_text(tail if separator and tail.strip() else message)
+
+
+def _promise_block_lines(rules, carried) -> list[str]:
+    """The ``promises in force`` block: one line per promise, with what the
+    artifact stored about it underneath.
+
+    An enforcing promise gets the author's sentence; a promise that is not
+    enforcing gets the reason it is not. Both are read off the objects this run
+    admitted — the registered rules and the carry verdicts they came in with —
+    which is the same pair of inputs :func:`_promise_summary` counts, so the
+    lines can never disagree with the counts above them.
+    """
+    sentences = {getattr(rule.promise, "id", ""): _promise_sentence(rule)
+                 for rule in rules}
+    enforcing = sorted(sentences)
+    # A promise that never compiled exists only as a carry verdict, and one
+    # promise can carry several; the first message in id-then-message order
+    # speaks for it, so the lines count exactly the ids the row counted.
+    reasons: dict[str, str] = {}
+    for verdict in sorted(carried, key=lambda v: (str(v.target), str(v.message))):
+        target = str(verdict.target)
+        if target in sentences:
+            continue
+        reasons.setdefault(target, _stalled_reason(str(verdict.message)))
+    lines = _promise_id_lines(enforcing, sentences)
+    stalled = sorted(reasons)
+    for promise_id in stalled[:_SUMMARY_BLOCK_CAP]:
+        lines.append(f"{_SUMMARY_ITEM_INDENT}not enforcing  {promise_id}")
+        if reasons[promise_id]:
+            lines.append(f"{_SUMMARY_TEXT_INDENT}{reasons[promise_id]}")
+    rest = len(stalled) - min(len(stalled), _SUMMARY_BLOCK_CAP)
+    if rest > 0:
+        lines.append(f"{_SUMMARY_ITEM_INDENT}+{rest} more not enforcing")
+    return lines
+
+
+def _provider_clauses(settings: discovery.Settings) -> tuple[list[str], str]:
+    """→ ``(one clause per captured schema, the policy note)``.
 
     The runtime is :func:`gcp_grounding.provider_schema.runtime_from_settings`
     and the schemas come back through ``load_cached`` — the SAME resolution and
     the same cached load :func:`_ground` activates for
-    :func:`gcp_grounding.tf_schema_checks.check_provider_schema`, so the line
+    :func:`gcp_grounding.tf_schema_checks.check_provider_schema`, so the clause
     names the file the checks actually read. A path that would not load says so
     rather than being counted as a schema in force.
     """
     runtime = provider_schema.runtime_from_settings(settings)
     if not runtime.paths:
-        return "no schema configured — resource shapes not checked"
+        return [], ""
     layer = settings.origin_of("provider_schema")
     clauses: list[str] = []
     for path in runtime.paths:
@@ -3247,10 +3397,22 @@ def _provider_summary(settings: discovery.Settings) -> str:
         types = len(schema.resource_types())
         noun = "resource type" if types == 1 else "resource types"
         clauses.append(f"{path} [{layer}] — {providers}, {types} {noun}")
-    value = "; ".join(clauses)
-    if runtime.effective_policy == "off":
-        value += " (schema policy 'off' — resource shapes were not checked)"
-    return value
+    note = (" (schema policy 'off' — resource shapes were not checked)"
+            if runtime.effective_policy == "off" else "")
+    return clauses, note
+
+
+def _provider_rows(settings: discovery.Settings) -> list[str]:
+    """The ``provider`` row: the captured schema this run judged resource
+    shapes against, or the plain no-schema answer — and, where several schemas
+    are in force, one line per schema under a row that counts them."""
+    clauses, note = _provider_clauses(settings)
+    if not clauses:
+        return [_summary_row("provider", _NO_SCHEMA)]
+    if len(clauses) == 1:
+        return [_summary_row("provider", f"{clauses[0]}{note}")]
+    return ([_summary_row("provider", f"{len(clauses)} schemas in force{note}")]
+            + _block_items(clauses))
 
 
 def _census_clause(path: str) -> str:
@@ -3341,7 +3503,465 @@ def _plan_types(doc: Any) -> tuple[str, ...]:
                  in tf_claims._google_resources(doc))
 
 
-def _result_lines(report: GroundingReport) -> list[str]:
+# -- --explain: the proposed change, in English --------------------------------
+#
+# THE SENTENCES ARE THE RUN'S OWN ROWS, READ BACK. Every line below is built
+# from the records the proposal-tier collection extractors already produced for
+# this document — the same rows a refuted promise's witness message quotes — or,
+# for a REST Org Policy, from the ``constraint_enforcement`` claims
+# ``claims.org_policy_claims`` emits. Nothing here re-parses the document for a
+# value of its own: a second reading is a second chance to disagree with the
+# verdicts printed above, and this block's whole purpose is to say, in English,
+# what those verdicts were about.
+#
+# The ONE thing read from the document directly is a plan's change action
+# (:func:`_plan_actions`), because no row carries it: rows describe the state a
+# block proposes, and whether that block is being created, updated or deleted is
+# stated only by ``resource_changes``. A delete states it and nothing else —
+# there are no planned values to build a row from — which is exactly the case
+# the action exists to describe.
+#
+# Where the extraction is poorer than the English would like, the sentence is
+# poorer too. A terraform Org Policy's rows carry no hierarchy node and merge
+# allowed and denied values into one ``value`` field, so the terraform arm says
+# "sets … to value <v>" where the REST arm — whose claims keep the node and the
+# two lists apart — says "allows value <v> … at <node>". Filling either in would
+# be a guess about a document nobody read that way.
+
+#: How many blocks the sentence list spells out before it counts the rest —
+#: every per-line block in the section shares the one cap.
+_SENTENCE_BLOCK_CAP = _SUMMARY_BLOCK_CAP
+
+#: The sentences' own indent, DEEPER than the four spaces the proposal block
+#: above indents its bare block addresses with. The two lists name the same
+#: addresses, and a reader — or a test — scanning for one must not collect the
+#: other. It is the indent every other block in the section prints its items
+#: at, for the same reason: one shape, learnt once.
+_SENTENCE_INDENT = _SUMMARY_ITEM_INDENT
+
+#: The proposal-tier collections the sentences are built from, in the order
+#: their shapes are rendered. Every one is proposal tier, so none of them reads
+#: the estate and the renderer needs no snapshot.
+_SENTENCE_COLLECTIONS = ("iam_bindings", "org_policy_rules",
+                         "proposed_role_permissions", "deny_rules",
+                         "deny_rule_exceptions", "proposed_firewall_rules")
+
+#: Terraform resource type → the English noun for what the block is. A type in
+#: this table is one the sentences above can speak about, so a block of one that
+#: yielded no readable row says so; a type OUTSIDE it (a network, a perimeter, a
+#: Cloud Armor policy) contributes no sentence and no apology — there is no
+#: collection here whose rows it would have been.
+_TF_BLOCK_NOUNS = {
+    "google_project_iam_binding": "the IAM binding",
+    "google_project_iam_member": "the IAM binding",
+    "google_project_iam_policy": "the IAM policy",
+    "google_project_iam_custom_role": "the custom role",
+    "google_org_policy_policy": "the Org Policy",
+    "google_iam_deny_policy": "the deny policy",
+    "google_compute_firewall": "the firewall rule",
+}
+
+#: The plan change actions, in the English the sentences lead with. An action
+#: outside this table (``read``, ``no-op``, a replacement pair) leads with
+#: nothing, because "creates" would be a claim about a change nobody read.
+_CHANGE_VERBS = {"create": "creates", "update": "updates", "delete": "deletes"}
+
+#: How much of a condition expression a sentence carries before it elides.
+_CONDITION_CAP = 60
+
+
+def _optional_module(name: str):
+    """``gcp_grounding.<name>`` — or None where this checkout lacks it.
+
+    Resolved dynamically exactly as :func:`_plan_types` resolves ``tf_claims``,
+    so a partial checkout costs the sentences and nothing else.
+    """
+    try:
+        return importlib.import_module(f"gcp_grounding.{name}")
+    except ImportError:
+        logger.debug("--explain: gcp_grounding.%s is not available; the proposal "
+                     "sentences were not built", name, exc_info=True)
+        return None
+
+
+def _graded_document(path: str) -> tuple[Any, str | None]:
+    """→ (the document the run graded, its kind) — (None, None) when there is
+    none.
+
+    THE SAME DOCUMENT, NOT A SECOND READING OF THE FILE: a terraform
+    configuration comes back as the synthetic plan
+    :func:`gcp_grounding.gate.terraform_proposal` assembled and sanitized (the
+    one every terraform reader in the tree grades through), so the rows below
+    are the rows the verdicts were decided over.
+    """
+    raw_hcl = gate.terraform_route(path)
+    if raw_hcl is not None:
+        proposal = gate.terraform_proposal(path, raw=raw_hcl).proposal
+        if proposal is None:
+            return None, None
+        return proposal.document, proposal.kind
+    doc, error = _read_json(path)
+    if error is not None:
+        return None, None
+    return doc, detect_kind(doc)
+
+
+def _collection_rows(sec_rules: Any, ctx: Any, name: str) -> tuple:
+    """The records collection *name* yields for *ctx* — empty when this checkout
+    registered no extractor for it, or when the extractor abstained.
+
+    An abstention contributes NO sentence: the collection was not extracted over
+    this document, and a sentence would be about rows nobody read. The
+    extractors are the registered ones and are called exactly as
+    :meth:`gcp_grounding.sec_rules.CompiledRule._collect` calls them, so they
+    cannot raise here either — :func:`gcp_grounding.sec_domains._guarded` turns
+    every failure into a missing_reason.
+    """
+    extractor = sec_rules.EXTRACTORS.get(name)
+    if extractor is None:
+        return ()
+    try:
+        records, _missing, _empty = sec_rules._normalize_extraction(
+            name, extractor(ctx))
+    except Exception:  # noqa: BLE001 — the narrative never crashes a graded run
+        logger.debug("--explain: the %s rows were not available", name,
+                     exc_info=True)
+        return ()
+    return records
+
+
+def _address_of(record: Mapping[str, Any]) -> str:
+    """The terraform block address a row carries — ``""`` for a REST row, which
+    has no block to name.
+
+    The key is :data:`gcp_grounding.sec_rules.WITNESS_ADDRESS_FIELD`, read from
+    the module that threads it rather than restated here, so the two spellings
+    cannot drift apart.
+    """
+    sec_rules = _optional_module("sec_rules")
+    return record.get(getattr(sec_rules, "WITNESS_ADDRESS_FIELD", "address"), "")
+
+
+def _grouped(records: Sequence[Mapping[str, Any]],
+             key) -> dict[Any, list[Mapping[str, Any]]]:
+    """*records* bucketed by *key*, first-seen order (the extractors already
+    sort their rows, so the buckets are deterministic)."""
+    groups: dict[Any, list[Mapping[str, Any]]] = {}
+    for record in records:
+        groups.setdefault(key(record), []).append(record)
+    return groups
+
+
+def _distinct(values) -> list[str]:
+    """*values* as strings, duplicates dropped, first-seen order kept."""
+    out: list[str] = []
+    for value in values:
+        text = str(value)
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _capped_text(text: str) -> str:
+    """One expression, bounded at :data:`_CONDITION_CAP` so a sentence stays a
+    line."""
+    text = " ".join(str(text).split())
+    return text if len(text) <= _CONDITION_CAP else f"{text[:_CONDITION_CAP]}…"
+
+
+def _iam_sentences(records: Sequence[Mapping[str, Any]]) -> list[tuple[str, str]]:
+    """``grants <role> to <members>`` — one line per binding block, the members
+    of the block's rows joined and its condition noted when the rows carry one.
+
+    The rows are one per (binding, member), so the grouping key is the binding:
+    its block address where the terraform arm threaded one, and the role plus
+    condition over a REST policy, whose rows carry no address to group by.
+    """
+    def key(record):
+        return (_address_of(record), record.get("role", ""),
+                record.get("condition", ""), record.get("has_condition", False))
+
+    sentences = []
+    for (address, role, condition, gated), rows in _grouped(records, key).items():
+        members = _capped_list(_distinct(r.get("member", "") for r in rows))
+        text = f"grants {role or '(no role)'} to {members or '(no members)'}"
+        if condition:
+            text += f" when {_capped_text(condition)}"
+        elif gated:
+            text += " when a condition the rows do not carry"
+        sentences.append((address, text))
+    return sentences
+
+
+def _org_sentences(records: Sequence[Mapping[str, Any]], document: Any,
+                   kind: str | None) -> list[tuple[str, str]]:
+    """The Org Policy lines: what the document sets, for which constraint, and —
+    where the extraction carries it — at which node.
+
+    A REST Org Policy is read from its own ``constraint_enforcement`` claims,
+    which keep the hierarchy node, the allowed and denied lists and the
+    ``reset`` switch apart. A terraform block has no such claim (``tf_claims``
+    emits the constraint and the value TYPE only), so its lines come from the
+    ``org_policy_rules`` rows, which carry the enforce boolean and the value but
+    neither the node nor which list a value came from.
+    """
+    if kind == "org_policy":
+        return _rest_org_sentences(document)
+    sentences = []
+    for record in records:
+        address = _address_of(record)
+        constraint = f"constraints/{record.get('constraint', '')}"
+        if record.get("is_list"):
+            sentences.append((address,
+                              f"sets {constraint} to value {record.get('value')}"))
+        else:
+            sentences.append((address, f"sets {constraint} enforce="
+                                       f"{str(record.get('enforce')).lower()}"))
+    return sentences
+
+
+def _rest_org_sentences(document: Any) -> list[tuple[str, str]]:
+    """The Org Policy lines of a REST document, from its enforcement claims."""
+    try:
+        claims = org_policy_claims(document)
+    except Exception:  # noqa: BLE001 — a malformed document is the verdicts' business
+        logger.debug("--explain: the org-policy claims were not available",
+                     exc_info=True)
+        return []
+    sentences = []
+    for claim in claims:
+        if claim.kind != "constraint_enforcement":
+            continue
+        payload = claim.fields()
+        node = payload.get("node") or ""
+        where = f" at {node}" if node else ""
+        constraint = claim.value
+        if payload.get("reset") is True:
+            sentences.append((claim.location, f"resets {constraint}{where} to "
+                                              "the managed default"))
+            continue
+        if payload.get("enforce") is not None:
+            sentences.append((claim.location,
+                              f"sets {constraint} enforce="
+                              f"{str(payload['enforce']).lower()}{where}"))
+        for field, word in (("allowed_values", "allows"),
+                            ("denied_values", "denies")):
+            for value in payload.get(field) or ():
+                sentences.append((claim.location,
+                                  f"{word} value {value} for "
+                                  f"{constraint}{where}"))
+    return sentences
+
+
+def _role_sentences(records: Sequence[Mapping[str, Any]]) -> list[tuple[str, str]]:
+    """``defines custom role <role> with N permissions (…)`` — one line per
+    custom-role block, over the permission rows it yielded."""
+    def key(record):
+        return (_address_of(record), record.get("role", ""))
+
+    sentences = []
+    for (address, role), rows in _grouped(records, key).items():
+        permissions = _distinct(r.get("permission", "") for r in rows)
+        noun = "permission" if len(permissions) == 1 else "permissions"
+        sentences.append((address, f"defines custom role {role} with "
+                                   f"{len(permissions)} {noun}"
+                                   f"{_capped_ids(permissions)}"))
+    return sentences
+
+
+def _deny_sentences(records: Sequence[Mapping[str, Any]],
+                    exceptions: Sequence[Mapping[str, Any]],
+                    actions: Mapping[str, str]) -> list[tuple[str, str]]:
+    """``creates a deny policy denying <permissions> to <principals>`` — one
+    line per deny rule, with the exempted principals and the condition noted.
+
+    The verb is the plan's own change action where the document carries one, so
+    a plan that removes a guardrail reads "deletes" rather than announcing the
+    denial it is taking away as though it were being made. A document that
+    states no action at all — a REST deny policy, or the synthetic plan a
+    terraform configuration is read as — is proposing the policy, so it reads
+    "creates"; an action outside :data:`_CHANGE_VERBS` leads with no verb rather
+    than one the plan does not support.
+    """
+    def key(record):
+        return (_address_of(record), record.get("policy", ""),
+                record.get("rule_index"))
+
+    carved = _grouped(exceptions, key)
+    sentences = []
+    for group, rows in _grouped(records, key).items():
+        address = group[0]
+        verb = (_CHANGE_VERBS.get(actions[address]) if address in actions
+                else "creates")
+        permissions = _capped_list(_distinct(r.get("permission", "")
+                                             for r in rows))
+        principals = _capped_list(_distinct(r.get("denied_principal", "")
+                                            for r in rows))
+        text = f"{verb} a deny policy" if verb else "a deny policy"
+        if permissions and principals:
+            text += f" denying {permissions} to {principals}"
+        exempted = _capped_list(_distinct(r.get("exception_principal", "")
+                                          for r in carved.get(group, ())))
+        if exempted:
+            text += f", excepting {exempted}"
+        if any(r.get("has_condition") for r in rows):
+            text += ", conditionally"
+        sentences.append((address, text))
+    return sentences
+
+
+def _firewall_sentences(records: Sequence[Mapping[str, Any]]
+                        ) -> list[tuple[str, str]]:
+    """``opens <direction> <proto>/<port> from <ranges> on <network>`` — one
+    line per firewall block, over the (range × protocol × port) rows it was
+    flattened into, and using only the fields those rows carry."""
+    def key(record):
+        return (_address_of(record), record.get("name", ""))
+
+    sentences = []
+    for (address, name), rows in _grouped(records, key).items():
+        first = rows[0]
+        verb = "opens" if first.get("action") == "allow" else "denies"
+        parts = [verb, str(first.get("direction") or "").strip(),
+                 _capped_list(_distinct(_layer4_label(r) for r in rows))]
+        text = " ".join(part for part in parts if part)
+        for field, word in (("source_range", "from"),
+                            ("destination_range", "to")):
+            ranges = _capped_list(_distinct(r[field] for r in rows
+                                            if r.get(field)))
+            if ranges:
+                text += f" {word} {ranges}"
+        if first.get("network"):
+            text += f" on {first['network']}"
+        if first.get("disabled"):
+            text += " (disabled)"
+        sentences.append((address or name, text))
+    return sentences
+
+
+def _layer4_label(record: Mapping[str, Any]) -> str:
+    """``tcp/22`` for one flattened firewall row.
+
+    The protocol is spelled back through :data:`gcp_grounding.sec_domains.
+    PROTOCOL_NUMBERS` — the table the row's number came out of, read in reverse
+    rather than restated. A row with NO protocol key is the "every protocol"
+    rule the flattening records by omitting it; a number that table cannot name
+    is printed as the number, because "all protocols" is what an absent key
+    means and would be a different rule.
+    """
+    if "protocol" not in record:
+        protocol = "all protocols"
+    else:
+        domains = _optional_module("sec_domains")
+        numbers = getattr(domains, "PROTOCOL_NUMBERS", {}) if domains else {}
+        names = {number: name for name, number in numbers.items()}
+        protocol = names.get(record["protocol"],
+                             f"protocol {record['protocol']}")
+    port = record.get("port")
+    return f"{protocol}/{port}" if port is not None else protocol
+
+
+def _unreadable_blocks(document: Any, covered: Sequence[tuple[str, str]],
+                       actions: Mapping[str, str]) -> list[tuple[str, str]]:
+    """One line per terraform block the sentences above could not speak for.
+
+    A block whose type has no shape here contributes nothing. A block being
+    DELETED says so — its planned values are gone by design, and reporting that
+    as unreadable would blame the change for the absence it is. Anything else of
+    a shape this block knows, with no row of its own, says it could not be read:
+    the collection abstained over it, and that abstention is a verdict above.
+    """
+    tf_claims = _optional_module("tf_claims")
+    if tf_claims is None or not isinstance(document, Mapping):
+        return []
+    spoken = {address for address, _text in covered}
+    sentences = []
+    for address, rtype, _values in tf_claims._google_resources(document):
+        noun = _TF_BLOCK_NOUNS.get(rtype)
+        if noun is None or tf_claims._extractor_for(rtype) is None:
+            continue
+        if any(spoke == address or spoke.startswith(f"{address}.")
+               for spoke in spoken):
+            continue
+        verb = actions.get(address)
+        if verb == "delete":
+            sentences.append((address, f"deletes {noun}"))
+        else:
+            sentences.append((address, "could not be read — judged as a named "
+                                       "abstention above"))
+    return sentences
+
+
+def _plan_actions(document: Any) -> dict[str, str]:
+    """Resource address → the single change action a plan states for it.
+
+    Read from ``resource_changes`` (the design's own instruction), and only
+    where the entry states exactly ONE action: a replacement pair
+    (``["delete", "create"]``) says two things about one address, and leading a
+    sentence with either half would be a claim the plan does not make.
+    """
+    if not isinstance(document, Mapping):
+        return {}
+    changes = document.get("resource_changes")
+    if not isinstance(changes, list):
+        return {}
+    actions: dict[str, str] = {}
+    for entry in changes:
+        if not isinstance(entry, Mapping):
+            continue
+        address = entry.get("address")
+        change = entry.get("change")
+        acts = change.get("actions") if isinstance(change, Mapping) else None
+        if isinstance(address, str) and address and isinstance(acts, list) \
+                and len(acts) == 1 and isinstance(acts[0], str):
+            actions.setdefault(address, acts[0])
+    return actions
+
+
+def _proposal_sentences(path: str) -> list[str]:
+    """The indented English lines that follow the census, capped and ordered.
+
+    Ordered by block address so the list reads down the same way the proposal
+    block above it does, and bounded at :data:`_SENTENCE_BLOCK_CAP` blocks the
+    way the decision block bounds its own lists — the rest is counted, never
+    dropped silently.
+    """
+    sec_rules = _optional_module("sec_rules")
+    if sec_rules is None:
+        return []
+    sec_ast = _optional_module("sec_ast")
+    if sec_ast is not None:
+        # The domain collections are registered lazily, exactly as the compiler
+        # and the rule loader register them; without this a run with no
+        # requirements configured would have no extractor to read rows from.
+        sec_ast._ensure_domains()
+    document, kind = _graded_document(path)
+    if document is None:
+        return []
+    ctx = sec_rules.RuleContext(snapshot=None, document=document,
+                                document_kind=kind, source=path)
+    rows = {name: _collection_rows(sec_rules, ctx, name)
+            for name in _SENTENCE_COLLECTIONS}
+    actions = _plan_actions(document) if kind == "tf_plan" else {}
+    sentences = (_iam_sentences(rows["iam_bindings"])
+                 + _org_sentences(rows["org_policy_rules"], document, kind)
+                 + _role_sentences(rows["proposed_role_permissions"])
+                 + _deny_sentences(rows["deny_rules"],
+                                   rows["deny_rule_exceptions"], actions)
+                 + _firewall_sentences(rows["proposed_firewall_rules"]))
+    if kind == "tf_plan":
+        sentences += _unreadable_blocks(document, sentences, actions)
+    ordered = sorted(sentences)
+    lines = [f"{_SENTENCE_INDENT}{address}: {text}" if address
+             else f"{_SENTENCE_INDENT}{text}"
+             for address, text in ordered[:_SENTENCE_BLOCK_CAP]]
+    rest = len(ordered) - len(lines)
+    if rest > 0:
+        lines.append(f"{_SENTENCE_INDENT}+{rest} more")
+    return lines
+
+
+def _result_lines(report: GroundingReport, rules=()) -> list[str]:
     """The ``result`` row and, on a denial, WHAT denied it.
 
     The two reasons are kept apart on purpose: a refuted promise is a
@@ -3349,6 +3969,12 @@ def _result_lines(report: GroundingReport) -> list[str]:
     is one of this tool's own checks. They are told apart by the verdict kind's
     :data:`_SEC_KIND_PREFIX`, so neither can ever be reported as the other, and
     a promise id is only ever read off a promise verdict's target.
+
+    The violated promises are a BLOCK, one per line, each with the author's own
+    sentence under it — the same rendering the promises row uses, over the same
+    admitted *rules*. It is repeated here because the promises block elides
+    past its cap, and the promise a run was denied for is the one sentence a
+    reader must not have to go looking for.
     """
     if report.ok:
         counts = report.counts()
@@ -3358,11 +3984,15 @@ def _result_lines(report: GroundingReport) -> list[str]:
                              f"APPROVED{qualifier} (exit {EXIT_OK})")]
     deciding = [verdict for status in _FINDING_STATUSES
                 for verdict in report.by_status(status)]
-    promises = [v.target for v in deciding if v.kind.startswith(_SEC_KIND_PREFIX)]
+    promises = _distinct(v.target for v in deciding
+                         if v.kind.startswith(_SEC_KIND_PREFIX))
     builtin = [v for v in deciding if not v.kind.startswith(_SEC_KIND_PREFIX)]
     lines = [_summary_row("result", f"DENIED (exit {EXIT_FAILED})")]
     if promises:
-        lines.append(f"    it violated these promises: {', '.join(promises)}")
+        sentences = {getattr(rule.promise, "id", ""): _promise_sentence(rule)
+                     for rule in rules}
+        lines.append("    it violated these promises:")
+        lines.extend(_promise_id_lines(promises, sentences))
     if builtin:
         kinds = ", ".join(sorted({verdict.kind for verdict in builtin}))
         noun = "finding" if len(builtin) == 1 else "findings"
@@ -3385,19 +4015,36 @@ def _summary_section_lines(path: str, report: GroundingReport,
     ``[config]``/``[auto]``/``[default]`` spelling ``--state-explain`` uses,
     read from :meth:`gcp_grounding.discovery.Settings.origin_of` rather than
     re-derived here.
+
+    A row whose value is a LIST prints the list as a block under it, one item
+    per line: the promises in force with the author's own sentence under each
+    id, the violated promises of a denial, several state files, several
+    schemas. Each block is bounded at :data:`_SUMMARY_BLOCK_CAP` with the
+    remainder counted, the way the decision block bounds its own lists.
+
+    The proposed-change row is followed by :func:`_proposal_sentences` — one
+    English sentence per proposal block, read back off the rows this run already
+    extracted. It is guarded like the census beside it: sentences the renderer
+    cannot build cost the sentences and nothing else.
     """
-    lines = ["", _SUMMARY_HEADER,
-             _summary_row("terraform state on disk", _state_summary(settings)),
-             _summary_row("promises in force",
-                          _promise_summary(settings, source, rules, carried)),
-             _summary_row("provider", _provider_summary(settings))]
+    lines = ["", _SUMMARY_HEADER]
+    lines.extend(_state_rows(settings))
+    lines.append(_summary_row("promises in force",
+                              _promise_summary(settings, source, rules,
+                                               carried)))
+    lines.extend(_promise_block_lines(rules, carried))
+    lines.extend(_provider_rows(settings))
     try:
         census = _census_clause(path)
     except Exception:
         logger.debug("--explain: the proposal census failed", exc_info=True)
         census = "the document could not be summarized"
     lines.append(_summary_row("proposed change", f"{path} — {census}"))
-    lines.extend(_result_lines(report))
+    try:
+        lines.extend(_proposal_sentences(path))
+    except Exception:  # noqa: BLE001 — the sentences never cost a graded run
+        logger.debug("--explain: the proposal sentences failed", exc_info=True)
+    lines.extend(_result_lines(report, rules))
     return lines
 
 

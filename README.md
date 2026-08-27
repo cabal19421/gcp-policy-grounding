@@ -137,30 +137,90 @@ decision recap: DENIED (exit 1) — because:
 summary — what just happened:
   terraform state on disk : examples/terraform/terraform.tfstate [cli]
   promises in force       : 6 enforcing, 2 not — from demo/compiled [cli]
-      (impersonation-sre-only, no-open-ssh-rdp-ingress,
-      no-primitive-roles-outside-domain, no-public-principals,
-      perimeter-restricts-storage, +1 more)
+      impersonation-sre-only
+        “No binding may grant roles/iam.serviceAccountTokenCreator or
+          roles/iam.serviceAccountUser to a principal that is not in
+          group:platform-sre@acme.example.”
+      no-open-ssh-rdp-ingress
+        “No ingress firewall rule may allow tcp/22 or tcp/3389 from
+          0.0.0.0/0.”
+      no-primitive-roles-outside-domain
+        “No binding may grant roles/owner or roles/editor to any principal
+          outside domain acme.example.”
+      no-public-principals
+        “No binding may include allUsers or allAuthenticatedUsers.”
+      perimeter-restricts-storage
+        “Every service perimeter must keep storage.googleapis.com in
+          restricted_services.”
+      sa-key-creation-disabled
+        “Every Org Policy rule for
+          constraints/iam.disableServiceAccountKeyCreation must set enforce
+          to true.”
+      not enforcing  bigquery-reader-only
+        requirement was rejected at compile time (vocabulary is not
+          grounded: roles/bigquery.reader does not exist in the snapshot);
+          it did not run
+      not enforcing  untranslated-security-review-before-merge
+        no promise block — the sentence was not translated
   provider                : no schema configured — resource shapes not checked
   proposed change         : examples/terraform/main.tf.json — a terraform
       configuration (8 resources): 3 google_compute_firewall,
       2 google_project_iam_binding,
       1 google_access_context_manager_service_perimeter,
       1 google_compute_security_policy, 1 google_org_policy_policy
+      google_compute_firewall.allow_ssh: opens INGRESS tcp/22 from
+        10.0.0.0/8 on projects/acme-prod/global/networks/prod-vpc
+      google_compute_firewall.allow_ssh_world: opens INGRESS tcp/22 from
+        0.0.0.0/0 on projects/acme-prod/global/networks/prod-vpc
+      google_compute_firewall.deny_rdp: denies INGRESS tcp/3389 from
+        0.0.0.0/0 on projects/acme-prod/global/networks/prod-vpc
+      google_org_policy_policy.no_sa_keys: sets
+        constraints/iam.disableServiceAccountKeyCreation enforce=true
+      google_project_iam_binding.contractor_owner: grants roles/owner to
+        user:mallory@outsider.example
+      google_project_iam_binding.viewer: grants roles/bigquery.dataViewer
+        to group:data-eng@acme.example
   result                  : DENIED (exit 1)
-    it violated these promises: no-open-ssh-rdp-ingress,
+    it violated these promises:
+      no-open-ssh-rdp-ingress
+        “No ingress firewall rule may allow tcp/22 or tcp/3389 from
+          0.0.0.0/0.”
       no-primitive-roles-outside-domain
+        “No binding may grant roles/owner or roles/editor to any principal
+          outside domain acme.example.”
     blocked by 1 built-in finding: [firewall_exposure]
 ```
 
 (the `(…)` holds a solver-minted example address — e.g. `(35.32.0.0)` — not a
 constant of the rule, so nothing should pin it; the `…` elsewhere covers the
 recap's third deny line, an `[sec:iam]` refutation, and the tail of two rows
-this page wraps — every summary row is one line on your terminal)
+this page wraps — every summary row, every promise sentence, and every
+sentence under the proposed change is one line on your terminal)
 
 The summary is the closing block of every `--explain` run: each input row
 names the settings layer that supplied it — `[cli]`, `[env]`, `[config
 <path>]`, `[auto]`, `[default]`, the same labels `--state-explain` prints —
 and the result row is last, so the decision stays the final word.
+
+A row whose value is a list prints the list under it, one item per line. The
+promises row is the one to read: under it, each promise in force is its id and
+then, indented, **the sentence its author wrote**, quoted from the compiled
+artifact exactly as `show_promises.py` renders it — never a paraphrase, and
+never generated. A promise that is not enforcing is listed the same way with
+the reason the compile stored for it, which is how the two rejected sentences
+above name themselves. The violated promises of a denial repeat that shape
+under the result row, because a long corpus elides at eight and the promise a
+change was denied for is the one sentence a reader must not have to hunt for.
+
+Under the proposed-change row, one indented sentence per proposal block says
+what that block does, in English — `google_project_iam_binding.contractor_owner:
+grants roles/owner to user:mallory@outsider.example`, above. Each sentence is
+built from the rows this run already extracted, the same rows a refuted
+promise's witness message quotes, so the list can only say what was actually
+read: a block whose rows the run could not read says so instead, and a block of
+a kind no collection here covers (the perimeter and the Cloud Armor policy
+above) contributes no sentence at all. The list stops at eight blocks and
+counts the rest.
 
 — the violated promise is one of six English sentences compiled from
 `tests/fixtures/gcp/sec_requirements/`, and the refutation names the exact
@@ -682,7 +742,9 @@ Two things remain yours, because no prover can do them:
 - **Semantic fidelity.** Does the formula mean what your English sentence
   says? The pinned witnesses are the designed review surface — read the
   violating example and ask "is *this* what I meant to forbid?"
-  (`show_promises.py` renders sentence, rule and witnesses side by side.)
+  (`show_promises.py` renders sentence, rule and witnesses side by side; the
+  same stored sentence is what an `--explain` summary prints under each
+  promise id, so the English on the terminal is the English you wrote.)
 - **End-to-end acceptance, if you want it.** One violating document and one
   benign document per promise, asserted to block and pass — the pattern the
   bundled promises' own tests use, a few lines per case. It is the only layer
@@ -1251,10 +1313,16 @@ decision recap: APPROVED (exit 0) — grounded=4 unchecked=4 (narrative above)
 summary — what just happened:
   terraform state on disk : examples/terraform-masked/terraform-after-removal.tfstate [cli]
   promises in force       : 1 enforcing, 0 not — from demo/compiled-masked [cli]
-      (masked-allow-only-known-domains)
+      masked-allow-only-known-domains
+        “The ingress allow rule allow-rdp-broad may admit sources only from
+          within the two audited partner networks, 10.198.51.0/24 and
+          10.203.113.0/26.”
   provider                : no schema configured — resource shapes not checked
   proposed change         : examples/terraform-masked/narrowed.tf.json —
       a terraform configuration (1 resource): 1 google_compute_firewall
+      google_compute_firewall.allow_rdp_broad: opens INGRESS tcp/3389 from
+        10.198.51.0/24, 10.203.113.0/26 on
+        projects/acme-prod/global/networks/prod-vpc
   result                  : APPROVED — 4 unchecked (exit 0)
 ```
 
@@ -1276,12 +1344,22 @@ decision recap: DENIED (exit 1) — because:
 summary — what just happened:
   terraform state on disk : examples/terraform-masked/terraform-after-removal.tfstate [cli]
   promises in force       : 1 enforcing, 0 not — from demo/compiled-masked [cli]
-      (masked-allow-only-known-domains)
+      masked-allow-only-known-domains
+        “The ingress allow rule allow-rdp-broad may admit sources only from
+          within the two audited partner networks, 10.198.51.0/24 and
+          10.203.113.0/26.”
   provider                : no schema configured — resource shapes not checked
   proposed change         : examples/terraform-masked/narrowed_extra.tf.json —
       a terraform configuration (1 resource): 1 google_compute_firewall
+      google_compute_firewall.allow_rdp_broad: opens INGRESS tcp/3389 from
+        10.198.51.0/24, 10.198.52.0/28, 10.203.113.0/26 on
+        projects/acme-prod/global/networks/prod-vpc
   result                  : DENIED (exit 1)
-    it violated these promises: masked-allow-only-known-domains
+    it violated these promises:
+      masked-allow-only-known-domains
+        “The ingress allow rule allow-rdp-broad may admit sources only from
+          within the two audited partner networks, 10.198.51.0/24 and
+          10.203.113.0/26.”
 ```
 
 (the elided fields are the row's remaining constants — unlike a solver-minted
@@ -1356,13 +1434,22 @@ summary — what just happened:
   proposed change         : examples/terraform-schema/proposal_typo.tf.json —
       a terraform configuration (3 resources): 1 google_compute_firewall,
       1 google_project_iam_binding, 1 google_project_iam_custom_role
+      google_compute_firewall.allow_health_checks: opens INGRESS tcp/8080 on
+        projects/acme-prod/global/networks/prod-vpc
+      google_project_iam_binding.analysts: grants roles/bigquery.dataViewer
+        to group:data-eng@acme.example
+      google_project_iam_custom_role.usage_auditor: defines custom role
+        projects/acme-prod/roles/usageAuditor with 2 permissions
+        (bigquery.datasets.get, bigquery.tables.get)
   result                  : DENIED (exit 1)
     blocked by 1 built-in finding: [tf_attribute]
 ```
 
 — note what the summary does NOT say: no requirements are configured in this
 scenario, so nothing is claimed about promises, and the denial is reported as
-a built-in finding, which is what it is.
+a built-in finding, which is what it is. The firewall sentence names no source
+range for the same reason the exposure check abstains below: with
+`source_ranges` misspelled, the rule has no source filter anyone read.
 
 with the report line above it carrying the remediation: `(did you mean:
 source_ranges?)`. Note the side-effect the abstentions state: with
@@ -1497,23 +1584,82 @@ decision recap: DENIED (exit 1) — because:
 summary — what just happened:
   terraform state on disk : examples/terraform-orgpolicy/terraform.tfstate [cli]
   promises in force       : 11 enforcing, 0 not — from demo/compiled-orgpolicy
-      [cli] (cloudrun-ingress-non-public, compute-disable-internet-neg,
-      compute-disable-serialport-access, deny-admin-roles,
-      egress-firewall-policy-high-strength-vpc-firewall, +6 more)
+      [cli]
+      cloudrun-ingress-non-public
+        “No Org Policy rule for constraints/run.allowedIngress may carry the
+          value all.”
+      compute-disable-internet-neg
+        “Every Org Policy rule for
+          constraints/compute.disableInternetNetworkEndpointGroups must set
+          enforce to true.”
+      compute-disable-serialport-access
+        “Every Org Policy rule for constraints/compute.disableSerialPortAccess
+          must set enforce to true.”
+      deny-admin-roles
+        “No binding may grant roles/owner or roles/editor to anyone.”
+      egress-firewall-policy-high-strength-vpc-firewall
+        “No egress firewall rule may allow traffic to 0.0.0.0/0.”
+      iam-deny-service-account-impersonation
+        “No binding may grant roles/iam.serviceAccountTokenCreator.”
+      public-access-prevention
+        “Every Org Policy rule for constraints/storage.publicAccessPrevention
+          must set enforce to true.”
+      run-allowed-ingress-internal-loadbalancing
+        “Every value on the constraints/run.allowedIngress list must be
+          internal or internal-and-cloud-load-balancing.”
+      +3 more
   provider                : no schema configured — resource shapes not checked
   proposed change         : examples/terraform-orgpolicy/proposal_serial_and_publicip.tf.json
       — a terraform configuration (13 resources): 7 google_org_policy_policy,
       3 google_compute_firewall, 2 google_project_iam_binding,
       1 google_compute_network
+      google_compute_firewall.allow_internal_https: opens INGRESS tcp/443
+        from 10.0.0.0/8 to 10.0.0.0/8 on
+        projects/acme-prod/global/networks/prod-vpc
+      google_compute_firewall.egress_deny_world: denies EGRESS all protocols
+        to 0.0.0.0/0 on projects/acme-prod/global/networks/prod-vpc
+      google_compute_firewall.egress_internal: opens EGRESS tcp/443 to
+        10.0.0.0/8 on projects/acme-prod/global/networks/prod-vpc
+      google_org_policy_policy.neg_no_internet: sets
+        constraints/compute.disableInternetNetworkEndpointGroups enforce=true
+      google_org_policy_policy.run_ingress_internal: sets
+        constraints/run.allowedIngress to value internal
+      google_org_policy_policy.run_ingress_internal: sets
+        constraints/run.allowedIngress to value internal-and-cloud-load-balancing
+      google_org_policy_policy.security_contacts: sets
+        constraints/essentialcontacts.allowedContactDomains to value @acme.example
+      google_org_policy_policy.serial_port_disabled: sets
+        constraints/compute.disableSerialPortAccess enforce=false
+      +5 more
   result                  : DENIED (exit 1)
-    it violated these promises: compute-disable-serialport-access,
+    it violated these promises:
+      compute-disable-serialport-access
+        “Every Org Policy rule for constraints/compute.disableSerialPortAccess
+          must set enforce to true.”
       vm-public-ip-gcp
+        “constraints/compute.vmExternalIpAccess must deny all external IPs —
+          no rule may put any VM on its value lists.”
 ```
 
 — the flipped `enforce` refutes the serial-port control, and under deny-all
 the single enumerated instance *is* the violation of the external-IP control:
-an exception being carved. The other five proposals follow the same shape
-(swap the `--proposal` path; everything else is identical):
+an exception being carved.
+
+— the promise block stops at eight ids and counts the rest, so
+`vm-public-ip-gcp` is inside its `+3 more` — and its sentence is still on the
+page, because the result row repeats each violated promise with the English
+its author wrote. That is what the repetition is for.
+
+— the sentence list stops at eight blocks and counts the rest, so the
+`vm_no_external_ip` policy the recap refutes is inside the `+5 more`; the
+flipped `enforce` is spelled out. A terraform Org Policy's rows carry the
+constraint and the enforce boolean but neither the hierarchy node nor which
+list a value came from, so those lines say "sets … to value" where a REST
+document — whose claims keep both — says "allows value … at
+organizations/123456789012".
+
+The other five proposals follow the same shape (swap the `--proposal` path;
+everything else is identical):
 
 - `proposal_run_ingress_public.tf.json` — `run.allowedIngress` gains the value
   `all`. One added value, two named controls: the recap carries both
@@ -1556,16 +1702,57 @@ decision recap: DENIED (exit 1) — because:
 summary — what just happened:
   terraform state on disk : examples/terraform-orgpolicy/terraform.tfstate [cli]
   promises in force       : 11 enforcing, 0 not — from demo/compiled-orgpolicy
-      [cli] (cloudrun-ingress-non-public, compute-disable-internet-neg,
-      compute-disable-serialport-access, deny-admin-roles,
-      egress-firewall-policy-high-strength-vpc-firewall, +6 more)
+      [cli]
+      cloudrun-ingress-non-public
+        “No Org Policy rule for constraints/run.allowedIngress may carry the
+          value all.”
+      compute-disable-internet-neg
+        “Every Org Policy rule for
+          constraints/compute.disableInternetNetworkEndpointGroups must set
+          enforce to true.”
+      compute-disable-serialport-access
+        “Every Org Policy rule for constraints/compute.disableSerialPortAccess
+          must set enforce to true.”
+      deny-admin-roles
+        “No binding may grant roles/owner or roles/editor to anyone.”
+      egress-firewall-policy-high-strength-vpc-firewall
+        “No egress firewall rule may allow traffic to 0.0.0.0/0.”
+      iam-deny-service-account-impersonation
+        “No binding may grant roles/iam.serviceAccountTokenCreator.”
+      public-access-prevention
+        “Every Org Policy rule for constraints/storage.publicAccessPrevention
+          must set enforce to true.”
+      run-allowed-ingress-internal-loadbalancing
+        “Every value on the constraints/run.allowedIngress list must be
+          internal or internal-and-cloud-load-balancing.”
+      +3 more
   provider                : no schema configured — resource shapes not checked
   proposed change         : examples/terraform-orgpolicy/proposal_egress_world.tf.json
       — a terraform configuration (14 resources): 7 google_org_policy_policy,
       4 google_compute_firewall, 2 google_project_iam_binding,
       1 google_compute_network
+      google_compute_firewall.allow_internal_https: opens INGRESS tcp/443
+        from 10.0.0.0/8 to 10.0.0.0/8 on
+        projects/acme-prod/global/networks/prod-vpc
+      google_compute_firewall.egress_deny_world: denies EGRESS all protocols
+        to 0.0.0.0/0 on projects/acme-prod/global/networks/prod-vpc
+      google_compute_firewall.egress_internal: opens EGRESS tcp/443 to
+        10.0.0.0/8 on projects/acme-prod/global/networks/prod-vpc
+      google_compute_firewall.egress_vendor_sync: opens EGRESS tcp/443 to
+        0.0.0.0/0 on projects/acme-prod/global/networks/prod-vpc
+      google_org_policy_policy.neg_no_internet: sets
+        constraints/compute.disableInternetNetworkEndpointGroups enforce=true
+      google_org_policy_policy.run_ingress_internal: sets
+        constraints/run.allowedIngress to value internal
+      google_org_policy_policy.run_ingress_internal: sets
+        constraints/run.allowedIngress to value internal-and-cloud-load-balancing
+      google_org_policy_policy.security_contacts: sets
+        constraints/essentialcontacts.allowedContactDomains to value @acme.example
+      +6 more
   result                  : DENIED (exit 1)
-    it violated these promises: egress-firewall-policy-high-strength-vpc-firewall
+    it violated these promises:
+      egress-firewall-policy-high-strength-vpc-firewall
+        “No egress firewall rule may allow traffic to 0.0.0.0/0.”
     blocked by 1 built-in finding: [firewall_reopen]
 ```
 
@@ -1730,17 +1917,44 @@ decision recap: DENIED (exit 1) — because:
 summary — what just happened:
   terraform state on disk : none configured
   promises in force       : 3 enforcing, 0 not — from demo/compiled-denypolicy
-      [cli] (every-deny-covers-token-creation,
-      no-principal-threads-the-guardrail,
-      sa-key-creation-stays-effectively-enforced)
+      [cli]
+      every-deny-covers-token-creation
+        “Every IAM deny policy under review must deny
+          iam.serviceAccounts.getAccessToken to everyone, unconditionally,
+          with no principal exceptions.”
+      no-principal-threads-the-guardrail
+        “No deny rule may carve any principal out of its denial.”
+      sa-key-creation-stays-effectively-enforced
+        “constraints/iam.disableServiceAccountKeyCreation must remain
+          effectively enforced at every node the change determines.”
   provider                : no schema configured — resource shapes not checked
   proposed change         : examples/terraform-denypolicy/plan_threading.json —
       a terraform plan: 2 google_project_iam_binding, 1 google_iam_deny_policy,
       1 google_org_policy_policy
+      google_iam_deny_policy.guard_token_mint: creates a deny policy denying
+        iam.serviceAccounts.getAccessToken, iam.serviceAccounts.getOpenIdToken
+        to principalSet://goog/public:all, excepting
+        principal://iam.googleapis.com/projects/-/serviceAccounts/payroll-ci@acme-pay-prod.iam.gserviceaccount.com
+      google_org_policy_policy.sa_key_guard: sets
+        constraints/iam.disableServiceAccountKeyCreation enforce=true
+      google_project_iam_binding.auditors: grants roles/logging.viewer to
+        group:security@acme.example
+      google_project_iam_binding.payroll_ci_token_creator: grants
+        roles/iam.serviceAccountTokenCreator to
+        serviceAccount:payroll-ci@acme-pay-prod.iam.gserviceaccount.com
   result                  : DENIED (exit 1)
-    it violated these promises: every-deny-covers-token-creation,
+    it violated these promises:
+      every-deny-covers-token-creation
+        “Every IAM deny policy under review must deny
+          iam.serviceAccounts.getAccessToken to everyone, unconditionally,
+          with no principal exceptions.”
       no-principal-threads-the-guardrail
+        “No deny rule may carve any principal out of its denial.”
 ```
+
+— the deny sentence is the whole scenario in one line: the guardrail, what it
+denies, and the carve-out threading it. Both halves are read from the rows the
+two deny collections yielded, joined on the rule the refutations quote.
 
 The interaction check tells the same story from the grant's side, as a
 warning in the listing: *"this grant to serviceAccount:payroll-ci@… threads
@@ -1789,19 +2003,29 @@ decision recap: DENIED (exit 1) — because:
 summary — what just happened:
   terraform state on disk : none configured
   promises in force       : 3 enforcing, 0 not — from demo/compiled-denypolicy
-      [cli] (every-deny-covers-token-creation,
-      no-principal-threads-the-guardrail,
-      sa-key-creation-stays-effectively-enforced)
+      [cli]
+      every-deny-covers-token-creation
+        “Every IAM deny policy under review must deny
+          iam.serviceAccounts.getAccessToken to everyone, unconditionally,
+          with no principal exceptions.”
+      no-principal-threads-the-guardrail
+        “No deny rule may carve any principal out of its denial.”
+      sa-key-creation-stays-effectively-enforced
+        “constraints/iam.disableServiceAccountKeyCreation must remain
+          effectively enforced at every node the change determines.”
   provider                : no schema configured — resource shapes not checked
   proposed change         : examples/terraform-denypolicy/plan_remove_deny.json
       — a terraform plan: 1 google_iam_deny_policy
+      google_iam_deny_policy.guard_token_mint: deletes the deny policy
   result                  : DENIED (exit 1)
     blocked by 2 built-in findings: [iam_deny_shadow]
 ```
 
 — and the summary is where the promises' abstention is visible as an absence:
 three promises are in force, none of them refused, and the block is reported
-as built-in findings alone.
+as built-in findings alone. The sentence leads with the plan's own change
+action: the block has no planned values to describe, and "deletes" is the one
+thing about it the plan does state.
 
 No allow policy changed anywhere — effective permissions increased with no
 grant edited, which is exactly the shape no per-document gate can see. The
@@ -1845,15 +2069,37 @@ decision recap: DENIED (exit 1) — because:
 summary — what just happened:
   terraform state on disk : none configured
   promises in force       : 3 enforcing, 0 not — from demo/compiled-denypolicy
-      [cli] (every-deny-covers-token-creation,
-      no-principal-threads-the-guardrail,
-      sa-key-creation-stays-effectively-enforced)
+      [cli]
+      every-deny-covers-token-creation
+        “Every IAM deny policy under review must deny
+          iam.serviceAccounts.getAccessToken to everyone, unconditionally,
+          with no principal exceptions.”
+      no-principal-threads-the-guardrail
+        “No deny rule may carve any principal out of its denial.”
+      sa-key-creation-stays-effectively-enforced
+        “constraints/iam.disableServiceAccountKeyCreation must remain
+          effectively enforced at every node the change determines.”
   provider                : no schema configured — resource shapes not checked
   proposed change         : examples/terraform-denypolicy/plan_reset_payments.json
       — a terraform plan: 2 google_org_policy_policy,
       2 google_project_iam_binding, 1 google_iam_deny_policy
+      google_iam_deny_policy.guard_token_mint: creates a deny policy denying
+        iam.serviceAccounts.getAccessToken, iam.serviceAccounts.getOpenIdToken
+        to principalSet://goog/public:all
+      google_org_policy_policy.payments_default_sweep: could not be read —
+        judged as a named abstention above
+      google_org_policy_policy.sa_key_guard: could not be read — judged as a
+        named abstention above
+      google_project_iam_binding.auditors: grants roles/logging.viewer to
+        group:security@acme.example
+      google_project_iam_binding.payroll_ci_token_creator: grants
+        roles/iam.serviceAccountTokenCreator to
+        serviceAccount:payroll-ci@acme-pay-prod.iam.gserviceaccount.com
   result                  : DENIED (exit 1)
-    it violated these promises: sa-key-creation-stays-effectively-enforced
+    it violated these promises:
+      sa-key-creation-stays-effectively-enforced
+        “constraints/iam.disableServiceAccountKeyCreation must remain
+          effectively enforced at every node the change determines.”
 ```
 
 — the refutation names the *effective* row (the folder node, the folded
@@ -1869,6 +2115,13 @@ unlicensed — the constraint's default uncaptured, a condition on the chain,
 an incomplete `org_policies` table — this run would have abstained naming the
 gap rather than guessed either way.
 
+— and this is the one arc where the sentence list has to say it could not read
+something. A `reset` states no rule at all, so the per-document
+`org_policy_rules` extraction abstains over the whole plan naming the sweep
+block — the very fact the scenario is about — and neither org block gets a
+sentence claiming otherwise. What decides the run is the effective fold, not
+that list.
+
 In production the demo's flags collapse into a `.gcp-grounding.json` config file
 discovered next to the proposal (see "Two overlapping ways to get the current
 state" above) — the same inputs, written once, so the command line shrinks to
@@ -1877,7 +2130,8 @@ lesson.
 
 Useful flags on `verify-policy`: `--explain` (the decision narrative, the z3
 constraints built this run, the state block, and the closing `summary — what
-just happened:` naming every input with the layer that supplied it),
+just happened:` naming every input with the layer that supplied it and every
+proposal block in one English sentence),
 `--format json` (the stable machine report), `--abstain-notes`
 (surface what the gate could NOT decide on an otherwise-passing run). To
 author real requirements, copy `sec_requirements/TEMPLATE.md`, write one
