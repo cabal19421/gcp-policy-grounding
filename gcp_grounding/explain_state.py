@@ -445,16 +445,55 @@ def _setting_value(settings: Any, name: str) -> str:
 
 
 def _settings_block(settings: Any) -> list[str]:
+    """The settings, CHOSEN ONES FIRST and the rest named on one totality line.
+
+    TOTALITY IS PRESERVED and that is the whole constraint: an input nobody can
+    see is an input nobody can audit, so every field of
+    :data:`gcp_grounding.discovery.SETTINGS_FIELDS` is still visible on every
+    render. What changes is the shape — a field somebody actually set gets its
+    own row with its value and origin, and the fields still sitting on their
+    built-in default are NAMED TOGETHER rather than printed as a column of
+    ``- [default]`` rows that buries the two or three lines the reader came for.
+    """
     if settings is None:
         return []
+    rows = [(name, _setting_value(settings, name), settings.origin_of(name))
+            for name in discovery.SETTINGS_FIELDS]
+    chosen = [row for row in rows if row[2] != "default"]
+    defaulted = [name for name, _value, origin in rows if origin == "default"]
     lines = ["settings:"]
-    for name in discovery.SETTINGS_FIELDS:
-        lines.append(f"  {name} = {_setting_value(settings, name)} "
-                     f"[{settings.origin_of(name)}]")
+    width = max((len(name) for name, _value, _origin in chosen), default=0)
+    for name, value, origin in chosen:
+        lines.append(f"  {name:<{width}} = {value} [{origin}]")
+    if defaulted:
+        noun = "setting" if len(defaulted) == 1 else "settings"
+        lines.append(f"  {len(defaulted)} {noun} at defaults: "
+                     f"{', '.join(defaulted)}")
     return lines
 
 
 # -- BLOCK THREE: the targets -------------------------------------------------
+
+
+#: What makes a reason worth its own line. Every reason is built from a
+#: template, and the ones that interpolate something — the source that
+#: enumerated the domain, how many sources disagreed, which category was never
+#: covered — quote a name or carry a number. A reason with neither is generic
+#: prose, and the generic prose of a status is exactly what
+#: :data:`STATUS_PHRASES` already spelled out on the line above it.
+_REASON_DATA = "'\""
+
+
+def _reason_adds_data(reason: str) -> bool:
+    """Does *reason* name something from THIS run, or restate the status?
+
+    Suppression is a RENDERING decision and nothing else: the machine document
+    (:func:`state_document`) carries every reason verbatim whatever this
+    answers, and no status ever loses its phrase — only the second line that
+    said it again in other words.
+    """
+    return (any(character in reason for character in _REASON_DATA)
+            or any(character.isdigit() for character in reason))
 
 
 def _targets_block(entries: Sequence[Any]) -> list[str]:
@@ -469,7 +508,8 @@ def _targets_block(entries: Sequence[Any]) -> list[str]:
             f"[{getattr(entry, 'how', '') or DASH}] {_phrase(entry.status)}")
         if entry.status != "resolved":
             reason = getattr(entry, "reason", "") or "no reason was recorded"
-            lines.append(f"    reason: {reason}")
+            if _reason_adds_data(reason):
+                lines.append(f"    reason: {reason}")
     return lines
 
 

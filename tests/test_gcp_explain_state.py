@@ -258,15 +258,35 @@ def test_the_new_resource_line_and_the_unqueried_line_read_differently():
     assert tail_new not in tail_unqueried and tail_unqueried not in tail_new
 
 
-def test_every_non_resolved_status_prints_its_reason_indented():
+def test_a_reason_that_names_something_prints_and_a_restatement_does_not():
+    """The reason line earns its place by ADDING DATA, and this fixture holds
+    one of each: the absent and unqueried entries name the source that
+    enumerated the domain and the category nobody covered, while the conflict
+    entry's reason ("two sources describe this row and they disagree") is the
+    status phrase one line above it in other words. The restatement is dropped
+    from the HUMAN render only — ``state_document`` carries every reason
+    verbatim, which is asserted right below."""
     rendered = lines()
     reasons = [line for line in rendered if line.startswith("    reason: ")]
 
-    assert len(reasons) == 3, "absent, unqueried and conflict each state a reason"
+    assert len(reasons) == 2, "the conflict entry's reason restates its phrase"
     assert any("enumerates 'firewall_rules' completely" in line for line in reasons)
     assert any("no source covering 'org_policies'" in line for line in reasons)
+    conflict_line = find(rendered, FW_KEY + " ->")
+    assert "conflict - two or more sources describe this row" in conflict_line
+    assert not any("they disagree" in line for line in rendered)
     resolved_line = find(rendered, IAM_KEY + " ->")
     assert "resolved" in resolved_line
+
+
+def test_a_suppressed_reason_is_still_in_the_machine_document():
+    """Nothing is DROPPED, only un-printed: the reason the human render leaves
+    off the conflict entry is the reason ``--state-explain --format json``
+    hands a consumer."""
+    document = explain_state.state_document(
+        result(derivation_entries=entries()), two_source_ledger())
+    [conflict] = [row for row in document["targets"] if row["key"] == FW_KEY]
+    assert conflict["reason"] == "two sources describe this row and they disagree"
 
 
 def test_status_phrases_are_total_over_the_resolution_statuses():
@@ -338,17 +358,32 @@ def test_an_unparseable_capture_time_renders_an_unknown_age():
 
 
 def test_the_settings_origin_labels_appear_verbatim():
+    """The fields somebody CHOSE get their own row, in an aligned key column,
+    with the origin label verbatim; the ones still on their built-in default
+    are named together on one totality line.
+
+    TOTALITY IS THE POINT AND IT IS UNCHANGED: an input nobody can see is an
+    input nobody can audit, so every name in ``SETTINGS_FIELDS`` is still
+    visible on every render — as a row when it was set, on the defaults line
+    when it was not, and never in neither place.
+    """
     rendered = lines(settings=settings(max_age="3d"))
 
     assert "  primary = /repo/snapshot.json [config /repo/.gcp-grounding.json]" \
         in rendered
-    assert f"  now = {NOW} [cli]" in rendered
+    assert f"  now     = {NOW} [cli]" in rendered
     assert "  max_age = 3d [cli]" in rendered
-    assert "  precedence = - [default]" in rendered
-    # TOTAL over the settings fields: an input nobody can see is an input
-    # nobody can audit.
+    [totality] = [line for line in rendered if "settings at defaults:" in line]
+    assert totality.startswith("  12 settings at defaults: ")
+    defaulted = totality.split(": ", 1)[1].split(", ")
+    assert "precedence" in defaulted
+    assert len(defaulted) == 12
+    # TOTAL over the settings fields: every name visible, every run.
     for name in discovery.SETTINGS_FIELDS:
-        assert any(line.startswith(f"  {name} = ") for line in rendered), name
+        row = any(line.startswith(f"  {name} ") and " = " in line
+                  for line in rendered)
+        assert row or name in defaulted, name
+        assert not (row and name in defaulted), name
 
 
 def test_the_settings_value_column_is_the_option_and_the_label_is_the_origin():

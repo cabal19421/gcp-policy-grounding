@@ -86,6 +86,10 @@ CI_SA = "serviceAccount:payroll-ci@acme-pay-prod.iam.gserviceaccount.com"
 EXCEPTION = ("principal://iam.googleapis.com/projects/-/serviceAccounts/"
              "payroll-ci@acme-pay-prod.iam.gserviceaccount.com")
 TOKEN = "iam.serviceAccounts.getAccessToken"
+#: The other impersonation permission the same grant carries. The wake finding
+#: names both in ONE line — a role expands to several permissions and the same
+#: sentence per permission is the same sentence repeated.
+OPENID = "iam.serviceAccounts.getOpenIdToken"
 FOLDER = "folders/665544332211"
 CONSTRAINT = "iam.disableServiceAccountKeyCreation"
 
@@ -332,11 +336,16 @@ def test_the_readme_removal_invocation_denies_on_the_woken_grant(
     assert "decision: DENIED (exit 1)" in err
     recap = err[err.index("decision recap:"):]
     assert "DENIED (exit 1)" in recap
+    # ONE finding for the grant, both woken permissions joined into it and the
+    # escalation class they share named once. Two lines saying the same thing
+    # about the same grant is a wall a reader stops reading.
     assert (f"[iam_deny_shadow] {DENY_ADDRESS}: removing or narrowing "
-            f"rule 0 wakes the dormant grant of {TOKEN} (impersonation) "
-            f"to {CI_SA}" in recap)
+            f"rule 0 wakes the dormant grant of {TOKEN}, {OPENID} "
+            f"(impersonation) to {CI_SA}" in recap)
     assert ("the deny policy was the only thing keeping a known escalation "
             "path inert") in recap
+    assert recap.count("wakes the dormant grant") == 1
+    assert "blocked by 1 built-in finding" in recap
     assert "refuted by" not in err, "the denial is the check's, not a promise's"
     assert (f"IAM deny policy '{DENY_ADDRESS}' has no planned values" in err)
 

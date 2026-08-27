@@ -209,9 +209,14 @@ def test_annotate_reports_the_same_text_without_blocking(capsys):
 
 
 def test_the_settings_layer_is_reported_by_state_explain(capsys):
+    """The flag that was given gets its own row with its origin; the policy
+    nobody set is named on the block's one defaults line — still visible, not
+    a row of its own."""
     _code, _out, err = _verify(capsys, PROPOSAL_OK, "--state-explain")
     assert f"  provider_schema = {SCHEMA} [cli]" in err
-    assert "  schema_policy = - [default]" in err
+    [defaults] = [line for line in err.splitlines()
+                  if "settings at defaults:" in line]
+    assert "schema_policy" in defaults.split(": ", 1)[1].split(", ")
 
 
 def test_a_bad_schema_policy_from_the_environment_is_a_usage_error(

@@ -237,6 +237,16 @@ iam.serviceAccounts.getAccessToken`. "narrows" and "widens" are computed over
 the ranges themselves; ranges that moved sideways read as "changes". A before
 state no collection could read says that and nothing more.
 
+**On a terminal** — and only on a terminal — `--explain` wraps every block to
+the narrower of your terminal width and 100 columns, indenting continuations
+under the item they belong to, and colours three things: each verdict's status
+mark (`✓ ⚠ ✗ ?`), the decision, and the provenance lines that qualify what sits
+above them. Piped, redirected, captured by CI or read by a hook, none of that
+happens: the plain bytes are the surface this page quotes and the tests pin,
+and they go out exactly as they were assembled. `NO_COLOR` (set to anything, per
+the convention) and `TERM=dumb` turn the colour off while leaving the wrapping
+alone — a reader who wants no escape codes still wants readable line lengths.
+
 — the violated promise is one of six English sentences compiled from
 `tests/fixtures/gcp/sec_requirements/`, and the refutation names the exact
 terraform block to fix. The full walkthrough, including what each flag is and
@@ -525,17 +535,25 @@ sources:                                    # every source read, highest fidelit
     category                              scope       keys  dropped  reasons
     firewall_rules                        partial        4        0  -
     iam_bindings                          partial        1        0  -
-settings:                                   # every setting, and WHICH layer supplied it
-  primary = estate/api-snapshot.json [config /checkout/.gcp-grounding.json]
+settings:                                   # what somebody SET, and WHICH layer set it
+  primary         = estate/api-snapshot.json [config /checkout/.gcp-grounding.json]
   terraform_state = infra/prod/terraform.tfstate [cli]
-  precedence = - [default]
-  max_age = 7d [env]
+  max_age         = 7d [env]
+  12 settings at defaults: origins, extra, terraform_plan, terraform_dir,
+      precedence, drift_policy, completeness, now, provider_schema,
+      schema_policy, targets, requirements
 targets:                                    # which source won, and HOW the row was matched
   iam_bindings //cloudresourcemanager.googleapis.com/projects/acme-prod
       -> estate/api-snapshot.json [explicit-flag]
       resolved - a current counterpart was found and compared against
 drift: none - no source disagreed about a row that was looked up
 ```
+
+Every setting is named on every run, and the shape says which is which: a
+setting somebody set gets its own row with the layer that set it, and the rest
+are listed together on the one `settings at defaults` line. An input nobody can
+see is an input nobody can audit — but fourteen rows of `- [default]` bury the
+two that were chosen.
 
 `[explicit-flag]`, `[config-map]`, `[tf-address]` and `[tf-attributes]` are the
 *how*: "the terraform address matched" and "the name matched after self-link
@@ -2006,14 +2024,11 @@ grants:
 decision recap: DENIED (exit 1) — because:
   ⚠ [iam_deny_shadow] google_iam_deny_policy.guard_token_mint: removing or
       narrowing rule 0 wakes the dormant grant of
-      iam.serviceAccounts.getAccessToken (impersonation) to
+      iam.serviceAccounts.getAccessToken, iam.serviceAccounts.getOpenIdToken
+      (impersonation) to
       serviceAccount:payroll-ci@acme-pay-prod.iam.gserviceaccount.com
       (//cloudresourcemanager.googleapis.com/projects/acme-pay-prod) — the
       deny policy was the only thing keeping a known escalation path inert
-  ⚠ [iam_deny_shadow] google_iam_deny_policy.guard_token_mint: removing or
-      narrowing rule 0 wakes the dormant grant of
-      iam.serviceAccounts.getOpenIdToken (impersonation) to
-      serviceAccount:payroll-ci@acme-pay-prod.iam.gserviceaccount.com …
 (the full narrative is above, before the report)
 
 summary — what just happened:
@@ -2036,12 +2051,15 @@ summary — what just happened:
         iam.serviceAccounts.getAccessToken, iam.serviceAccounts.getOpenIdToken
         to principalSet://goog/public:all
   result                  : DENIED (exit 1)
-    blocked by 2 built-in findings: [iam_deny_shadow]
+    blocked by 1 built-in finding: [iam_deny_shadow]
 ```
 
 — and the summary is where the promises' abstention is visible as an absence:
 three promises are in force, none of them refused, and the block is reported
-as built-in findings alone. The sentence says what the deletion takes AWAY:
+as built-in findings alone. One finding, not one per permission: the grant is
+what woke, the role it carries expands to two impersonation permissions, and
+both are named in the sentence that reports the grant. The sentence says what
+the deletion takes AWAY:
 the block plans no values (that is what a deletion is), so the guardrail is
 read off the entry's own `change.before` — the same old side the wake
 computation grades — through the same deny collections a new policy is

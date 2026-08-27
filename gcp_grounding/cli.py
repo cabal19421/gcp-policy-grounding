@@ -454,7 +454,8 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from . import (discovery, drift, engine, explain_state, freshness, gate, merge,
-               provenance, provider_schema, redact, solver_census, sources)
+               provenance, provider_schema, redact, solver_census, sources,
+               terminal)
 # Imported by NAME rather than as the module, because ``baseline`` is also the
 # name of a CLI flag and of more than one local here — a shadowed module is a
 # NameError waiting for the one branch nobody exercised.
@@ -1103,13 +1104,17 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
     if args.explain:
         # The narrative precedes the stdout report so the combined streams read
         # top to bottom as one story ending in the report itself.
-        print("\n".join(_narrative_lines(args.file, args.baseline, ground,
+        _show("\n".join(_narrative_lines(args.file, args.baseline, ground,
                                          settings, source, rules, carried,
-                                         hook=False)), file=sys.stderr)
-    print(_render_policy(policy_report, args.format, source, rules, state=state))
+                                         hook=False)), sys.stderr)
+    rendered = _render_policy(policy_report, args.format, source, rules, state=state)
+    # The json document is a machine surface and never presented; the human
+    # render is the one a person reads off a terminal.
+    print(rendered if args.format == "json" else terminal.present(rendered,
+                                                                  sys.stdout))
     if args.state_explain is not None:
-        print("\n".join(_state_explain_lines(ground, settings, args.state_explain)),
-              file=sys.stderr)
+        _show("\n".join(_state_explain_lines(ground, settings, args.state_explain)),
+              sys.stderr)
     _incomplete_notice(ground, settings, hook=False)
     if args.explain:
         # After the report, so the decision is the last thing on the terminal.
@@ -1120,12 +1125,23 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
         # The closing summary follows the recap and ends on the result row, so
         # the decision remains the terminal's last word. Normal mode only —
         # hook stderr is unchanged.
-        print("\n".join(_decision_recap_lines(ground.report, hook=False)
+        _show("\n".join(_decision_recap_lines(ground.report, hook=False)
                         + _summary_section_lines(args.file, ground.report,
                                                  settings, source, rules,
                                                  carried)),
-              file=sys.stderr)
+              sys.stderr)
     return EXIT_OK if ground.report.ok else EXIT_FAILED
+
+
+def _show(text: str, stream: Any) -> None:
+    """Print *text* to *stream* through the terminal grammar.
+
+    :func:`gcp_grounding.terminal.present` returns *text* untouched whenever
+    *stream* is not a terminal, so every pinned byte of these blocks — under
+    pytest, under a pipe, in a CI log, on a hook's stderr — is exactly what the
+    caller assembled. Wrapping and colour happen for a person and nowhere else.
+    """
+    print(terminal.present(text, stream), file=stream)
 
 
 def _usage(problem: str, *, hook: bool = False,
@@ -1971,6 +1987,10 @@ def _narrative_lines(path: str, baseline: str | None, ground: _Ground,
     grounding pass — and is the whole of that block: a run that executed no
     formula contributes no lines here, and the state provenance follows the one
     separating blank line either way.
+
+    ONE BLANK LINE IS THE ONLY SEPARATOR, everywhere and without exception. No
+    rules, no banners: a divider is a second thing to learn, and a reader who
+    has to learn where the section boundaries are will not find them mid-scroll.
     """
     lines = _proposed_lines(path)
     lines.append("")
@@ -1980,7 +2000,10 @@ def _narrative_lines(path: str, baseline: str | None, ground: _Ground,
         lines.append("")
         lines.extend(sec)
     lines.append("")
-    lines.extend(_explain_lines(path, baseline, ground.census, rules))
+    census = _explain_lines(path, baseline, ground.census, rules)
+    if census:
+        lines.extend(census)
+        lines.append("")
     lines.extend(_state_explain_lines(ground, settings, ""))
     return lines
 
@@ -2778,8 +2801,12 @@ def _cmd_compile_requirements(args: argparse.Namespace) -> int:
             merged.add(verdict)
     for verdict in _compile_floor(sec_parse, args.directory, out_dir, results):
         merged.add(verdict)
-    print(PolicyReport(merged, captured_at=snapshot.captured_at,
-                       source=str(args.directory)).render(_FORMATS[args.format]))
+    rendered = PolicyReport(merged, captured_at=snapshot.captured_at,
+                            source=str(args.directory)).render(_FORMATS[args.format])
+    # Same terminal grammar as verify-policy's render, and the same rule: a
+    # non-terminal stream gets these bytes untouched.
+    print(rendered if args.format == "json"
+          else terminal.present(rendered, sys.stdout))
     # ``_emit`` already records drift as a contradicted sec:artifact verdict, so
     # merged.ok covers it; the explicit check keeps the contract readable and
     # holds even if a future drift becomes verdict-free.
