@@ -765,10 +765,9 @@ as a change would approve the past instead of the future.
 ## Layout
 
 - `gcp_grounding/core/` — vendored grounding core (Datalog engine, solver
-  detection, four-bucket report model), copied verbatim from the
-  [harness](https://github.com/cabal19421/harness) grounding engine; see each
-  file's header for provenance. **Do not edit** — domain logic only
-  instantiates it.
+  detection, four-bucket report model), copied verbatim from the companion
+  `harness` grounding engine; see each file's header for provenance. **Do not
+  edit** — domain logic only instantiates it.
 - `gcp_grounding/` — the GCP domain: snapshot knowledge base, claim extractors
   (IAM / org-policy JSON, Terraform plan JSON), Datalog reasoner, z3 constraint
   layer, report renderer, end-to-end preflight, CLI, changed-file gate, live
