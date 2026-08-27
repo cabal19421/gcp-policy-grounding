@@ -63,7 +63,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
-from . import sec_artifact, sec_ast, sec_encode, solve
+from . import sec_artifact, sec_ast, sec_encode, solve, solver_census
 from .core.log import get_logger
 
 logger = get_logger(__name__)
@@ -87,12 +87,21 @@ def obligation(z3, formula, mode: str):
     Returns *formula* unchanged for ``assert_satisfiable`` and ``z3.Not(formula)``
     for ``refute``. A record satisfying the returned obligation is COMPLIANT
     (positive); a record satisfying its negation is VIOLATING (negative).
+
+    Being the one place polarity is applied makes this the one place a promise's
+    obligation exists as a single term, so it is where the solver census reads
+    one — inert unless a census is recording a rule's evaluation, so the
+    compile-time probe and the artifact's witness re-classification, which build
+    obligations of their own from here, contribute nothing to a run's census.
     """
     if mode == "assert_satisfiable":
-        return formula
-    if mode == "refute":
-        return z3.Not(formula)
-    raise ValueError(f"unknown mode {mode!r}; expected one of {sec_artifact.MODES}")
+        obligation = formula
+    elif mode == "refute":
+        obligation = z3.Not(formula)
+    else:
+        raise ValueError(f"unknown mode {mode!r}; expected one of {sec_artifact.MODES}")
+    solver_census.record_obligation(obligation, mode)
+    return obligation
 
 
 # -- probes -------------------------------------------------------------------

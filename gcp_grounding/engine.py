@@ -87,7 +87,7 @@ import importlib
 from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Mapping, Sequence
 
-from . import baseline, claims as claims_module, compare, constraints, drift, facts, preflight, provenance, redact, registry
+from . import baseline, claims as claims_module, compare, constraints, drift, facts, preflight, provenance, redact, registry, solver_census
 from .core.log import get_logger
 from .core.report import GroundingReport, Verdict
 from .core.solver import get_solver
@@ -884,7 +884,7 @@ def _stage_rules(report: GroundingReport, proposal: Proposal,
         baseline=primary.document if primary is not None else None,
         estate=_estate_records(vocabulary), solver=solver)
     for rule in rules.compiled:
-        verdict = rule.evaluate(rule_ctx)
+        verdict = solver_census.evaluate_rule(rule, rule_ctx)
         if verdict is None:
             continue
         tier = getattr(getattr(rule, "promise", None), "state", "")
