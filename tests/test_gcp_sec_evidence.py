@@ -305,10 +305,19 @@ def test_explain_lines_name_the_promises_that_are_not_enforcing(rules):
 
 
 def test_explain_lines_never_fabricate_a_missing_witness():
+    """BY INDEX AND WITH ``==``, which is the guarantee audit row R50 found had
+    gone: commit 65dcbcf56 turned these two equalities into ``in lines``
+    membership while restructuring the stanza, and a substring check holds just
+    as well when a third, fabricated witness line is emitted beside them. The
+    position is the property — the placeholders are the LAST two lines of the
+    stanza and there is no other witness line anywhere in it.
+    """
     unverified = promise("not-compiled", status="unverified",
                          reason="the requirement named an unknown collection",
                          ast=None, sexpr="", positive=None, negative=None,
                          wellformedness=Wellformedness())
     lines = explain_lines([unverified])
-    assert "      + compliant: (no pinned witness)" in lines
-    assert "      - violating:  (no pinned witness)" in lines
+    assert lines[-2:] == ["      + compliant: (no pinned witness)",
+                          "      - violating:  (no pinned witness)"]
+    witnesses = [line for line in lines if line.lstrip().startswith(("+ ", "- "))]
+    assert len(witnesses) == 2, witnesses

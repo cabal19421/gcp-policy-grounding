@@ -6,15 +6,17 @@ are frozen here, which makes this a gate and not a party to what it measures.
 The tuples live HERE because the six repin tasks may edit the register and carry
 this file frozen: no diff can park an id and raise a pin at once.
 
-MEASURED THE DAY THIS LANDED, and printed below on every run: 44 of the 65
-required ids are in the register and ALL 44 compute ACTIVE, so the AWAITING pin
-is ZERO and the missing 21 are a SEED FAULT (ESC-GX-GATE-001); the whole-register
-mutant run is already spent, the frozen machinery module taking 192 of the 199
-marked spawns and leaving the per-Removal term (ESC-GX-GATE-002), of which this
-gate uses 6, five of them new in a full run measuring 197/199; and THE SEEDED
+MEASURED, RE-MEASURED AS THE TUPLE GREW, and printed below on every run: 44 of
+the 91 required ids are in the register and ALL 44 compute ACTIVE, so the AWAITING
+pin is ZERO and the missing 47 are a SEED FAULT plus the two parked families
+(ESC-GX-GATE-001); the whole-register mutant run is already spent, the frozen
+machinery module taking 4*44 of the marked spawns and leaving the per-Removal
+term (ESC-GX-GATE-002), of which this gate uses 6; and THE SEEDED
 DEFICIT that is Gate 3's acceptance criterion is that
 all 7 removals are pending so ZERO kill anything, 5 of their 15 nodes do not
-collect, and 4 of 15 families and 4 of 9 capabilities have a removal. Diff
+collect, and 4 of 15 families and 4 of 9 capabilities have a removal -- a
+SEEDED state, closed since: every `Removal` in the register is live and executed
+today, the last five having been unparked by audit row R43. Diff
 19,7xx, this module 17,0xx of it -- inside the 18,000 the task pins for it.
 """
 
@@ -22,11 +24,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 from hashlib import sha256
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from tests import mutation_contract as mc
+from tests.agentic import budget as budget_module
+from tests.agentic.budget import SubprocessBudget
 from tests.agentic.capabilities import CAPABILITIES
 from tests.agentic.env import REPO_ROOT
 from tests.mutation_contract import (
@@ -212,8 +217,44 @@ def test_the_pinned_tuples_hold_and_the_register_names_no_stranger(graded):
         assert getattr(removal, "owner", "") in TASK_IDS and removal.must_fail
 
 
-@pytest.mark.xfail(strict=True, reason="ESC-GX-GATE-001: the register holds 44 "
-                   "of the 65; gx-mutation-contract-seed-b is not an ancestor")
+def test_every_count_the_gate_and_its_escalations_quote_is_the_measured_one():
+    """THE PROSE IS GRADED TOO, because nothing graded it: the shortfall was
+    written "44 of the 65" and "the missing 21" in three places while the required
+    tuple grew to 91 and 47 went missing, and the stalest copy was an xfail
+    `reason` that `pytest -rx` printed on every run (audit row R24). The marked
+    ceiling was quoted "199" the same way (row R25). Each number below is
+    recomputed here from the register itself, so a count can only drift by
+    failing."""
+    from tests.escalations import ESCALATIONS
+
+    flat = " ".join(__doc__.split())  # whitespace only, so a re-wrap cannot lie
+    held, required = len(register()), len(REQUIRED_MK_IDS)
+    shortfall = f"{held} of the {required}"
+    assert shortfall in flat and f"missing {required - held}" in flat, (
+        f"this module's docstring no longer states {shortfall}")
+    said = {e.id: " ".join(e.unsatisfiable.split()) for e in ESCALATIONS}
+    assert shortfall in said["ESC-GX-GATE-001"], said["ESC-GX-GATE-001"]
+    assert f"missing {required - held}" in said["ESC-GX-GATE-001"]
+    ceiling = mc.contract_spawn_ceiling()
+    assert f"{ceiling} of the {ceiling} marked spawns" in said["ESC-GX-GATE-002"], (
+        said["ESC-GX-GATE-002"])
+    # The suite-wide half of the same prose, which sits in the constant's own
+    # `#:` comment rather than the module docstring.
+    accounting = Path(budget_module.__file__).read_text(encoding="utf-8")
+    assert f"against the {SubprocessBudget.MAX_SUBPROCESS_SPAWNS} below" in \
+        " ".join(accounting.split()), "the measured total no longer names its ceiling"
+
+
+# The shortfall is RECOMPUTED in the reason, never quoted: `pytest -rx` prints
+# this line on every run, and as a literal it understated the gap by 26 ids for as
+# long as the required tuple grew without it (audit row R24). The id stays a
+# literal prefix so the escalation self-test can still read it off the source.
+@pytest.mark.xfail(strict=True,
+                   reason=f"ESC-GX-GATE-001: the register holds "
+                          f"{len(register())} of the {len(REQUIRED_MK_IDS)}, so "
+                          f"{len(REQUIRED_MK_IDS) - len(register())} required ids "
+                          f"are missing; gx-mutation-contract-seed-b is not an "
+                          f"ancestor")
 def test_every_required_must_kill_id_is_in_the_register(graded):
     entries, _, _ = graded
     missing = sorted(set(REQUIRED_MK_IDS) - {e.id for e in entries})

@@ -1228,6 +1228,15 @@ def _proposed_role_permissions(ctx):
 
 # -- the IAM deny-policy proposal collections ----------------------------------
 #
+# PROPOSAL TIER ONLY, and that is a recorded decision rather than an omission:
+# there is no estate-tier ``deny_rules`` collection, so "every deny policy IN THE
+# ESTATE denies X" is not judgeable here and each deny policy is judged at review
+# time instead. ESC-DENY-ESTATE-TIER in tests/escalations.py carries why (building
+# the estate tier before the fetch capture exists would gate every such promise on
+# a table no real snapshot carries), what would close it, and what is exposed
+# meanwhile; it is named here so a reader who finds no estate spelling can find
+# the reason rather than reading it as a gap nobody noticed.
+#
 # ``deny_rules`` / ``deny_rule_exceptions`` follow the claims-are-the-records
 # discipline over :mod:`gcp_grounding.iam_deny`'s claims, grouped by the
 # location grammar THAT module owns (its ``*_AT`` regexes — one spelling, no

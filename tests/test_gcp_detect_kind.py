@@ -179,6 +179,48 @@ def test_iam_deny_is_not_org_policy_or_security_policy():
     assert detect_kind(deny) == "iam_deny_policy"
 
 
+# -- the deny-policy NAME arm: an emptied policy, and the Org Policy v2 seat ---
+
+#: A REST deny policy's own resource name — the attachment point is percent
+#: encoded, so the whole name is four segments.
+_DENY_NAME = ("policies/cloudresourcemanager.googleapis.com%2Fprojects"
+              "%2Facme-prod/denypolicies/block-sa-tokens")
+
+
+def test_an_emptied_deny_policy_is_recognized_by_its_name_shape():
+    """RE-PINNED (audit R02): a deny policy whose ``rules`` were EMPTIED used
+    to classify as None, because the predicate demanded a non-empty list. The
+    loudest possible removal therefore read as a document the gate did not
+    know, and the woken-grant arc never ran on it. The name shape carries the
+    kind now, so an empty list reads as captured-and-empty — which is what
+    ``iam_deny_checks.check_deny_pair`` compares the baseline against.
+
+    The REST surface omits an empty array entirely, so a policy with no
+    ``rules`` key at all is the same state and is recognized the same way.
+    """
+    assert detect_kind({"etag": "BwYnDenyStrong=", "name": _DENY_NAME,
+                        "rules": []}) == "iam_deny_policy"
+    assert detect_kind({"etag": "BwYnDenyStrong=",
+                        "name": _DENY_NAME}) == "iam_deny_policy"
+    # The whole four-segment shape is the sniff, not a loose substring: a bare
+    # policy id names no attachment point and stays unrecognized.
+    assert detect_kind({"name": "denypolicies/block-sa-tokens",
+                        "rules": []}) is None
+
+
+def test_the_deny_name_arm_does_not_shadow_org_policy_v2():
+    """The deny predicate runs BEFORE the Org Policy v2 ``"/policies/"`` name
+    arm, so it matches structurally — four segments, the literal ``policies``
+    and ``denypolicies`` — and cannot claim a v2 policy's
+    ``<parent>/policies/<constraint>``, at any node."""
+    for parent in ("projects/acme-prod", "folders/665544332211",
+                   "organizations/998877665544"):
+        name = f"{parent}/policies/iam.disableServiceAccountKeyCreation"
+        assert detect_kind({"name": name}) == "org_policy"
+        assert detect_kind({"name": name,
+                            "spec": {"rules": [{"enforce": True}]}}) == "org_policy"
+
+
 # -- an unrecognized document is None and grounds to an honest unverified -----
 
 

@@ -39,11 +39,16 @@ from tests.test_gcp_spec_assertions import (
 )
 
 # Escalations this document mandates. A SUBSET assertion, so the register stays
-# append-only: new escalations are always welcome, these two may never leave.
-# ESC-GX-SPEC-001 — the design corpus is untracked, so a clause anchor cannot be
-# resolved inside a clean checkout. ESC-GX-SPEC-002 — one AWAITING owner is a
-# task of the predecessor design document.
-REQUIRED_ESCALATION_IDS = ("ESC-GX-SPEC-001", "ESC-GX-SPEC-002")
+# append-only: new escalations are always welcome, and one that is still open may
+# never leave. ESC-GX-SPEC-001 — the design corpus is untracked, so a clause
+# anchor cannot be resolved inside a clean checkout.
+#
+# ESC-GX-SPEC-002 was the second: one AWAITING owner was a task of the
+# predecessor design document. It is CLOSED, not tidied away — the predicate it
+# excused (`SA-SECAST-CALLED-ONCE`) landed verbatim, so its node XPASSed and
+# tests/escalations.py carries the `# RETIRED —` comment in its place. A mandated
+# id leaves this tuple only that way.
+REQUIRED_ESCALATION_IDS = ("ESC-GX-SPEC-001",)
 
 
 def _function_node(source: str, node_id: str) -> ast.AST | None:
@@ -218,8 +223,8 @@ def test_an_unmarked_or_absent_node_is_caught():
     assert "does not exist" in (strict_xfail_failure(_SAMPLE, "x = 1\n") or "")
 
 
-def test_the_two_escalations_this_task_raises_are_both_landed_here():
-    """Both live in tests/test_gcp_spec_assertions.py, the frozen self-test of
+def test_the_escalations_this_task_raises_are_landed_here():
+    """Each lives in tests/test_gcp_spec_assertions.py, the frozen self-test of
     the register — so the escape hatch and the thing it excuses are read
     together."""
     for escalation_id in REQUIRED_ESCALATION_IDS:

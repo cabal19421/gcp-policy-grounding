@@ -43,7 +43,7 @@ schema file is consumed by :mod:`gcp_grounding.tf_schema_checks` through
 ``completeness`` is the ONE option with no environment variable, on purpose. It
 is the licence to read an absence as a non-existence, and an exported variable
 is exactly the kind of thing a shell inherits into a run nobody meant to license.
-It is set explicitly — ``--completeness`` or the config key — or not at all.
+It is set explicitly — ``--completeness`` — or not at all.
 
 WHAT ``from_env`` KNOWS, AND WHAT IT DOES NOT
 ---------------------------------------------
@@ -461,12 +461,12 @@ class LoadedSource:
 
         THIS IS THE SOURCE'S OWN COMPLETENESS DECLARATION, and it is the only
         thing a reader downstream can ask "what did THIS view claim to cover"
-        of: ``--completeness`` (or the config key) lands here because
-        :func:`load_source` builds the fallback ledger AT THE DECLARED SCOPE,
-        and a real ``gcp-source-ledger/1`` sidecar lands here because its own
-        source records carry it. Flattening it away — which this method used to
-        do — meant a source could declare itself complete and have no way to
-        say so to anything reading the merged ledger.
+        of: ``--completeness`` lands here because :func:`load_source` builds
+        the fallback ledger AT THE DECLARED SCOPE, and a real
+        ``gcp-source-ledger/1`` sidecar lands here because its own source
+        records carry it. Flattening it away — which this method used to do —
+        meant a source could declare itself complete and have no way to say so
+        to anything reading the merged ledger.
         """
         scopes = [record.scope for record in self.ledger.sources.values()
                   if record.scope]

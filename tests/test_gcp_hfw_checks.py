@@ -1609,8 +1609,8 @@ _MUTATION_ENTRIES = Path(__file__).resolve().parent / "mutation_entries.py"
 
 @pytest.mark.xfail(strict=True, reason=(
     "ESC-GX-HFW-FOLD-ENTRY: tests/mutation_entries.py is a FROZEN acceptance "
-    "path for gx-hierfw-placement and is absent from this checkout, and "
-    "gx-mutation-contract-seed-a owns seeding REM-GX-HFW-FOLD there"))
+    "path for gx-hierfw-placement and does not yet carry REM-GX-HFW-FOLD, whose "
+    "seeding gx-mutation-contract-seed-a owns"))
 def test_the_folds_mutation_entry_is_seeded_in_the_in_repo_contract():
     """The spec-literal assertion ESC-GX-HFW-FOLD-ENTRY carries: the entry
     specified above must reach the in-repo mutation contract.

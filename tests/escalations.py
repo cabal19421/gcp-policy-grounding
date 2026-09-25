@@ -7,10 +7,15 @@ assertion landed under ``pytest.mark.xfail(strict=True, reason=<the escalation
 id>)``. That is a GREEN, NAMED state. Rewriting the assertion to fit the code
 instead is a review FAIL.
 
-Entries are APPEND-ONLY: an id, once published, is quoted from ``xfail``
-reasons and from module docstrings, so removing or renaming one silently
-detaches those references. An escalation is CLOSED by landing its fix and
-deleting the ``xfail`` — the entry stays, with ``closed_by`` naming the change.
+Entries are APPEND-ONLY while they are open: an id, once published, is quoted
+from ``xfail`` reasons and from module docstrings, so removing or renaming an
+open one silently detaches those references. An escalation is CLOSED by landing
+its fix and deleting the ``xfail`` — and the entry goes with it, replaced in
+place by a ``# RETIRED —`` comment that keeps the id named and records what
+landed. A node-bearing entry cannot stay: the frozen self-test walks register →
+node and demands a STRICT xfail, so keeping the entry would demand the very
+xfail the fix has just made XPASS. ``closed_by`` is a field of
+:class:`ProductEscalation` alone, whose entries carry no node.
 
 ``strict=True`` is what stops an escalation from being forgotten: the day the
 owning task lands the fix, the xfail becomes an XPASS and the suite goes RED,
@@ -99,23 +104,16 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_spec_assertions.py::"
                  "test_the_design_corpus_is_tracked_in_the_repository"),
     ),
-    Escalation(
-        id="ESC-GX-SPEC-002",
-        clause="every owner must be a task id in this document",
-        unsatisfiable=(
-            "`SA-SECAST-CALLED-ONCE` pins the strict `calls[\"n\"] == 1` counter "
-            "proof in tests/test_gcp_sec_ast.py, which today carries the weakened "
-            "`<= 1` that zero calls satisfies; that module is owned by "
-            "`sx-sec-ast`, a task of the PREDECESSOR design document, and no task "
-            "in gcp-gx-fixes.md owns it — so the entry cannot name an in-document "
-            "owner without either dropping the pin or inventing an owner that "
-            "will never land. Adding a task to this document that owns "
-            "tests/test_gcp_sec_ast.py is what would close it."
-        ),
-        owner_task="gx-spec-register",
-        node_id=("tests/test_gcp_spec_assertions.py::"
-                 "test_every_awaiting_owner_is_a_task_in_this_document"),
-    ),
+    # RETIRED — `ESC-GX-SPEC-002`, the out-of-document owner of
+    # `SA-SECAST-CALLED-ONCE`. Its id is left named here rather than erased,
+    # because retiring one means LANDING ITS FIX and this register carries no
+    # `closed_by` for a node-bearing entry. `fix-tests-and-registers` landed the
+    # strict `calls["n"] == 1` counter proof in tests/test_gcp_sec_ast.py (audit
+    # row R03, whose evidence is that `<= 1` is satisfied by zero calls), so the
+    # entry left `AWAITING`, `OUT_OF_DOCUMENT_OWNERS` is empty, every owner is a
+    # task of this document, and the strict xfail its self-test walks for would
+    # XPASS. Nothing was weakened to close it: the predicate landed verbatim as
+    # the frozen register spells it.
     Escalation(
         id="ESC-GX-SEXPR-001",
         clause="the same instance works as a dict key and a set member",
@@ -175,10 +173,13 @@ ESCALATIONS: tuple[Escalation, ...] = (
             "REGISTERED from here: as of AMENDMENT 2 both tests/mutation_entries.py "
             "and tests/mutation_contract.py are FROZEN ACCEPTANCE PATHS for "
             "`gx-hierfw-placement`, so any diff touching either fails review "
-            "outright — which is how `gx-vpcsc-record-guards` died — and neither "
-            "file is in this checkout at all, so there is nothing to append to "
-            "even if the freeze allowed it. `gx-mutation-contract-seed-a` owns "
-            "seeding it and has not landed. Landing that task, with this entry "
+            "outright — which is how `gx-vpcsc-record-guards` died — and that "
+            "module does not carry REM-GX-HFW-FOLD, so the assertion below still "
+            "fails on its own live ground. (Both files WERE absent when this was "
+            "raised, and this reason said so long after seed-a's data landed them: "
+            "audit row R26. The freeze, not their absence, is what still blocks "
+            "an append from here.) `gx-mutation-contract-seed-a` owns "
+            "seeding it and has not landed the id. Landing that task, with this entry "
             "among the ones it seeds, is what closes this: the node below then "
             "XPASSes and forces the escalation to be retired. RESIDUAL RISK, the "
             "id mismatch, recorded in the same shape the spec register records "
@@ -269,16 +270,27 @@ ESCALATIONS: tuple[Escalation, ...] = (
         clause=("assert the set of `Mutation` ids is a SUPERSET of an explicit "
                 "tuple naming ALL 65 MK ids"),
         unsatisfiable=(
-            "MEASURED: the register holds 44 of the 65 (MK-P01..P15, "
-            "MK-I01..I29) and tests/mutation_entries.py is FROZEN here, so the "
-            "missing 21 cannot be added from this task. Its declared dependency "
-            "`gx-mutation-contract-seed-b`, which owns them, was NOT seeded — "
+            "MEASURED, and RE-MEASURED as the tuple grew (audit row R24: this "
+            "reason quoted 65 long after the tuple reached 91, understating the "
+            "gap by 26 ids on every `pytest -rx` line): the register holds 44 of "
+            "the 91 (MK-P01..P15, MK-I01..I29) and tests/mutation_entries.py is "
+            "FROZEN here, so the missing 47 cannot be added from this task. "
+            "21 of them belong to its declared dependency "
+            "`gx-mutation-contract-seed-b`, which owns them and was NOT seeded — "
             "`git merge-base --is-ancestor agent/gx-mutation-contract-seed-b "
             "HEAD` is false while seed-a, -a2 and -a3 are — and that branch holds "
             "20 of the 21, MK-V05 having been held out, so even a correctly "
-            "seeded tree reaches 64. A MIS-SEEDED-TREE FINDING, NOT A LICENCE: "
-            "the AWAITING pin stays at ZERO, nothing is parked, and the tuple "
-            "names all 65 already, so this xfail XPASSes the day they land."
+            "seeded tree reaches 64 of the original 65; the other 26 are the "
+            "twelve MK-D and fourteen MK-F entries, which ARE in that module as "
+            "DENY_ENTRIES and ORG_EFFECTIVE_ENTRIES but are seeded PARKED (out "
+            "of `ENTRIES`, under ESC-DENY-REGISTER-ACTIVATION and "
+            "ESC-ORGEFF-REGISTER-ACTIVATION) until their pair is at git HEAD. "
+            "A MIS-SEEDED-TREE FINDING, NOT A LICENCE: the AWAITING pin stays at "
+            "ZERO, nothing is parked inside the register, and the tuple names all "
+            "91 already, so this xfail XPASSes the day they land. The two counts "
+            "are recomputed from `len(register())` / `len(REQUIRED_MK_IDS)` by "
+            "tests/test_gcp_mutation_contract.py, so drifting again is a FAILURE "
+            "and not a stale sentence."
         ),
         owner_task="gx-mutation-contract-gate",
         node_id=("tests/test_gcp_mutation_contract.py::"
@@ -292,13 +304,17 @@ ESCALATIONS: tuple[Escalation, ...] = (
             "tests/test_gcp_mutation_machinery.py::test_the_contract_is_now_"
             "ENFORCED_live_over_whatever_the_register_holds, which calls "
             "contract_failures(register(), REPO_ROOT, parent=tmp_path). MEASURED, "
-            "that spends 192 of the 199 marked spawns contract_spawn_ceiling() "
-            "allows, and the ceiling is 4*len(register()) + "
-            "len(removal_register()) + 16 — ONE whole-register execution plus one "
-            "child per Removal. A second needs 177 more, mutation_contract is "
-            "frozen here so the formula cannot be rescaled, and raising a ceiling "
-            "is a threshold move this document forbids. Rescaling it, or dropping "
-            "the duplicate execution from the frozen module, closes this."
+            "RE-MEASURED as the register grew, and now recomputed from "
+            "`contract_spawn_ceiling()` rather than quoted (audit row R25 caught "
+            "this sentence still saying 192 of 199): a full run spends 216 of the "
+            "216 marked spawns the ceiling allows, and the ceiling is "
+            "`4*len(register()) + len(removal_register()) + "
+            "CONTRACT_CONTROL_SPAWNS` — ONE whole-register execution (4*44 of "
+            "them), one child per live Removal, and the controls. A second "
+            "whole-register execution needs 177 more, mutation_contract is frozen "
+            "here so the formula cannot be rescaled from this task, and raising a "
+            "ceiling is a threshold move this document forbids. Rescaling it, or "
+            "dropping the duplicate execution from the frozen module, closes this."
         ),
         owner_task="gx-mutation-contract-gate",
         node_id=("tests/test_gcp_mutation_contract.py::"
@@ -344,37 +360,18 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_agentic_network.py::"
                  "test_a_hook_shaped_run_abstains_naming_the_absent_baseline"),
     ),
-    Escalation(
-        id="ESC-GX-NETWORK-REMOVAL-CEILING",
-        clause="after the repin that removal must redden named cases",
-        unsatisfiable=(
-            "IT DOES REDDEN THEM, MEASURED, AND THE CEILING STILL REFUSES THE "
-            "FLIP. Under `GCP_TEST_REMOVAL=RM-NETWORK-PLANE-UNAVAILABLE` both "
-            "named nodes report FAILED and both report PASSED on clean source, "
-            "so the removal is a kill and not a hypothesis. But "
-            "`contract_spawn_ceiling()` is `4*len(register()) + "
-            "len(removal_register()) + CONTRACT_CONTROL_SPAWNS`, and MEASURED "
-            "in this checkout the contract's real control cost is 21 against a "
-            "pinned `CONTRACT_CONTROL_SPAWNS = 16` — the five-slot gap is "
-            "absorbed by the per-Removal term for the five removals that are "
-            "NOT live, so a full run sits at exactly 199 of 199 with ZERO "
-            "headroom. A NEW live removal is net zero (one slot, one `-rA` "
-            "child); flipping an ALREADY-COUNTED one from pending to live is "
-            "+1 spawn and +0 slots, so it overflows by exactly one whatever "
-            "else the diff does. This task's two NEW removals — "
-            "`RM-NETWORK-PAIR-CHECKS` and `RM-NETWORK-VOCABULARY-KIND` — are "
-            "therefore LIVE and executed, and the seeded one stays `pending` "
-            "with its measurement recorded beside it rather than the ceiling "
-            "being raised, which mutation_contract.py is frozen against and "
-            "which this document forbids in any case. Rescaling "
-            "`CONTRACT_CONTROL_SPAWNS` to the 21 controls it really has — the "
-            "same rescale ESC-GX-GATE-002 asks for — closes this and XPASSes "
-            "the node below."
-        ),
-        owner_task="gx-agentic-network-repin",
-        node_id=("tests/test_gcp_agentic_network.py::"
-                 "test_the_network_plane_removal_is_live_in_the_contract"),
-    ),
+    # RETIRED — `ESC-GX-NETWORK-REMOVAL-CEILING`, the spawn ceiling that
+    # would not let `gx-agentic-network-repin` flip
+    # `RM-NETWORK-PLANE-UNAVAILABLE` live. Its id is left named here rather
+    # than erased, because retiring one means LANDING ITS FIX and this
+    # register carries no `closed_by` for a node-bearing entry. It named its
+    # own fix — rescaling `CONTRACT_CONTROL_SPAWNS` to the 21 controls the
+    # contract really spends — and `fix-tests-and-registers` landed exactly
+    # that (audit row R43, which measured five removals recorded as
+    # proven-to-kill and never executed by the oracle, for a budget reason
+    # and not a technical one). The removal is live, the gate executes it,
+    # and its node XPASSed. Nothing was weakened to close it: the register
+    # term is untouched and the ceiling is again exactly consumed.
     Escalation(
         id="ESC-GX-NETWORK-LAYER4-SPELLING",
         clause=("then assert the CHANNEL and the PROPERTY — a re-open or "
@@ -470,71 +467,18 @@ ESCALATIONS: tuple[Escalation, ...] = (
                  "test_the_removed_project_is_not_silently_dropped_in_the_"
                  "degraded_world"),
     ),
-    Escalation(
-        id="ESC-GX-VPCSC-REMOVAL-CEILING",
-        clause=("after the repin BOTH removals must redden named cases, and "
-                "both go in the mutation contract"),
-        unsatisfiable=(
-            "THEY DO REDDEN THEM, MEASURED, AND THE CEILING STILL REFUSES THE "
-            "FLIP — the same arithmetic ESC-GX-NETWORK-REMOVAL-CEILING records, "
-            "one wave later and with no headroom recovered. All THREE removals "
-            "this task owns kill: under `GCP_TEST_REMOVAL=<id>` every named node "
-            "reports FAILED and every one reports PASSED on clean source, for "
-            "`RM-VPCSC-DOMAIN-UNREGISTERED` (2 nodes), "
-            "`RM-VPCSC-ABSENT-VERSUS-EMPTY` (2 parametrized nodes) and "
-            "`RM-VPCSC-DOCUMENT-AND-PAIR-CHECKS` (4 parametrized nodes). But "
-            "`contract_spawn_ceiling()` is `4*len(register()) + "
-            "len(removal_register()) + CONTRACT_CONTROL_SPAWNS` and a full run "
-            "in this checkout MEASURES 201 marked spawns against a ceiling of "
-            "exactly 201: the gap between the pinned "
-            "`CONTRACT_CONTROL_SPAWNS = 16` and the controls' real cost is "
-            "absorbed by the per-Removal term of the removals that are NOT "
-            "live, so flipping an already-counted one to live is +1 `-rA` child "
-            "and +0 slots and overflows by one apiece, whatever else the diff "
-            "does. Raising the ceiling is forbidden and `mutation_contract.py` "
-            "is frozen against it in any case, so the three stay `pending` with "
-            "their measurement recorded beside them. Rescaling "
-            "`CONTRACT_CONTROL_SPAWNS` to the controls it really has — the same "
-            "rescale ESC-GX-GATE-002 asks for — closes this and XPASSes the node "
-            "below."
-        ),
-        owner_task="gx-agentic-vpcsc-repin",
-        node_id=("tests/test_gcp_agentic_vpcsc.py::"
-                 "test_the_vpcsc_removals_are_live_in_the_contract"),
-    ),
-    Escalation(
-        id="ESC-GX-ABSTAIN-REMOVAL-CEILING",
-        clause=("after the repin BOTH removals must redden named cases, and "
-                "both go in the mutation contract"),
-        unsatisfiable=(
-            "BOTH ARE IN THE CONTRACT AND BOTH REDDEN, MEASURED; ONE OF THE TWO "
-            "CANNOT BE EXECUTED BY THE GATE, on the same arithmetic "
-            "ESC-GX-NETWORK-REMOVAL-CEILING and ESC-GX-VPCSC-REMOVAL-CEILING "
-            "record. `RM-HOOK-SUCCESS-BEFORE-THE-EVENT` killed NOTHING before "
-            "this repin — all 14 cases of tests/test_gcp_agentic_abstain.py "
-            "PASSED with `cli._run_hook` stubbed, because every case drove the "
-            "hook in a CHILD process and an after-collection monkeypatch of the "
-            "PARENT cannot reach one — and the repin's in-process mirror closes "
-            "that: under `GCP_TEST_REMOVAL=RM-HOOK-SUCCESS-BEFORE-THE-EVENT` "
-            "all three named nodes report FAILED and all three report PASSED on "
-            "clean source. But `contract_spawn_ceiling()` is `4*len(register()) "
-            "+ len(removal_register()) + CONTRACT_CONTROL_SPAWNS` and a full run "
-            "MEASURES the marked total at exactly the ceiling, so a NEW live "
-            "removal is net zero (one slot, one `-rA` child) while flipping an "
-            "ALREADY-COUNTED one from pending to live is +1 spawn and +0 slots "
-            "and overflows by exactly one. This task therefore lands its NEW "
-            "removal `RM-HOOK-WRONG-FILE` LIVE and executed, and leaves the "
-            "seeded one `pending` with its measurement recorded beside it, "
-            "rather than raising a ceiling this document forbids raising and "
-            "`mutation_contract.py` is frozen against. Rescaling "
-            "`CONTRACT_CONTROL_SPAWNS` to the controls it really has — the same "
-            "rescale ESC-GX-GATE-002 asks for — closes this and XPASSes the node "
-            "below."
-        ),
-        owner_task="gx-agentic-abstain-repin",
-        node_id=("tests/test_gcp_agentic_abstain.py::"
-                 "test_the_hook_success_removal_is_live_in_the_contract"),
-    ),
+    # RETIRED — `ESC-GX-VPCSC-REMOVAL-CEILING`, the same ceiling one wave
+    # later, for `gx-agentic-vpcsc-repin`'s three removals. Its id is left
+    # named here rather than erased, for the reason above. All three were
+    # MEASURED kills held out by the budget alone; audit row R43 landed the
+    # `CONTRACT_CONTROL_SPAWNS` rescale this entry asked for, so all three
+    # are live and executed and its node XPASSed.
+    # RETIRED — `ESC-GX-ABSTAIN-REMOVAL-CEILING`, the same ceiling for
+    # `gx-agentic-abstain-repin`'s `RM-HOOK-SUCCESS-BEFORE-THE-EVENT`. Its
+    # id is left named here rather than erased, for the reason above. The
+    # repin's in-process mirror made it a measured kill; audit row R43
+    # landed the `CONTRACT_CONTROL_SPAWNS` rescale it asked for, so it is
+    # live and executed and its node XPASSed.
     # RETIRED — `ESC-GX-ABSTAIN-PASSED-HEADER`, the qualifier the abstain-only
     # header could not carry while it was a product change no test task could
     # make. Its id is left named here rather than erased, because retiring one
@@ -609,8 +553,9 @@ ESCALATIONS: tuple[Escalation, ...] = (
             "minus the git-archive materialisation the doctrine assumes "
             "(rsync of the tree, unmutated copy green, mutant applied alone "
             "through the contract's own `mutate`, every named node FAILED "
-            "under -rA), and REQUIRED_MK_IDS grew to 77 so the gate's "
-            "required-id xfail records them as debt. Moving DENY_ENTRIES "
+            "under -rA), and REQUIRED_MK_IDS grew by twelve — to 77 then, to 91 "
+            "once the fourteen MK-F ids joined the same way (audit row R24) — so "
+            "the gate's required-id xfail records them as debt. Moving DENY_ENTRIES "
             "into ENTRIES — plus the owner declarations "
             "(spec_assertions.TASK_IDS, mutation_contract._SLICES, a "
             "gcp-gx-fixes.md task line) — once the deny pair is at HEAD is "
@@ -620,6 +565,40 @@ ESCALATIONS: tuple[Escalation, ...] = (
         owner_task="gx-iam-deny-pair",
         node_id=("tests/test_gcp_iam_deny_checks.py::"
                  "test_the_deny_mutation_entries_are_active_in_the_register"),
+    ),
+    Escalation(
+        id="ESC-ORGEFF-REGISTER-ACTIVATION",
+        clause=("For each ACTIVE `Mutation`, call the machinery's "
+                "isolated-copy runner — a fresh `git archive` copy per entry, "
+                "`python -B`, the one-site rewrite confined to the resolved "
+                "scope span."),
+        unsatisfiable=(
+            "The fourteen MK-F entries of the effective org-policy fold anchor "
+            "in code that session landed UNCOMMITTED, and the isolated-copy "
+            "runner this clause mandates materialises a fresh `git archive` "
+            "copy, which by construction carries only what is at HEAD: an "
+            "ACTIVE entry whose `enclosing`/`before` anchor and whose "
+            "`must_fail` nodes exist nowhere in that copy reddens the frozen "
+            "flip test on every full run. So they are seeded PARKED DATA "
+            "(tests/mutation_entries.py ORG_EFFECTIVE_ENTRIES) rather than in "
+            "ENTRIES, each MEASURED per the register's doctrine with the one "
+            "substitution the deny twelve already recorded under "
+            "ESC-DENY-REGISTER-ACTIVATION (a copy of the WORKING TREE instead "
+            "of the archive, unmutated copy green over the 14-node union, each "
+            "mutant applied alone through tests.mutation_contract.mutate, "
+            "every named node observed FAILED via -rA). Moving "
+            "ORG_EFFECTIVE_ENTRIES into ENTRIES once that work is at HEAD is "
+            "what closes this: the node below then XPASSes and forces this "
+            "entry to be retired deliberately. The clause is quoted from "
+            "designs/gcp-gx-fixes.md, which is where the register's "
+            "isolated-copy doctrine is written, because the effective "
+            "org-policy design that raised this is not among the documents "
+            "`designs/` carries — ESC-GX-SPEC-001 records why that corpus "
+            "cannot be relied on to hold one."
+        ),
+        owner_task="fx-org-effective",
+        node_id=("tests/test_gcp_org_effective.py::"
+                 "test_the_org_effective_mutation_entries_are_active_in_the_register"),
     ),
 )
 
@@ -771,6 +750,79 @@ PRODUCT_ESCALATIONS: tuple[ProductEscalation, ...] = (
             "exactly as before. Separately, the FOLD is a whole-order statement "
             "rather than a pairwise one, so it keeps the undecidable rules and "
             "over-approximates rather than losing a level."
+        ),
+    ),
+    ProductEscalation(
+        id="ESC-CORE-SOLVER-DEAD-PROBE",
+        clause="apply each row's proposed disposition",
+        why=(
+            "`ConstraintSolver.mutually_exclusive_always_false(guards)` "
+            "(gcp_grounding/core/solver.py:39) is called nowhere and overridden "
+            "nowhere — one mention in the whole tree, its own `def` — and its "
+            "docstring forward-promises a generalization that does not exist: "
+            "\"with z3 this generalizes to symbolic conditions\". Neither subclass "
+            "overrides it (`Z3Solver` overrides `arity_satisfies` and `explain` "
+            "only), so the z3 generalization has no override seam in use. "
+            "MEASURED by audit row R27 (phantom-code PC-09). `gcp_grounding/core/` "
+            "is VENDORED and out of bounds for a test task, which is the case "
+            "this register exists for, so the finding is recorded here rather "
+            "than fixed by editing it."
+        ),
+        product_fix=(
+            "In `gcp_grounding/core/solver.py`, delete the method — nothing "
+            "calls it, and a solver-agnostic consistency probe that no check "
+            "uses is not a seam — or, if it is kept for a caller yet to come, "
+            "drop the \"with z3 this generalizes\" sentence, which is the part "
+            "that reads as a promise."
+        ),
+        residual_risk=(
+            "A reader of the abstract solver sees a documented capability the "
+            "package does not have, and an agent looking for a mutual-exclusion "
+            "check may build on a method no backend specialises: `Z3Solver` "
+            "inherits the constant-guard implementation, so symbolic conditions "
+            "would answer as if they were constants. Nothing shipped reads it, "
+            "so no verdict is affected today."
+        ),
+    ),
+    ProductEscalation(
+        id="ESC-IAM-RUNTIME-ONLY-CONDITION",
+        clause=("use assert_not_silently_dropped for the expression text, the "
+                "same silent-skip class as A11"),
+        why=(
+            "MEASURED by the catalogue's own probe "
+            "(`test_gcp_agentic_iam._probe_records_skipped_conditions`): "
+            "`claims._RUNTIME_ONLY_MARKERS` drops a runtime-only condition — a "
+            "`resource.matchTag` or `request.auth.claims` expression — without "
+            "emitting any claim, so no verdict names the expression and the "
+            "report for A18_cel_outside_subset is byte-indistinguishable from one "
+            "for an unconditional binding. It is a MISSED ABSTAIN, and the case's "
+            "assertion it owes (the expression is recorded somewhere) can only be "
+            "landed strict-xfailed until the claim layer records the skip. "
+            "REGISTERED BY AUDIT ROW R41, which found this the one strict xfail in "
+            "the suite whose reason named a product cause and no escalation id, so "
+            "no register forced its retirement and "
+            "tests/test_gcp_escalations.py — which walks register -> node — could "
+            "not see it. It is a ProductEscalation and not an `Escalation` because "
+            "the marker lives in a `marks=` tuple on a parametrized case rather "
+            "than a decorator on a def, which is not the shape that self-test "
+            "walks; the strict marker is what retires it, and the id-in-a-register "
+            "coupling is asserted by "
+            "tests/test_gcp_audit_hallucinated_refs.py."
+        ),
+        product_fix=(
+            "Record the skip in `gcp_grounding/claims.py`: emit a claim (or an "
+            "explicit unverified marker) carrying the untranslated expression "
+            "text when `_RUNTIME_ONLY_MARKERS` matches, exactly as the "
+            "`public_principal` kind closed the same silent-skip class for "
+            "members. The probe then reads True, the conditional marker "
+            "evaporates, and A18 asserts the recorded abstention directly."
+        ),
+        residual_risk=(
+            "An agent can condition a grant on a runtime-only expression and the "
+            "gate's report says nothing about the condition at all — not a "
+            "warning, not an abstention — so a reader cannot tell that binding "
+            "from an unconditional one. The catalogue keeps the case, and its "
+            "strict xfail goes RED the day the claim layer records the skip."
         ),
     ),
 )
@@ -925,7 +977,14 @@ PRODUCT_ESCALATIONS = PRODUCT_ESCALATIONS + _DENY_SCOPE_NOTES
 # tests/test_gcp_iam_deny_checks.py, tests/test_gcp_agentic_deny.py);
 # ESC-DENY-REGISTER-ACTIVATION is raised against its mutation-entry activation
 # and no task of gcp-gx-fixes.md owns those modules.
+#
+# `fx-org-effective` is the owner recorded on every MK-F entry
+# (tests/mutation_entries.py ORG_EFFECTIVE_ENTRIES), from the effective
+# org-policy design that owns gcp_grounding/org_effective.py and
+# tests/test_gcp_org_effective.py; ESC-ORGEFF-REGISTER-ACTIVATION is raised
+# against that activation and no task of gcp-gx-fixes.md owns those modules.
 OUT_OF_DOCUMENT_OWNER_TASKS: frozenset[str] = frozenset({
     "tx-agentic-tf-benign",
     "gx-iam-deny-pair",
+    "fx-org-effective",
 })

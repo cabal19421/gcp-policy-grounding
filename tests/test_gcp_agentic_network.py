@@ -531,18 +531,18 @@ def test_a_hook_shaped_run_abstains_naming_the_absent_baseline(
                for v in report["verdicts"]), report["verdicts"]
 
 
-@pytest.mark.xfail(strict=True, reason="ESC-GX-NETWORK-REMOVAL-CEILING: the "
-                   "removal KILLS — both nodes measured FAILED under it and "
-                   "PASSED clean — but the frozen spawn ceiling has zero "
-                   "headroom, so flipping an already-counted Removal live "
-                   "overflows it by exactly one child")
 def test_the_network_plane_removal_is_live_in_the_contract():
     """The clause, landed literally: the removal that takes the network plane
     away must REDDEN named cases, which it can only do once it stops being
-    ``pending``. The two removals this repin ADDS are live and executed; this
-    one is the seeded entry, already inside ``contract_spawn_ceiling``'s
-    per-Removal term, so making it live buys a child the ceiling has no slot
-    for. See ``ESC-GX-NETWORK-REMOVAL-CEILING`` for the arithmetic."""
+    ``pending``.
+
+    It was strict-xfailed under ESC-GX-NETWORK-REMOVAL-CEILING, which recorded
+    that the removal KILLS — both nodes measured FAILED under it and PASSED clean
+    — while the spawn ceiling had zero headroom for the child a pending→live flip
+    costs. Audit row R43 corrected ``CONTRACT_CONTROL_SPAWNS`` to the 21 controls
+    the contract really spends, which is the rescale that escalation named, so the
+    entry is live and the gate executes it.
+    """
     from tests.mutation_entries import REMOVALS
 
     plane = next(r for r in REMOVALS if r.id == "RM-NETWORK-PLANE-UNAVAILABLE")
