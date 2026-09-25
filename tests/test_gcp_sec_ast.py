@@ -445,7 +445,10 @@ def test_ensure_domains_called_at_most_once(monkeypatch):
     m.validate(node)
     m.derived_tier(node)
     m.collections_used(node)
-    assert calls["n"] <= 1
+    # EXACTLY once, never `<= 1`: zero calls satisfy a `<=` bound, so the mutant
+    # that removes the lazy resolution altogether survives it (SA-SECAST-CALLED-ONCE
+    # registers `calls["n"] == 1` for that reason).
+    assert calls["n"] == 1
 
 
 def test_missing_sec_domains_degrades_to_base(monkeypatch):

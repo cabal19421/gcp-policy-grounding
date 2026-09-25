@@ -330,6 +330,35 @@ def test_the_vault_ignores_values_below_MIN_SECRET_LEN():
     assert SECRET_A not in repr(vault)
 
 
+def test_add_all_stores_exactly_what_add_would_and_returns_nothing():
+    """``SecretVault`` is exported and ``add_all`` is public, and until audit row
+    R28 nothing in the package, the CLI or the suite called it — an untested
+    public method is how the ``add`` and ``add_all`` contracts drift apart.
+
+    The contract it must keep: ``add_all`` is ``add`` in a loop and nothing more,
+    so the same batch reaches the same vault state either way, every rejection
+    ``add`` makes (short values, non-strings, an already-wire value, a duplicate)
+    is made here too, and the store/skip decision ``add`` returns is DISCARDED —
+    a caller that needs it loops itself.
+    """
+    long_a, long_b = "a" * redact.MIN_SECRET_LEN, "b" * redact.MIN_SECRET_LEN
+    already_wire = redact.WIRE_PREFIX + redact.value_digest(long_b)
+    batch = [long_a, "short", None, long_b, long_a, already_wire, 17]
+
+    bulk = redact.SecretVault()
+    assert bulk.add_all(batch) is None, "add_all reports nothing; add reports"
+
+    one_by_one = redact.SecretVault()
+    for value in batch:
+        one_by_one.add(value)
+
+    assert len(bulk) == len(one_by_one) == 2, (len(bulk), len(one_by_one))
+    assert long_a in bulk and long_b in bulk
+    assert "short" not in bulk and already_wire not in bulk
+    assert bulk.scrub_text(f"{long_a} and {long_b}") == \
+        one_by_one.scrub_text(f"{long_a} and {long_b}")
+
+
 def test_redact_feeds_the_vault_and_scrub_record_removes_the_plaintext():
     vault = redact.SecretVault()
     redact.redact({"private_key": SECRET_A}, vault=vault)

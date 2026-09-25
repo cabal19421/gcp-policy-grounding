@@ -3737,16 +3737,6 @@ def _collection_reading(sec_rules: Any, ctx: Any,
     return records, missing
 
 
-def _collection_rows(sec_rules: Any, ctx: Any, name: str) -> tuple:
-    """The records collection *name* yields for *ctx* — empty when this checkout
-    registered no extractor for it, or when the extractor abstained.
-
-    An abstention contributes NO sentence: the collection was not extracted over
-    this document, and a sentence would be about rows nobody read.
-    """
-    return _collection_reading(sec_rules, ctx, name)[0]
-
-
 def _address_of(record: Mapping[str, Any]) -> str:
     """The terraform block address a row carries — ``""`` for a REST row, which
     has no block to name.
