@@ -234,7 +234,8 @@ def detect_kind(doc: Any) -> str | None:
 
 
 def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
-                  baseline: Any = None, rules: Any = None) -> GroundingReport:
+                  baseline: Any = None, rules: Any = None, *,
+                  drift_policy: str = "") -> GroundingReport:
     """Ground one policy document end-to-end against *snapshot*.
 
     *path_or_obj* is a JSON file path (``str``/``os.PathLike``) or an
@@ -244,6 +245,16 @@ def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
     run alongside the built-in checks; ``None`` (the default) or an empty
     sequence is exactly today's behaviour. Never raises on bad input — see the
     module docstring's fail-open contract.
+
+    *drift_policy* is THE RESOLVED drift policy of this run — one of
+    :data:`gcp_grounding.drift.DRIFT_POLICIES` — and it is carried onto both the
+    check context and the rule context so the adjudicator grades under what the
+    caller decided rather than under whatever
+    :data:`gcp_grounding.registry.DRIFT_POLICY_ENV` happens to hold. The default
+    of ``""`` is "this caller resolved none", which is the library case and the
+    only one that falls back to the environment; it matters solely over a
+    :class:`~gcp_grounding.reconciled.ReconciledSnapshot`, since nothing else
+    carries provenance to adjudicate against.
     """
     report = GroundingReport()
     solver = get_solver()
@@ -290,7 +301,8 @@ def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
 
     ctx = CheckContext(snapshot=snapshot, solver=solver, document=doc,
                        document_kind=kind, source=source, claims=tuple(claims),
-                       baseline=baseline_doc, baseline_kind=baseline_kind)
+                       baseline=baseline_doc, baseline_kind=baseline_kind,
+                       drift_policy=drift_policy)
 
     existence = [c for c in claims if c.kind in EXISTENCE_KINDS]
     if existence:
@@ -346,7 +358,8 @@ def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
                                           document_kind=kind, source=source,
                                           baseline=old_doc,
                                           estate=getattr(snapshot, "estate", None),
-                                          solver=solver)
+                                          solver=solver,
+                                          drift_policy=drift_policy)
             for rule in rules:
                 # None means "not applicable to this document kind" — adding
                 # nothing is the abstain-flood fix; a rule that should have
