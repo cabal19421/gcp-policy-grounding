@@ -134,11 +134,11 @@ NON_ESTATE_KINDS: set[str] = set()
 #: order to keep the never-drop-the-first-of-any-kind promise.
 MAX_DRIFT_VERDICTS = 50
 
-#: The marker a plan reader writes into its :class:`
-#: ~gcp_grounding.provenance.SourceRecord` note when terraform's own refresh
-#: detected drift. The addresses are carried as a note rather than as a second
-#: object set, because ``prior_state`` already reflects the refresh and a
-#: second set would double-count every one of them.
+#: The marker a plan reader writes into its
+#: :class:`~gcp_grounding.provenance.SourceRecord` note when terraform's own
+#: refresh detected drift. The addresses are carried as a note rather than as
+#: a second object set, because ``prior_state`` already reflects the refresh
+#: and a second set would double-count every one of them.
 RESOURCE_DRIFT_MARKER = "resource_drift:"
 
 #: How many drifted addresses the aggregate verdict names.
@@ -236,8 +236,8 @@ def drift_verdicts(ledger: SourceLedger | None, *,
     are ALREADY in this vocabulary and are carried through verbatim rather than
     re-derived, because re-deriving them would be a second spelling of the same
     concept. They cannot be recovered from the ledger — a key-mismatch is about
-    a CATEGORY rather than a key, and :class:`
-    ~gcp_grounding.provenance.SourceLedger` has no verdict field.
+    a CATEGORY rather than a key, and
+    :class:`~gcp_grounding.provenance.SourceLedger` has no verdict field.
 
     The list is capped at :data:`MAX_DRIFT_VERDICTS`; see :func:`_capped`.
     """
@@ -544,8 +544,8 @@ def adjudicate(verdicts: Iterable[Verdict], read_set: Iterable[tuple[str, str]],
     clause about what the current-state view proves would be a fabricated
     reason — see the registry's own comment.
 
-    A snapshot that is not a :class:`
-    ~gcp_grounding.reconciled.ReconciledSnapshot` has no provenance to
+    A snapshot that is not a
+    :class:`~gcp_grounding.reconciled.ReconciledSnapshot` has no provenance to
     adjudicate against, so the verdicts come back untouched.
     """
     items = tuple(verdicts)

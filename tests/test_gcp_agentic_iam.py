@@ -552,7 +552,8 @@ ADVERSARIAL = [
          "which the gate can evaluate offline",
          check_a18,
          marks=() if HAVE_SKIPPED_CONDITION_RECORD else (pytest.mark.xfail(
-             reason="claims._RUNTIME_ONLY_MARKERS drops a runtime-only condition "
+             reason="ESC-IAM-RUNTIME-ONLY-CONDITION: "
+                    "claims._RUNTIME_ONLY_MARKERS drops a runtime-only condition "
                     "without emitting any claim, so no verdict names the "
                     "expression and the report is indistinguishable from one "
                     "for an unconditional binding — a MISSED ABSTAIN",

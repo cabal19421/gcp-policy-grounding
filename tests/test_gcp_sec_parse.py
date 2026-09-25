@@ -18,6 +18,7 @@ from gcp_grounding import sec_ast
 from gcp_grounding import sec_parse as m
 from gcp_grounding.sec_parse import ParseError
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 SEC = Path(__file__).parent / "fixtures" / "gcp" / "sec"
 
 
@@ -265,9 +266,49 @@ def test_unrecognized_byte_in_the_term_language_raises_parse_error(tmp_path):
 
 # -- determinism --------------------------------------------------------------
 
-def test_parse_text_is_byte_deterministic():
+#: Only the rendered document is printed, so the child needs nothing from this
+#: module. The path is inserted FIRST so the child parses THIS checkout.
+_PARSE_SCRIPT = (
+    "import sys; sys.path.insert(0, sys.argv[1]);"
+    "from gcp_grounding.sec_parse import parse_text;"
+    "sys.stdout.write(repr(parse_text("
+    "open(sys.argv[2], encoding='utf-8').read(), 'iam.md')))"
+)
+
+
+def _parse_in_child(path, *, hash_seed: str) -> str:
+    """``repr`` of the parse of *path*, computed in a FRESH interpreter whose
+    string hashing is seeded differently from this one's."""
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ, PYTHONHASHSEED=hash_seed)
+    out = subprocess.run(
+        [sys.executable, "-c", _PARSE_SCRIPT, str(REPO_ROOT), str(path)],
+        check=True, capture_output=True, text=True, env=env)
+    return out.stdout
+
+
+def test_parse_text_is_byte_deterministic_across_processes_and_hash_seeds():
+    """ACROSS PROCESSES, because within one it cannot fail. The old assertion
+    compared two calls in a single interpreter (audit row R51), where ``dict``
+    and ``set`` iteration order is already fixed — so it could only ever have
+    caught a clock, a counter or an RNG, never the hash-seed-dependent ordering
+    "byte-deterministic" is claimed against.
+
+    So the same document is parsed in children started under three different
+    ``PYTHONHASHSEED`` values and the rendered document must come back
+    byte-identical every time, the way ``test_gcp_redact.py`` pins its digests.
+    A parser that let a ``set`` decide the order of a candidate's vocabulary,
+    its notes or a document's problems would disagree with itself here.
+    """
     text = (SEC / "iam.md").read_text(encoding="utf-8")
     assert m.parse_text(text, "iam.md") == m.parse_text(text, "iam.md")
+    here = repr(m.parse_text(text, "iam.md"))
+    assert "Candidate(" in here, "the rendering must carry the parse, not a stub"
+    for seed in ("0", "1", "4294967295"):
+        assert _parse_in_child(SEC / "iam.md", hash_seed=seed) == here, seed
 
 
 def test_parse_file_sha256_is_over_the_raw_bytes():

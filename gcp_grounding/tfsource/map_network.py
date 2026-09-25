@@ -30,7 +30,7 @@ be stored in a record, and it must never be compared across two artifacts.
 The lists this module does NOT sort are just as deliberate. Firewall-policy and
 Cloud Armor rule order is SEMANTIC — a policy is evaluated in priority order and
 a rule moved is a policy changed — so those are left in the order the artifact
-gave them, and :mod:`gcp_grounding.tfsource.merge` puts fragments in priority
+gave them, and :mod:`gcp_grounding.merge` puts fragments in priority
 then address order. Sorting them here would destroy the one property that domain
 is about.
 
@@ -67,7 +67,7 @@ FRAGMENTS, AND WHO JOINS THEM
 ``google_compute_security_policy_rule`` each emit a FRAGMENT fact keyed onto the
 PARENT policy's canonical key, computed independently through
 :meth:`~gcp_grounding.tfsource.mapping.MapContext.key`. This module does not
-hand-join them: :mod:`gcp_grounding.tfsource.merge` assembles fragments in
+hand-join them: :mod:`gcp_grounding.merge` assembles fragments in
 priority then address order, and a mapper that joined them itself would be a
 second assembler that only sees one artifact at a time.
 
@@ -616,7 +616,7 @@ def map_firewall_policy(obj: facts.TfObject,
 
     The policy resource speaks for the policy's EXISTENCE and for nothing else:
     its rules and its attachments are separate resources, and this record is the
-    base :mod:`gcp_grounding.tfsource.merge` folds their fragments into. Both
+    base :mod:`gcp_grounding.merge` folds their fragments into. Both
     lists are emitted EMPTY rather than omitted, because the estate's own
     constructor stores an absent list and an empty one identically and an
     explicit empty one says which of the two this resource meant.
@@ -646,7 +646,7 @@ def map_firewall_policy_rule(obj: facts.TfObject,
                              ctx: mapping.MapContext) -> tuple[facts.Fact, ...]:
     """``google_compute_firewall_policy_rule`` → a ``rules`` FRAGMENT keyed onto
     the parent policy. The rule is NOT sorted into place here; ordering
-    fragments is :mod:`gcp_grounding.tfsource.merge`'s job and it does it by
+    fragments is :mod:`gcp_grounding.merge`'s job and it does it by
     priority then address."""
     key = _parent_policy_key(obj, ctx)
     if facts.is_unresolved(key):
@@ -790,7 +790,7 @@ def map_security_policy(obj: facts.TfObject,
     carrying the policy's INLINE rules, in the order the artifact wrote them.
 
     They are not sorted: rule order is the whole meaning of a Cloud Armor
-    policy, and :mod:`gcp_grounding.tfsource.merge` puts these and the standalone
+    policy, and :mod:`gcp_grounding.merge` puts these and the standalone
     fragments into priority order together.
     """
     values = obj.values

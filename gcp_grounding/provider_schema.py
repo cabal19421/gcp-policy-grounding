@@ -61,10 +61,11 @@ schema is not a current-state table, it is a vocabulary about the PROVIDER,
 and wiring a new pseudo-category through merge/estate/facts would both be
 invasive and make the schema appear in coverage tables that answer a
 different question ("what does the estate view enumerate?"). The dedicated
-note keeps the same behaviour — past :data:`gcp_grounding.freshness
-.MAX_AGE_DEFAULT` (or the configured ``--max-age``), every finding the checks
-would have made is demoted to ``unverified`` naming the age and the recapture
-command — at none of that cost. The clock is
+note keeps the same behaviour — past
+:data:`gcp_grounding.freshness.MAX_AGE_DEFAULT` (or the configured
+``--max-age``), every finding the checks would have made is demoted to
+``unverified`` naming the age and the recapture command — at none of that cost.
+The clock is
 :func:`gcp_grounding.freshness.resolve_now`, the same one every other age
 answers against.
 

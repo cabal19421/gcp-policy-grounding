@@ -19,6 +19,11 @@
 # Plain bash plus awk. The only other thing it needs is the repo's own venv
 # (`python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'`); with no
 # venv present it falls back to `python3 -m gcp_grounding` from this checkout.
+# That fallback RUNS, but the exits the README documents assume z3 is
+# importable: without the solver every DENIED verdict that rests on it becomes
+# an abstention, and those steps diverge. Each run names the backend the gate
+# resolved — `z3` or `builtin` — before its first step, so a diverging arc can
+# be read against the capability it was judged with rather than guessed at.
 
 set -u
 
@@ -46,6 +51,14 @@ done
 # fixture's capture era is pinned exactly as the README pins it.
 DENY_NOW="GCP_GROUNDING_NOW=2026-07-18T12:00:00Z"
 
+# The clock the schema scenario's own README commands pin, for the same reason
+# one step further out: the captured provider schema carries its own
+# `captured_at` (2026-07-25, the demo estate's era), and the DENIED findings
+# rows 4 and 4b document ARE that schema's, so a run judged at today's wall
+# clock would demote them to abstentions and both arcs would report exits the
+# README does not document — on every checkout, not only an old one.
+SCHEMA_NOW="GCP_GROUNDING_NOW=2026-07-25T12:00:00Z"
+
 # -- the gate command ---------------------------------------------------------
 
 # $GCP_GROUND overrides (word-split on purpose: it may name an interpreter and
@@ -62,6 +75,51 @@ else
     GROUND=(python3 -m gcp_grounding)
 fi
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+
+# -- the solver backend the gate resolved -------------------------------------
+
+# Every report header names the backend the gate resolved, in brackets: `[z3]`
+# or `[builtin]`. Ask the gate itself, over one committed benign document,
+# rather than inferring it from whichever interpreter resolved above — a
+# $GCP_GROUND may name anything, and a console script does not answer an import
+# question. Command substitution, never a pipe, so nothing swallows an exit
+# code; this one probe's exit is deliberately ignored, because the only thing
+# asked of it is which backend it names.
+resolved_backend() {
+    local answer
+    answer="$("${GROUND[@]}" verify-policy \
+        tests/fixtures/gcp/agentic/benign/iam_policy_conditional.json \
+        --snapshot tests/fixtures/gcp/agentic_snapshot.json 2>/dev/null)"
+    case "$answer" in
+        *'[z3]'*)      printf 'z3' ;;
+        *'[builtin]'*) printf 'builtin' ;;
+        *)             printf 'undetermined' ;;
+    esac
+}
+
+# The backend line, plus what it costs when the solver is missing. The exits
+# the README documents assume z3: on the builtin fallback every DENIED verdict
+# that rests on the solver becomes an abstention, so steps diverge — which is a
+# capability gap, not a regression, and the runner says which one it is.
+print_backend() {
+    local backend="$1"
+    case "$backend" in
+    z3)
+        printf '  solver backend: z3 — the exits documented below assume it\n'
+        ;;
+    builtin)
+        printf '  solver backend: builtin — z3 is NOT importable here, and the exits\n'
+        printf '                  documented below assume it: without the solver every\n'
+        printf '                  DENIED verdict that rests on it becomes an abstention,\n'
+        printf '                  so those steps diverge. Install it with: %s\n' \
+            "python3 -m pip install -e '.[z3]'"
+        ;;
+    *)
+        printf '  solver backend: undetermined — the gate named none, and the exits\n'
+        printf '                  documented below assume z3\n'
+        ;;
+    esac
+}
 
 # -- the scenario table, read from the README ---------------------------------
 
@@ -190,7 +248,7 @@ verify_masked_narrowed() {  # <expected-exit> <story> <proposal>
 }
 
 verify_schema() {  # <expected-exit> <story> <proposal>
-    step "$1" "$2" "${GROUND[@]}" verify-policy \
+    step "$1" "$2" env "$SCHEMA_NOW" "${GROUND[@]}" verify-policy \
         --proposal "examples/terraform-schema/$3" \
         --snapshot tests/fixtures/gcp/agentic_snapshot.json \
         --provider-schema examples/terraform-schema/provider-schema.json \
@@ -426,6 +484,7 @@ EOF
     printf '  proposal      : %s\n' "$prop"
     printf '  README expects: %s\n' "$want"
     printf '  gate command  : %s\n' "${GROUND[*]}"
+    print_backend "$(resolved_backend)"
     if [ -n "$SCRUBBED" ]; then
         printf '  ignoring env  :%s (each arc names its own inputs by flag)\n' \
             "$SCRUBBED"

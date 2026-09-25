@@ -1187,7 +1187,7 @@ def test_extraction_is_solver_free_and_identical_on_both_backends():
 
 
 @pytest.mark.xfail(strict=True,
-                   reason="ORG-EFFECTIVE-REGISTER-ACTIVATION: the fourteen "
+                   reason="ESC-ORGEFF-REGISTER-ACTIVATION: the fourteen "
                           "MK-F entries are seeded PARKED "
                           "(mutation_entries.ORG_EFFECTIVE_ENTRIES) because "
                           "this work lands uncommitted and the frozen flip "

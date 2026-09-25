@@ -21,9 +21,9 @@ done exactly once, here.
 TRI-STATE DECISION
 ------------------
 Every decision goes through :func:`gcp_grounding.solve.decide`, which has the
-same contract as ``constraints._decide`` (constraints.py:272-281: True = sat,
-False = unsat, None = unknown) but bounds the solver it builds with a timeout, so
-a hard formula ABSTAINS (``unknown`` -> ``None``) instead of hanging the hook.
+same contract as ``constraints._decide`` (True = sat, False = unsat,
+None = unknown) but bounds the solver it builds with a timeout, so a hard
+formula ABSTAINS (``unknown`` -> ``None``) instead of hanging the hook.
 This module is the one that most needs it: :func:`independence` is O(n^2) over
 promise pairs and the probes run over string-theory and cardinality formulas.
 Every solver created here — the two in :func:`mint` and the tracked one in
@@ -35,8 +35,8 @@ PROBES ARE FATAL, NOT ADVISORY
 :func:`probe` computes ``satisfiable`` (``decide(obl)``: False means no record
 can ever satisfy the promise) and ``non_tautological`` (``decide(Not(obl))``:
 False means the promise forbids nothing). Both are deliberately FATAL here,
-whereas ``check_cel`` only WARNS on a tautology at constraints.py:318-321. The
-difference is intentional: a vacuous security requirement is worse than none,
+whereas ``check_cel`` only WARNS on a tautology. The difference is intentional:
+a vacuous security requirement is worse than none,
 because it reads as coverage. Both probes are per-record, matching
 :mod:`sec_encode`'s symbolic mode, which collapses every quantifier to one
 hypothetical record; the caller records ``probe_scope="per_record"`` and, when

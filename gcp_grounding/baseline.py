@@ -217,7 +217,7 @@ TOOL_INPUT_KEYS = ("baseline_target", "target", "resource", "resource_name")
 #: always available, and a verdict that says only "no baseline" teaches nobody
 #: how to get one.
 REMEDIES = (
-    "pass the target explicitly (the --baseline-target flag)",
+    "pass the target explicitly (the --target DOMAIN:KEY flag)",
     "add an entry for this file to the config file's targets map",
     "invoke the tool with the resource in its input",
 )
@@ -771,8 +771,8 @@ def _project_org_policy(key: str, record: Mapping[str, Any]) -> dict[str, Any]:
     return {"name": f"{node}/policies/{short}", "spec": spec}
 
 
-#: category → (projector, document kind). The five categories with no entry
-#: have no document form: a flat vocabulary has names and not records, and
+#: category → (projector, document kind). The two record categories with no
+#: entry have no document form: a flat vocabulary has names and not records, and
 #: ``roles`` and ``resource_hierarchy`` are compared field-wise by the estate
 #: tier rather than as documents.
 _PROJECTIONS = {

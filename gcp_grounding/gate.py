@@ -424,9 +424,9 @@ def terraform_route(path: str) -> bool | None:
 def read_tf_json(path: str, facts: Any) -> tuple[Any, tuple[str, ...], str]:
     """``.tf.json`` through ``json.load`` and NO parser at all.
 
-    Loaded through the one fail-open loader :meth:`PolicyGroundingGate.
-    _ground_with_state` already uses, so "not valid JSON" is phrased in exactly
-    one place.
+    Loaded through the one fail-open loader
+    :meth:`PolicyGroundingGate._ground_with_state` already uses, so "not valid
+    JSON" is phrased in exactly one place.
     """
     document, source, error = preflight._load_document(path)
     if error is not None:
@@ -1231,7 +1231,8 @@ class PolicyGroundingGate:
             kind = detect_kind(document)
             proposal = engine.prepare_proposal(document, kind, source=source)
         settings = {"as_of": self._now.isoformat() if self._now is not None else None,
-                    "drift": self._drift_mode(engine, view)}
+                    "drift": self._drift_mode(engine, view),
+                    "drift_policy": self._drift_policy(view)}
         hints = self._hints(path, view)
         if hints is not None:
             settings["hints"] = hints
@@ -1303,9 +1304,21 @@ class PolicyGroundingGate:
     def _drift_mode(engine: Any, view: _StateView) -> str:
         """The configured drift policy in the engine's own two-value
         vocabulary: only ``block`` blocks, everything else reports."""
+        return ("block"
+                if PolicyGroundingGate._drift_policy(view) == "block"
+                else engine.DEFAULT_DRIFT_MODE)
+
+    @staticmethod
+    def _drift_policy(view: _StateView) -> str:
+        """The configured drift policy in the LOADING side's three-value
+        vocabulary, or ``""`` where the hook's settings name none.
+
+        The two-value mode above cannot express ``abstain``, so the adjudicator
+        needs this spelling as well — carried on the options rather than
+        re-derived from the environment, which is what let an exported variable
+        outrank a configured policy."""
         options = getattr(view.settings, "options", None)
-        policy = getattr(options, "drift_policy", "") or ""
-        return "block" if policy == "block" else engine.DEFAULT_DRIFT_MODE
+        return getattr(options, "drift_policy", "") or ""
 
     def _hints(self, path: str, view: _StateView) -> Any:
         """The per-file baseline hints: the configured target for THIS file.

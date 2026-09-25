@@ -63,7 +63,7 @@ from .core.log import get_logger
 logger = get_logger(__name__)
 
 __all__ = ["SEC_REPORT_SCHEMA", "WITNESS_ROLES", "WitnessRow", "WitnessTable",
-           "sec_document", "explain_lines"]
+           "sec_document", "explain_lines", "unchecked_ids"]
 
 #: Version tag of the ``"sec"`` sub-document. Independent of
 #: :data:`gcp_grounding.report.SCHEMA`, which this module never bumps.
@@ -200,11 +200,12 @@ def sec_document(policy_report: Any, table: WitnessTable,
                  rules: Iterable[Any] = ()) -> dict[str, Any]:
     """``policy_report.to_dict()`` plus exactly one new top-level key, ``"sec"``.
 
-    The base document (``report.py:91-112``, untouched) is reproduced key for
-    key and value for value; ``"sec"`` carries :data:`SEC_REPORT_SCHEMA`, the
-    table's rows and one entry per loaded rule. The key is always present, even
-    with no rules and an empty table (see the module docstring). *policy_report*
-    may also be a plain mapping — it is copied, never mutated.
+    The base document — what ``report.PolicyReport.to_dict`` returns, untouched
+    — is reproduced key for key and value for value; ``"sec"`` carries
+    :data:`SEC_REPORT_SCHEMA`, the table's rows and one entry per loaded rule.
+    The key is always present, even with no rules and an empty table (see the
+    module docstring). *policy_report* may also be a plain mapping — it is
+    copied, never mutated.
     """
     base = (policy_report.to_dict() if hasattr(policy_report, "to_dict")
             else dict(policy_report))
@@ -281,6 +282,28 @@ def _primary_verdict(promise: Any, matched: Mapping[str, list]) -> Any:
         if verdict.kind == f"sec:{promise.domain}":
             return verdict
     return None
+
+
+def unchecked_ids(rules: Iterable[Any] = (),
+                  verdicts: Iterable[Any] = ()) -> tuple[str, ...]:
+    """The ids of the compiled promises *verdicts* never judged — exactly the
+    stanzas :func:`explain_lines` marks :data:`_NO_VERDICT_MARKER`, sorted.
+
+    ONE DEFINITION OF "CHECKED", shared with the marker: a promise is checked
+    when a verdict of its own domain channel targets it (:func:`_primary_verdict`
+    — an integrity note on ``sec:artifact`` is evidence, not a judgment). A
+    caller that re-derived it would be a second answer to "did this run
+    evaluate that promise", and the two would disagree in exactly the runs
+    nobody re-reads.
+
+    "Not checked" is not "not enforcing": a promise here compiled, was admitted
+    and is in force — this run's document never reached it, because
+    :meth:`gcp_grounding.sec_rules.CompiledRule.applies_to` gates on the
+    document kind. The two are counted apart everywhere for that reason.
+    """
+    matched = _sec_verdicts(verdicts)
+    return tuple(sorted(_promise(rule).id for rule in rules
+                        if _primary_verdict(_promise(rule), matched) is None))
 
 
 def _without_id_prefix(pid: str, message: str) -> str:

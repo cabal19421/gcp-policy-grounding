@@ -21,10 +21,11 @@ diff itself, wired in through the lazy provider :mod:`gcp_grounding.registry`:
   "mostly a reduction" is not a violation and consequence is the promise
   layer's job (a compiled promise over ``proposed_role_permissions`` is what
   turns a forbidden extra into a block). The message names every extra
-  permission (annotated with its :data:`gcp_grounding.iam_checks
-  .ESCALATION_PERMISSIONS` class when it has one) and the custom-role block
-  address an operator must edit. A swap that adds nothing is affirmed as a
-  scope reduction, extras counted at zero and drops counted exactly.
+  permission (annotated with its
+  :data:`gcp_grounding.iam_checks.ESCALATION_PERMISSIONS` class when it has
+  one) and the custom-role block address an operator must edit. A swap that adds
+  nothing is affirmed as a scope reduction, extras counted at zero and drops
+  counted exactly.
 
 VERDICT POLARITY. This check NEVER blocks by itself: its findings are warnings
 on ``grounded`` verdicts, exactly like the escalation table's, because the

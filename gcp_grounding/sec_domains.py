@@ -38,9 +38,9 @@ from passing vacuously:
   ports, a port range too wide to enumerate — see :data:`MAX_PORT_SPAN`). The
   rule still produces rows, so a promise that does not mention the field still
   judges it; a promise that DOES mention it abstains loudly through
-  ``sec_encode``'s "missing from the record" :class:`~gcp_grounding.sec_encode.
-  UnsupportedTerm`. Filling in ``0.0.0.0/0`` or ``0.0.0.0/32`` instead would
-  fabricate either a false ``contradicted`` or a false pass.
+  ``sec_encode``'s "missing from the record"
+  :class:`~gcp_grounding.sec_encode.UnsupportedTerm`. Filling in ``0.0.0.0/0``
+  or ``0.0.0.0/32`` would fabricate a false ``contradicted`` or a false pass.
 * A ``Str`` dimension with no values contributes the empty string, which is an
   honest "no tag" / "no expression".
 
@@ -80,7 +80,7 @@ The estate-tier extractors read
 and honour the captured bit by comparing with ``is`` — never truth-testing,
 because :data:`gcp_grounding.knowledge.UNKNOWN` refuses ``bool``. Records are
 sorted by their scalar fields for determinism, mirroring the sorted-pairs
-convention of ``constraints.check_policy_subset`` (constraints.py:442-446).
+convention of ``constraints.check_policy_subset``.
 """
 
 from __future__ import annotations
@@ -1227,6 +1227,15 @@ def _proposed_role_permissions(ctx):
 
 
 # -- the IAM deny-policy proposal collections ----------------------------------
+#
+# PROPOSAL TIER ONLY, and that is a recorded decision rather than an omission:
+# there is no estate-tier ``deny_rules`` collection, so "every deny policy IN THE
+# ESTATE denies X" is not judgeable here and each deny policy is judged at review
+# time instead. ESC-DENY-ESTATE-TIER in tests/escalations.py carries why (building
+# the estate tier before the fetch capture exists would gate every such promise on
+# a table no real snapshot carries), what would close it, and what is exposed
+# meanwhile; it is named here so a reader who finds no estate spelling can find
+# the reason rather than reading it as a gap nobody noticed.
 #
 # ``deny_rules`` / ``deny_rule_exceptions`` follow the claims-are-the-records
 # discipline over :mod:`gcp_grounding.iam_deny`'s claims, grouped by the

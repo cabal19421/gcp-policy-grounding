@@ -1003,13 +1003,13 @@ def test_the_wrong_file_removal_is_live_in_the_contract():
     assert not _removal("RM-HOOK-WRONG-FILE").pending
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "ESC-GX-ABSTAIN-REMOVAL-CEILING: the removal DOES redden its named cases, "
-    "measured, and contract_spawn_ceiling() still refuses the pending→live "
-    "flip — a new live removal is net zero, flipping an already-counted one is "
-    "+1 spawn and +0 slots"))
 def test_the_hook_success_removal_is_live_in_the_contract():
-    """THE SPEC LITERAL for the removal the ceiling will not let this task
-    flip. Landed strict-xfailed so the day ``CONTRACT_CONTROL_SPAWNS`` is
-    rescaled to the controls it really has, this XPASSes and says so."""
+    """THE SPEC LITERAL for the removal the ceiling would not let that task flip.
+
+    It was landed strict-xfailed under ESC-GX-ABSTAIN-REMOVAL-CEILING — the
+    removal reddens its named cases, measured, and a pending→live flip cost one
+    child the ceiling had no slot for — so that the day
+    ``CONTRACT_CONTROL_SPAWNS`` was rescaled to the controls it really has, it
+    would XPASS and say so. Audit row R43 is that rescale, and this is now live.
+    """
     assert not _removal("RM-HOOK-SUCCESS-BEFORE-THE-EVENT").pending

@@ -1,12 +1,13 @@
 """The one place a :mod:`gcp_grounding.sec_ast` AST becomes a z3 formula.
 
-Structurally modelled on :class:`gcp_grounding.constraints._CelToZ3`
-(constraints.py:129-269): a closed node set, one recursive descent, and a single
-exception type — :class:`UnsupportedTerm` — that means *abstain*. Every caller
-maps :class:`UnsupportedTerm` to ``unverified``; it never becomes a verdict.
+Structurally modelled on
+:class:`gcp_grounding.constraints._CelToZ3`: a closed node set, one recursive
+descent, and a single exception type — :class:`UnsupportedTerm` — that means
+*abstain*. Every caller maps :class:`UnsupportedTerm` to ``unverified``; it
+never becomes a verdict.
 
 This module NEVER ``import z3``. The z3 module is obtained the way the whole repo
-obtains it — ``from .constraints import _z3_module`` (constraints.py:54-57) over a
+obtains it — ``from .constraints import _z3_module`` over a
 ``from .core.solver import get_solver`` (core/solver.py:105) — by the *caller*,
 which passes the resulting module (or ``None``) in as the first argument. When
 that argument is ``None`` — the builtin backend, where ``_z3_module(solver) is
@@ -47,9 +48,9 @@ Why ``cel`` is refused in BOTH modes
 ``cel`` raises ``UnsupportedTerm("cel cannot be decided by this encoder — not
 decided")`` in both modes. It is the one node the encoder refuses, and refusing
 it is a *correctness requirement*, not a convenience. ``_CelToZ3`` mints free
-symbols ``z3.Real("request.time")`` and ``z3.String("resource.name")``
-(constraints.py:139-140) that are NOT in :func:`sec_ast.free_consts`, and two
-invariants depend on every formula's free constants being exactly that set:
+symbols ``z3.Real("request.time")`` and ``z3.String("resource.name")`` that are
+NOT in :func:`sec_ast.free_consts`, and two invariants depend on every formula's
+free constants being exactly that set:
 
 1. GROUND MODE IS ONLY SOUND ON A CLOSED FORMULA. ``sec_rules`` maps
    ``decide(obl) is True`` — sat — to ``grounded``, valid only because every

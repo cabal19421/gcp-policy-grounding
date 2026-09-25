@@ -104,10 +104,29 @@ _ORG_V2_SPEC_KEYS = ("rules", "inheritFromParent", "inherit_from_parent", "reset
 
 
 def _is_iam_deny_policy(doc: Mapping[str, Any]) -> bool:
-    """A v3 IAM *deny* policy: a non-empty top-level ``rules`` list with a
-    ``denyRule``/``deny_rule`` item. Org Policy v2 nests ``rules`` under
-    ``spec``, and Cloud Armor rule items carry ``match``/``action`` and never
-    ``denyRule`` — neither collides."""
+    """A v3 IAM *deny* policy: a ``policies/<encoded-parent>/denypolicies/<id>``
+    name, or a non-empty top-level ``rules`` list with a ``denyRule``/
+    ``deny_rule`` item. Org Policy v2 nests ``rules`` under ``spec``, and Cloud
+    Armor rule items carry ``match``/``action`` and never ``denyRule`` —
+    neither collides.
+
+    The NAME arm is what lets an emptied policy (``rules: []``, the loudest
+    removal there is) still read as a deny policy rather than as an
+    unrecognized document: recognized, its empty rule list is *captured and
+    empty*, which is the old-vs-new comparison the woken-grant arc
+    (``iam_deny_checks.check_deny_pair``) needs. The shape is matched
+    structurally — four segments, the literal ``policies`` and ``denypolicies``
+    — the same spelling ``iam_deny_checks._policy_name_node`` decodes, so it
+    cannot claim an Org Policy v2 name (``<parent>/policies/<constraint>``,
+    which :func:`detect_kind` sniffs by ``"/policies/"``) out from under that
+    arm.
+    """
+    name = doc.get("name")
+    if isinstance(name, str):
+        segments = name.split("/")
+        if (len(segments) == 4 and segments[0] == "policies"
+                and segments[2] == "denypolicies"):
+            return True
     rules = doc.get("rules")
     return (isinstance(rules, list) and len(rules) > 0
             and any(isinstance(r, Mapping) and ("denyRule" in r or "deny_rule" in r)
@@ -198,7 +217,10 @@ def detect_kind(doc: Any) -> str | None:
     those). The perimeter and firewall predicates precede the bare-``spec``
     Org Policy fallback so a perimeter or policy spec is not misread as one —
     a VPC Service Controls document carries a ``spec`` block and would
-    otherwise be misread as an Org Policy v2.
+    otherwise be misread as an Org Policy v2. The deny predicate, first of the
+    six, also reads a ``name`` (``policies/<parent>/denypolicies/<id>``): it
+    matches the whole four-segment shape rather than a substring, so it takes
+    nothing from the v2 ``"/policies/"`` name arm below it.
     """
     if not isinstance(doc, Mapping):
         return None
@@ -234,7 +256,8 @@ def detect_kind(doc: Any) -> str | None:
 
 
 def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
-                  baseline: Any = None, rules: Any = None) -> GroundingReport:
+                  baseline: Any = None, rules: Any = None, *,
+                  drift_policy: str = "") -> GroundingReport:
     """Ground one policy document end-to-end against *snapshot*.
 
     *path_or_obj* is a JSON file path (``str``/``os.PathLike``) or an
@@ -244,6 +267,16 @@ def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
     run alongside the built-in checks; ``None`` (the default) or an empty
     sequence is exactly today's behaviour. Never raises on bad input — see the
     module docstring's fail-open contract.
+
+    *drift_policy* is THE RESOLVED drift policy of this run — one of
+    :data:`gcp_grounding.drift.DRIFT_POLICIES` — and it is carried onto both the
+    check context and the rule context so the adjudicator grades under what the
+    caller decided rather than under whatever
+    :data:`gcp_grounding.registry.DRIFT_POLICY_ENV` happens to hold. The default
+    of ``""`` is "this caller resolved none", which is the library case and the
+    only one that falls back to the environment; it matters solely over a
+    :class:`~gcp_grounding.reconciled.ReconciledSnapshot`, since nothing else
+    carries provenance to adjudicate against.
     """
     report = GroundingReport()
     solver = get_solver()
@@ -290,7 +323,8 @@ def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
 
     ctx = CheckContext(snapshot=snapshot, solver=solver, document=doc,
                        document_kind=kind, source=source, claims=tuple(claims),
-                       baseline=baseline_doc, baseline_kind=baseline_kind)
+                       baseline=baseline_doc, baseline_kind=baseline_kind,
+                       drift_policy=drift_policy)
 
     existence = [c for c in claims if c.kind in EXISTENCE_KINDS]
     if existence:
@@ -346,7 +380,8 @@ def ground_policy(path_or_obj: Any, snapshot: GcpSnapshot,
                                           document_kind=kind, source=source,
                                           baseline=old_doc,
                                           estate=getattr(snapshot, "estate", None),
-                                          solver=solver)
+                                          solver=solver,
+                                          drift_policy=drift_policy)
             for rule in rules:
                 # None means "not applicable to this document kind" — adding
                 # nothing is the abstain-flood fix; a rule that should have
@@ -474,9 +509,9 @@ def _subset_verdict(doc: Mapping[str, Any], kind: str | None, solver,
     *ctx* — never re-reads the path.
 
     For IAM policies this is the z3 new⊆old comparison; for any other document
-    kind a registered :data:`~gcp_grounding.registry.PAIR_CHECKS` widening check
-    runs first, and only when there is none does the pairing record as an honest
-    ``unverified``."""
+    kind a widening check from a provider's ``PAIR_CHECKS`` table — read through
+    :func:`~gcp_grounding.registry.pair_check` — runs first, and only when there
+    is none does the pairing record as an honest ``unverified``."""
     if kind != "iam_policy":
         pair = registry.pair_check(kind)
         if pair is not None:

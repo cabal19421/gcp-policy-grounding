@@ -4,7 +4,7 @@
 — *are these two rows the same resource*. This module answers the second —
 *do they say the same thing* — and it is a separate FILE on purpose. The seam
 between the two questions is real (a key form is about names, a comparison is
-about content), and eighteen category specs plus every key form plus the whole
+about content), and nineteen category specs plus every key form plus the whole
 comparison algebra in one diff is large enough that a reviewer, human or
 otherwise, silently stops reading.
 

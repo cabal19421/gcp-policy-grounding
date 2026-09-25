@@ -92,7 +92,10 @@ A change that breaks nothing exits 0 and reads APPROVED. A `.tf.json` or `.tf`
 proposal REQUIRES a current-state or provider-schema option (`--terraform-state`,
 `--terraform-plan`, `--terraform-dir`, `--provider-schema`, a config-file
 equivalent, or an auto-detected sibling `terraform.tfstate`); rendered plan
-JSON — the form CI should use — needs none.
+JSON — the form CI should use — needs none. "REQUIRES" does not mean the tool
+refuses: with `--snapshot` alone it exits **0** headlined `PASSED — NOTHING
+VERIFIED`, with `? [document] …: document kind was not recognized` naming the
+file. Nothing was checked, so read the headline, not the exit code.
 
 ## Promises: author, compile, enforce
 

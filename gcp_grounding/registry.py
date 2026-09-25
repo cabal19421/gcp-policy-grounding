@@ -1,4 +1,4 @@
-"""The single extension seam for the twelve later grounding-domain modules.
+"""The single extension seam for the sixteen later grounding-domain modules.
 
 :func:`~gcp_grounding.preflight.ground_policy` consults this registry before
 its honest catch-all, so a domain module (VPC firewall, hierarchical firewall,
@@ -105,6 +105,15 @@ class CheckContext:
     a baseline was supplied, :attr:`baseline` is the *parsed* document (not the
     path) and :attr:`baseline_kind` its :func:`~gcp_grounding.preflight.detect_kind`
     — the baseline is read exactly once, upstream, and shared by every check.
+
+    :attr:`drift_policy` is THE RESOLVED drift policy for this run, one of
+    :data:`gcp_grounding.drift.DRIFT_POLICIES`, carried here by the caller that
+    resolved it — a flag over the environment over the config file. Empty means
+    nobody resolved one, which is the library-caller case and the only case
+    :func:`_drift_policy` reads :data:`DRIFT_POLICY_ENV` for. Carrying it beats
+    re-reading the environment down here: the CLI layer has already applied that
+    precedence, and reading the variable again in the adjudicator is what made
+    the environment outrank the flag.
     """
 
     snapshot: "GcpSnapshot"
@@ -115,6 +124,7 @@ class CheckContext:
     claims: tuple[Any, ...]
     baseline: Any = None
     baseline_kind: str | None = None
+    drift_policy: str = ""
 
 
 # -- lazy, fail-open provider discovery ---------------------------------------
@@ -218,9 +228,12 @@ def pair_check(kind: str | None) -> "Callable | None":
 # sail straight past the `None` sentinel, so the degradation this whole edit
 # rests on would be untestable and, on a real broken install, unobserved.
 
-#: Where the drift policy is configured. Unset, or set to anything
-#: :data:`gcp_grounding.drift.DRIFT_POLICIES` does not name, costs the default
-#: and a debug line — see :func:`_drift_policy`.
+#: Where a LIBRARY CALLER that resolved no policy of its own leaves one. Unset,
+#: or set to anything :data:`gcp_grounding.drift.DRIFT_POLICIES` does not name,
+#: costs the default and a debug line — see :func:`_drift_policy`. A caller that
+#: DID resolve a policy puts it on :attr:`CheckContext.drift_policy`, and that
+#: value wins: the CLI's own precedence (flag over environment over config file)
+#: is applied once, up there, and must not be re-decided down here.
 DRIFT_POLICY_ENV = "GCP_GROUNDING_DRIFT_POLICY"
 
 #: The kind of the estate-tier completeness refusal :func:`run_document_checks`
@@ -267,9 +280,15 @@ def _reconciled(snapshot: Any) -> bool:
 
 
 def _drift_policy() -> str:
-    """The drift policy for this run: :data:`DRIFT_POLICY_ENV` when it names one
+    """THE LIBRARY-CALLER FALLBACK: :data:`DRIFT_POLICY_ENV` when it names one
     of :data:`gcp_grounding.drift.DRIFT_POLICIES`, else
     :data:`gcp_grounding.drift.DEFAULT_DRIFT_POLICY`.
+
+    Consulted ONLY when the :class:`CheckContext` carries no resolved policy —
+    an in-process caller that built the context itself and never went through
+    the CLI's layered resolution. A run that DID resolve one reaches
+    :func:`_guarded_call` with ``ctx.drift_policy`` set and never gets here, so
+    ``--drift-policy`` cannot be overruled by an exported variable.
 
     An unrecognised value FALLS BACK AND LOGS AT DEBUG rather than raising: this
     runs deep inside the call stack, once per provider callable, and a bad
@@ -343,12 +362,19 @@ def _guarded_call(fn: Any, ctx: CheckContext, *args: Any) -> "list[Verdict]":
     normalisation happens INSIDE the guard so the adjudicator always receives a
     list: a provider may return None or a single Verdict, and neither is the
     iterable of verdicts ``drift.adjudicate`` re-grades.
+
+    THE POLICY COMES OFF THE CONTEXT, and :func:`_drift_policy` is only what a
+    context that carries none falls back to. Reading the environment here
+    unconditionally is what made ``--drift-policy abstain`` a no-op and an
+    exported ``GCP_GROUNDING_DRIFT_POLICY=abstain`` beat the flag that was typed
+    to prevent exactly that.
     """
     guard = _guard()
     if guard is None or not _reconciled(ctx.snapshot):
         return _as_verdicts(fn(*args))
+    policy = ctx.drift_policy or _drift_policy()
     return _as_verdicts(guard(lambda: _as_verdicts(fn(*args)), ctx.snapshot,
-                              _drift_policy(), label=_label(fn)))
+                              policy, label=_label(fn)))
 
 
 #: The two statuses that DECIDE. ``ungrounded`` and ``unverified`` are already
@@ -578,11 +604,11 @@ def _incomplete_view(snapshot: Any) -> str:
     """What is not complete about *snapshot* as a whole, or ``""``.
 
     A snapshot with no ledger is the PLAIN-``GcpSnapshot`` case and reads as
-    complete — exactly the semantics :func:`~gcp_grounding.provenance
-    .require_complete` gives it, and what keeps this gate byte-identical on the
-    single-capture path it must not disturb. A ledger that declares no category
-    at all licenses nothing, which is not the same thing and is not silently
-    read as one.
+    complete — exactly the semantics
+    :func:`~gcp_grounding.provenance.require_complete` gives it, and what keeps
+    this gate byte-identical on the single-capture path it must not disturb. A
+    ledger that declares no category at all licenses nothing, which is not the
+    same thing and is not silently read as one.
     """
     ledger = getattr(snapshot, "ledger", None)
     if ledger is None:

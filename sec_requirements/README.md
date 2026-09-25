@@ -2,8 +2,8 @@
 
 A security engineer adds an invariant to the gate by dropping a Markdown file in
 this directory. No Python. This README is the canonical description of the
-authoring format; the parser (`sx-sec-parse`) implements exactly what is written
-here, and the term language it accepts is listed below.
+authoring format; the parser (`gcp_grounding/sec_parse.py`) implements exactly
+what is written here, and the term language it accepts is listed below.
 
 ## Two stages
 
@@ -15,8 +15,8 @@ The gate turns Markdown into running z3 in two separate, auditable stages.
   review boundary: it records, for every promise, the exact Markdown sentence it
   came from, its polarity (`mode`), its tier (`state`), the vocabulary it names,
   and the typed AST. You commit this file and a reviewer reads it — it is how a
-  human sees what the gate will actually enforce. The `compiled/` directory is
-  **not** created by this task; stage 1 writes it.
+  human sees what the gate will actually enforce. Stage 1 is the only thing that
+  writes `compiled/`; nothing commits it empty.
 - **Stage 2 — evaluate.** Deterministic, LLM-free. The committed artifact is
   compiled to quantifier-free ground SMT (quantifiers are finitely unrolled over
   real records at evaluation time) and run in the same dispatch as the built-in
@@ -28,6 +28,16 @@ To (re)compile every document in this directory:
 ```bash
 gcp-ground compile-requirements
 ```
+
+**What ships here.** This directory holds `TEMPLATE.md` and this README, and
+discovery skips both — so that command over the shipped tree compiles **zero**
+documents, and `sec_requirements/compiled/` exists only once you have written a
+requirement of your own. The committed corpora to read instead are
+`tests/fixtures/gcp/sec_requirements/` (the demo corpus, including one document
+that is deliberately rejected) and the per-scenario corpora beside their
+proposals under `examples/` — `examples/walkthrough/requirements.md` is the
+smallest one, a single promise carried end to end by the root `README.md`
+section "How the gate thinks".
 
 ## Document format
 
@@ -116,23 +126,36 @@ Terms:
 
 ## Collections
 
-The base compiler ships these collections:
+This is the full registry — the four base collections the compiler ships
+(`gcp_grounding/sec_ast.py`) plus the eleven the domain layer registers
+(`gcp_grounding/sec_domains.py`), which is installed. It is the same table the
+root `README.md` prints, and a test compares both copies against the
+collections those two modules register, so neither can drift:
 
-| collection          | tier     | fields                                                      |
-| ------------------- | -------- | ---------------------------------------------------------- |
-| `iam_bindings`      | proposal | `role:Str`, `member:Str`, `condition:Str`, `has_condition:Bool` |
-| `org_policy_rules`  | proposal | `constraint:Str`, `is_list:Bool`, `enforce:Bool`, `value:Str`   |
-| `new_iam_bindings`  | pair     | same fields as `iam_bindings`                              |
-| `old_iam_bindings`  | pair     | same fields as `iam_bindings`                              |
+| Policy surface | Collection | Tier | Fields (`name:Sort`) |
+| --- | --- | --- | --- |
+| IAM allow policy | `iam_bindings` | proposal | `role:Str`, `member:Str`, `condition:Str`, `has_condition:Bool` |
+| IAM allow policy, old vs new | `new_iam_bindings` / `old_iam_bindings` | pair | same four fields |
+| IAM custom role | `proposed_role_permissions` | proposal | `role:Str`, `permission:Str` |
+| IAM deny policy (v2) | `deny_rules` | proposal | `policy:Str`, `rule_index:Int`, `denied_principal:Str`, `permission:Str`, `has_principal_exceptions:Bool`, `has_condition:Bool`, `condition:Str` |
+| IAM deny policy (v2) | `deny_rule_exceptions` | proposal | `policy:Str`, `rule_index:Int`, `exception_principal:Str` |
+| Organization Policy, per document | `org_policy_rules` | proposal | `constraint:Str`, `is_list:Bool`, `enforce:Bool`, `value:Str` |
+| Organization Policy, effective fold | `effective_org_policy_bool` | estate | `node:Str`, `constraint:Str`, `enforce:Bool` |
+| Organization Policy, effective fold | `effective_org_policy_values` | estate | `node:Str`, `constraint:Str`, `polarity:Str`, `value:Str`, `all_values:Bool` |
+| VPC firewall rule, proposed | `proposed_firewall_rules` | proposal | `name:Str`, `network:Str`, `direction:Str`, `action:Str`, `priority:Int`, `disabled:Bool`, `source_range:Cidr`, `source_range_mask:Ip4`, `destination_range:Cidr`, `destination_range_mask:Ip4`, `source_tag:Str`, `target_tag:Str`, `protocol:Proto`, `port:Port` |
+| VPC firewall rule, in the estate | `firewall_rules` | estate | the same fourteen fields |
+| Hierarchical firewall rule | `hier_firewall_rules` | estate | `policy:Str`, `node:Str`, `priority:Int`, `action:Str`, `direction:Str`, `src_range:Cidr`, `src_range_mask:Ip4`, `protocol:Proto`, `port:Port` |
+| Cloud Armor rule | `armor_rules` | proposal | `policy:Str`, `priority:Int`, `action:Str`, `preview:Bool`, `src_range:Cidr`, `src_range_mask:Ip4`, `expr:Str` |
+| VPC-SC perimeter membership | `perimeter_resources` | proposal | `perimeter:Str`, `resource:Str`, `section:Str` |
+| VPC-SC restricted services | `perimeter_restricted_services` | proposal | `perimeter:Str`, `service:Str`, `section:Str` |
 
-The domain layer (`sx-sec-domains`) registers six more once it lands —
-`proposed_firewall_rules`, `firewall_rules`, `hier_firewall_rules`,
-`armor_rules`, `perimeter_resources` and `perimeter_restricted_services`. Their
-field lists live with that task; the term language is **not** IAM-only, and a
-requirement naming one of those collections compiles once the domain layer is
-installed. Any collection registered by neither the base compiler nor the domain
-layer is unregistered, and a promise naming it is `unverified` naming the
+The term language is **not** IAM-only. Any collection in neither half of the
+registry is unregistered, and a promise naming it is `unverified` naming the
 collection — never a false pass.
+
+Every `Cidr` field declares a companion `<field>_mask` of sort `Ip4`, and a
+promise naming a `Cidr` field whose collection lacks that companion is refused
+when its AST is validated — a range without its mask is half a fact.
 
 ## The no-guessing contract
 
