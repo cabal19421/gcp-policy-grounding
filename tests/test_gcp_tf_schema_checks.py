@@ -22,6 +22,15 @@ examples style:
   finding, because the gate cannot always know which provider actuates;
 * STALENESS — a schema past the ceiling demotes every finding to an
   abstention naming the age and the recapture command.
+
+The committed demo schema carries its own ``captured_at`` (the demo estate's
+2026-07-25 era), so every run here that does not state a clock of its own is
+judged at :data:`DEMO_NOW`, the instant the README's own scenario-four commands
+pin. Judging it at the wall clock instead is what made the demo's documented
+findings decay into abstentions a week after they were authored, which is the
+defect this module must not re-introduce: the ``_clean`` fixture below drops the
+suite-wide pin, so without a stated clock these assertions would ride the
+calendar.
 """
 
 import json
@@ -31,7 +40,8 @@ from pathlib import Path
 
 import pytest
 
-from gcp_grounding import drift, provider_schema, registry, tf_schema_checks
+from gcp_grounding import (drift, freshness, provider_schema, registry,
+                           tf_schema_checks)
 from gcp_grounding.core.report import Verdict
 from gcp_grounding.core.solver import get_solver
 from gcp_grounding.knowledge import GcpSnapshot
@@ -46,6 +56,11 @@ KINDS = (tf_schema_checks.KIND_ATTRIBUTE, tf_schema_checks.KIND_BLOCK,
          tf_schema_checks.KIND_RESOURCE_TYPE, tf_schema_checks.KIND_NOTE)
 
 STAMP = "2026-08-01T00:00:00+00:00"
+
+#: The clock the README's scenario-four commands pin, restated here because the
+#: committed schema's ``captured_at`` is a fixture-era instant and this module
+#: scrubs the suite-wide pin. Any test wanting another clock states it.
+DEMO_NOW = "2026-07-25T12:00:00Z"
 
 #: A second, google-beta-only schema: the same firewall type, plus one
 #: attribute the google schema does not declare.
@@ -77,6 +92,7 @@ def _clean(monkeypatch):
 
 def install(**kw):
     kw.setdefault("paths", (str(SCHEMA),))
+    kw.setdefault("now", DEMO_NOW)
     provider_schema.activate(provider_schema.Runtime(**kw))
 
 
@@ -346,6 +362,10 @@ def test_an_unrecognized_ambient_policy_abstains_rather_than_guessing(
 
 def test_the_ambient_environment_layer_reaches_the_check(monkeypatch):
     monkeypatch.setenv(provider_schema.PROVIDER_SCHEMA_ENV, str(SCHEMA))
+    # The ambient layer carries the clock as well, and the committed schema's
+    # own captured_at is a fixture-era instant: state the era, so the finding
+    # is decided by the capture stamp rather than by the calendar.
+    monkeypatch.setenv(freshness.NOW_ENV, DEMO_NOW)
     verdicts = check(document("proposal_typo.tf.json"))
     assert [v.status for v in verdicts] == ["ungrounded"]
 
@@ -384,7 +404,9 @@ def test_a_resource_type_only_the_second_provider_defines_resolves(tmp_path):
 
 
 def _stale_schema(tmp_path):
-    raw = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    # The committed fixture is itself the documented wrapper, so the raw
+    # terraform payload — never the envelope around it — is what re-wraps here.
+    raw = json.loads(SCHEMA.read_text(encoding="utf-8"))["raw"]
     path = tmp_path / "wrapped.json"
     path.write_text(json.dumps({
         "schema": provider_schema.WRAPPER_SCHEMA, "captured_at": STAMP,

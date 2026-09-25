@@ -31,6 +31,7 @@ vacuously branched.
 
 import json
 import os
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -56,6 +57,13 @@ SNAPSHOT = FIXTURES / "agentic_snapshot.json"
 #: the tests compile it into a tmp dir instead — same artifacts, no reliance on
 #: a generated directory the repo deliberately does not track.
 SEC_CORPUS = FIXTURES / "sec_requirements"
+
+#: The scenario-four schema, for the README's "variations worth showing live",
+#: with the clock its own step-10 commands pin: the file records its capture
+#: time, so its age is a stated instant's answer and not the calendar's.
+PROVIDER_SCHEMA = (REPO_ROOT / "examples" / "terraform-schema"
+                   / "provider-schema.json")
+SCHEMA_PINNED_NOW = "2026-07-25T12:00:00Z"
 
 PROMISE_ID = "no-open-ssh-rdp-ingress"
 ADDRESS = "google_compute_firewall.allow_ssh_world"
@@ -356,6 +364,42 @@ def test_the_readme_five_flag_invocation_denies_with_the_narrative(
     # evaluates it now, or abstains for a reason of its own.
     assert "not an IAM allow policy" not in err
     assert "not an Org Policy" not in err
+
+
+@_needs_z3
+def test_the_schema_variation_adds_no_noise_to_this_scenario(compiled, capsys,
+                                                             monkeypatch):
+    """The README's "variations worth showing live": adding
+    ``--provider-schema`` to this scenario's command gains ZERO schema noise —
+    every attribute the proposal uses resolves, so the verdict counts are
+    identical with and without it, and no member of the schema family says
+    anything at all. Run under the clock step 10 pins, because the committed
+    schema records its own capture time: without a pin the one difference is the
+    ``? [tf_schema]`` line saying the capture is past the ceiling, which is a
+    statement about the fixture's age rather than about this proposal.
+
+    The counts rather than the whole report, because two runs in ONE interpreter
+    do not mint byte-identical solver witnesses (a public source address the
+    model picked can differ); across processes the reports really are identical,
+    which is what the page's own reader sees.
+    """
+    monkeypatch.setenv("GCP_GROUNDING_NOW", SCHEMA_PINNED_NOW)
+    argv = ("verify-policy", "--proposal", str(PROPOSAL),
+            "--snapshot", str(SNAPSHOT),
+            "--terraform-state", str(STATE),
+            "--requirements", str(compiled), "--explain")
+    bare_code, bare_out, _bare_err = invoke(capsys, *argv)
+    code, out, _err = invoke(capsys, *argv, "--provider-schema",
+                             str(PROVIDER_SCHEMA))
+    assert (code, bare_code) == (1, 1)
+    counts = re.compile(r"grounded=\d+ ungrounded=\d+ contradicted=\d+ "
+                        r"unverified=\d+")
+    assert counts.search(out)[0] == counts.search(bare_out)[0], (
+        "a valid configuration must gain no schema finding at all — not even "
+        "an abstention, which would change this scenario's counts")
+    for kind in ("[tf_schema]", "[tf_attribute]", "[tf_block]",
+                 "[tf_resource_type]"):
+        assert kind not in out, f"{kind} on a proposal the schema resolves"
 
 
 def test_the_narrative_caps_the_resource_list_at_twenty_lines(tmp_path, capsys):

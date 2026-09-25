@@ -1647,15 +1647,24 @@ reading them from the table below.
 | 6c | The hygiene sweep: a folder-level `reset` that reads as a no-op (step 12) | `examples/terraform-denypolicy/plan_reset_payments.json` | DENIED — `sa-key-creation-stays-effectively-enforced` refuted over the effective collection, naming the folder node and the block |
 | w | The teaching walkthrough: one promise, one REST policy, one terraform binding, every artifact quoted in "How the gate thinks" | `examples/walkthrough/policy.json`, `examples/walkthrough/proposal.tf.json` | DENIED twice — `owner-stays-inside-acme` VIOLATED over both document kinds, the refutation naming the offending row |
 
-Two variations worth showing live: rerun 4 with `--schema-policy annotate`
-(the identical finding demoted to a warning at exit 0 — the hook-warns-while-
-CI-blocks pattern), and add `--provider-schema` to scenario 1's command (a
-valid configuration gains zero schema noise — its verdict counts are
-byte-identical with and without the schema).
+Two variations worth showing live: rerun 4's command with `--schema-policy
+annotate` (the identical finding demoted to a warning at exit 0 — the
+hook-warns-while-CI-blocks pattern), and add `--provider-schema
+examples/terraform-schema/provider-schema.json` to scenario 1's command, under
+the same `GCP_GROUNDING_NOW` pin step 10 uses (a valid configuration gains zero
+schema noise — its verdict counts are byte-identical with and without the
+schema, and the whole report is; run it without the pin and the one difference
+is the `? [tf_schema]` line saying the capture is past its ceiling, which is
+the ceiling working).
 
 Steps 0–6 below are the non-terraform acts: the acceptance suite, compiling
 the promises, the REST attack, the hallucination did-you-mean, shell-command
-scanning, and the hook pair (attack blocks, benign is byte-silent).
+scanning, and the hook pair (attack blocks, benign is byte-silent). Two of them
+pin `GCP_GROUNDING_NOW` to their fixture snapshot's own capture era, and each
+says why on the line above it: the evidence those two steps are here to show is
+an existence answer read out of a frozen capture, so past the 7-day freshness
+ceiling the gate abstains by name instead — correctly, and while still exiting
+1, which is what makes a stale run look like a working one.
 
 ```bash
 # 0. The acceptance proof: the entire suite, including the agentic sessions
@@ -1684,15 +1693,24 @@ python3 show_promises.py demo/compiled
 
 # 3. Block an attack: roles/owner granted to an external attacker. Exits 1
 #    with the evidence — the principal provably absent from the snapshot,
-#    the violated domain promise, and the escalation warning.
-.venv/bin/gcp-ground verify-policy \
+#    the violated domain promise, and the escalation warning. The clock is
+#    pinned to this fixture snapshot's own capture era, because two of those
+#    three are estate reads: past the 7-day ceiling they decay into named
+#    abstentions ("existence ... is undecidable offline", "escalation classes
+#    were not decided") and the step exits 1 on the promise refutation alone.
+GCP_GROUNDING_NOW=2026-07-25T12:00:00Z .venv/bin/gcp-ground verify-policy \
     tests/fixtures/gcp/agentic/iam/A10_owner_to_external.policy.json \
     --snapshot tests/fixtures/gcp/agentic_snapshot.json \
     --requirements demo/compiled --explain
 
 # 4. Hallucination with remediation: a made-up role fails existence
-#    grounding and the report suggests the real name.
-.venv/bin/gcp-ground verify-policy tests/fixtures/gcp/policies/iam_policy_bad.json \
+#    grounding and the report suggests the real name. Pinned to ITS snapshot's
+#    era (a different fixture, captured 2026-07-18): the did-you-mean is an
+#    existence answer, so a stale capture replaces it with the abstention
+#    "snapshot did not capture roles" — while the run still exits 1 on the
+#    dead-binding [cel] finding, which is the reproduction trap this pin closes.
+GCP_GROUNDING_NOW=2026-07-18T12:00:00Z .venv/bin/gcp-ground verify-policy \
+    tests/fixtures/gcp/policies/iam_policy_bad.json \
     --snapshot tests/fixtures/gcp/snapshot.json
 
 # 5. The side-door channel, both halves. A state-mutating gcloud invocation
@@ -2131,14 +2149,26 @@ real shape; in your own repo, capture it from the init'd checkout with
 `proposal_ok.tf.json` is a clean change (a health-check firewall rule, a
 binding, a custom role), `proposal_typo.tf.json` is the same change with
 `src_ranges` for `source_ranges`, and `proposal_newer.tf.json` adds a `params`
-block the captured schema does not define. It is a raw capture, so the
-provider version is recorded as unknown — the findings say "the captured
-provider schema" and name no release:
+block the captured schema does not define. The capture ships inside the
+`gcp-provider-schema/1` envelope of "The provider schema" above, carrying
+`captured_at: 2026-07-25T08:00:00Z` — the demo estate's own era — and no
+`provider_versions`, so the provider version is still recorded as unknown and
+the findings say "the captured provider schema" and name no release. The
+envelope is what makes this scenario reproducible: `captured_at` rather than
+the file's modification time is what the freshness ceiling reads, and a tarball,
+a `git archive` export and any checkout older than the ceiling all carry the
+commit's mtimes — judged by those, the two denials below would demote to
+abstentions on every copy but a fresh clone. A stamp frozen in the file then
+needs a clock stated beside it, so the three commands pin `GCP_GROUNDING_NOW` to
+that era exactly as scenario six pins its own; run them under the wall clock
+instead and the schema is past the 7-day ceiling, which the run says out loud
+(`? [tf_schema] … past the 7 days ceiling`) while every documented exit becomes
+the ceiling's answer rather than the schema's.
 
 ```bash
 # 10a. The typo — EXPECTED TO EXIT 1: the captured provider cannot accept it,
 #      and the did-you-mean names the real attribute.
-.venv/bin/gcp-ground verify-policy \
+GCP_GROUNDING_NOW=2026-07-25T12:00:00Z .venv/bin/gcp-ground verify-policy \
     --proposal examples/terraform-schema/proposal_typo.tf.json \
     --snapshot tests/fixtures/gcp/agentic_snapshot.json \
     --provider-schema examples/terraform-schema/provider-schema.json \
@@ -2146,14 +2176,14 @@ provider schema" and name no release:
 
 # 10b. The version skew — EXPECTED TO EXIT 1 TOO, with the recapture guidance
 #      instead of a suggestion: nothing in the captured schema is close.
-.venv/bin/gcp-ground verify-policy \
+GCP_GROUNDING_NOW=2026-07-25T12:00:00Z .venv/bin/gcp-ground verify-policy \
     --proposal examples/terraform-schema/proposal_newer.tf.json \
     --snapshot tests/fixtures/gcp/agentic_snapshot.json \
     --provider-schema examples/terraform-schema/provider-schema.json \
     --explain
 
 # 10c. The clean counterpart — EXPECTED TO EXIT 0.
-.venv/bin/gcp-ground verify-policy \
+GCP_GROUNDING_NOW=2026-07-25T12:00:00Z .venv/bin/gcp-ground verify-policy \
     --proposal examples/terraform-schema/proposal_ok.tf.json \
     --snapshot tests/fixtures/gcp/agentic_snapshot.json \
     --provider-schema examples/terraform-schema/provider-schema.json \
@@ -2225,9 +2255,10 @@ command that re-decides the question against a newer capture.
 
 **10c is APPROVED (exit 0)**: every attribute and nested block resolves in the
 captured schema, so the family adds nothing — `decision recap: APPROVED (exit
-0) — grounded=8 unchecked=6` — and the abstentions are the usual
-fixture-snapshot taste (staleness, unqueried baselines, the network-existence
-abstention).
+0) — grounded=8 unchecked=5` — and the abstentions are the usual
+fixture-snapshot taste (the network-existence abstention, the firewall shadow
+the snapshot captured no rules for, the two baselines no state source covers,
+and the custom role the change itself creates).
 
 The fourth run is the one WITHOUT a schema. Configure nothing at all and the
 family is byte-silent (off-by-absence: the report only claims what it

@@ -224,7 +224,7 @@ def test_several_schemas_are_one_per_line(capsys, tmp_path):
                               str(AGENTIC_SNAPSHOT), "--provider-schema",
                               str(PROVIDER_SCHEMA), "--provider-schema",
                               str(broken), "--explain")
-    captured = json.loads(PROVIDER_SCHEMA.read_text(encoding="utf-8"))
+    captured = json.loads(PROVIDER_SCHEMA.read_text(encoding="utf-8"))["raw"]
     types = len(captured["provider_schemas"]
                 ["registry.terraform.io/hashicorp/google"]["resource_schemas"])
     assert row(err, "provider") == "2 schemas in force"
@@ -260,7 +260,7 @@ def test_the_provider_row_names_the_captured_provider_and_its_types(capsys):
                               str(SCHEMA_PROPOSAL), "--snapshot",
                               str(AGENTIC_SNAPSHOT), "--provider-schema",
                               str(PROVIDER_SCHEMA), "--explain")
-    captured = json.loads(PROVIDER_SCHEMA.read_text(encoding="utf-8"))
+    captured = json.loads(PROVIDER_SCHEMA.read_text(encoding="utf-8"))["raw"]
     types = len(captured["provider_schemas"]
                 ["registry.terraform.io/hashicorp/google"]["resource_schemas"])
     assert row(err, "provider") == \
