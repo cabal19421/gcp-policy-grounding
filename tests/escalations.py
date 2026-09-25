@@ -7,10 +7,15 @@ assertion landed under ``pytest.mark.xfail(strict=True, reason=<the escalation
 id>)``. That is a GREEN, NAMED state. Rewriting the assertion to fit the code
 instead is a review FAIL.
 
-Entries are APPEND-ONLY: an id, once published, is quoted from ``xfail``
-reasons and from module docstrings, so removing or renaming one silently
-detaches those references. An escalation is CLOSED by landing its fix and
-deleting the ``xfail`` — the entry stays, with ``closed_by`` naming the change.
+Entries are APPEND-ONLY while they are open: an id, once published, is quoted
+from ``xfail`` reasons and from module docstrings, so removing or renaming an
+open one silently detaches those references. An escalation is CLOSED by landing
+its fix and deleting the ``xfail`` — and the entry goes with it, replaced in
+place by a ``# RETIRED —`` comment that keeps the id named and records what
+landed. A node-bearing entry cannot stay: the frozen self-test walks register →
+node and demands a STRICT xfail, so keeping the entry would demand the very
+xfail the fix has just made XPASS. ``closed_by`` is a field of
+:class:`ProductEscalation` alone, whose entries carry no node.
 
 ``strict=True`` is what stops an escalation from being forgotten: the day the
 owning task lands the fix, the xfail becomes an XPASS and the suite goes RED,
@@ -621,6 +626,40 @@ ESCALATIONS: tuple[Escalation, ...] = (
         node_id=("tests/test_gcp_iam_deny_checks.py::"
                  "test_the_deny_mutation_entries_are_active_in_the_register"),
     ),
+    Escalation(
+        id="ESC-ORGEFF-REGISTER-ACTIVATION",
+        clause=("For each ACTIVE `Mutation`, call the machinery's "
+                "isolated-copy runner — a fresh `git archive` copy per entry, "
+                "`python -B`, the one-site rewrite confined to the resolved "
+                "scope span."),
+        unsatisfiable=(
+            "The fourteen MK-F entries of the effective org-policy fold anchor "
+            "in code that session landed UNCOMMITTED, and the isolated-copy "
+            "runner this clause mandates materialises a fresh `git archive` "
+            "copy, which by construction carries only what is at HEAD: an "
+            "ACTIVE entry whose `enclosing`/`before` anchor and whose "
+            "`must_fail` nodes exist nowhere in that copy reddens the frozen "
+            "flip test on every full run. So they are seeded PARKED DATA "
+            "(tests/mutation_entries.py ORG_EFFECTIVE_ENTRIES) rather than in "
+            "ENTRIES, each MEASURED per the register's doctrine with the one "
+            "substitution the deny twelve already recorded under "
+            "ESC-DENY-REGISTER-ACTIVATION (a copy of the WORKING TREE instead "
+            "of the archive, unmutated copy green over the 14-node union, each "
+            "mutant applied alone through tests.mutation_contract.mutate, "
+            "every named node observed FAILED via -rA). Moving "
+            "ORG_EFFECTIVE_ENTRIES into ENTRIES once that work is at HEAD is "
+            "what closes this: the node below then XPASSes and forces this "
+            "entry to be retired deliberately. The clause is quoted from "
+            "designs/gcp-gx-fixes.md, which is where the register's "
+            "isolated-copy doctrine is written, because the effective "
+            "org-policy design that raised this is not among the documents "
+            "`designs/` carries — ESC-GX-SPEC-001 records why that corpus "
+            "cannot be relied on to hold one."
+        ),
+        owner_task="fx-org-effective",
+        node_id=("tests/test_gcp_org_effective.py::"
+                 "test_the_org_effective_mutation_entries_are_active_in_the_register"),
+    ),
 )
 
 
@@ -925,7 +964,14 @@ PRODUCT_ESCALATIONS = PRODUCT_ESCALATIONS + _DENY_SCOPE_NOTES
 # tests/test_gcp_iam_deny_checks.py, tests/test_gcp_agentic_deny.py);
 # ESC-DENY-REGISTER-ACTIVATION is raised against its mutation-entry activation
 # and no task of gcp-gx-fixes.md owns those modules.
+#
+# `fx-org-effective` is the owner recorded on every MK-F entry
+# (tests/mutation_entries.py ORG_EFFECTIVE_ENTRIES), from the effective
+# org-policy design that owns gcp_grounding/org_effective.py and
+# tests/test_gcp_org_effective.py; ESC-ORGEFF-REGISTER-ACTIVATION is raised
+# against that activation and no task of gcp-gx-fixes.md owns those modules.
 OUT_OF_DOCUMENT_OWNER_TASKS: frozenset[str] = frozenset({
     "tx-agentic-tf-benign",
     "gx-iam-deny-pair",
+    "fx-org-effective",
 })

@@ -217,7 +217,7 @@ TOOL_INPUT_KEYS = ("baseline_target", "target", "resource", "resource_name")
 #: always available, and a verdict that says only "no baseline" teaches nobody
 #: how to get one.
 REMEDIES = (
-    "pass the target explicitly (the --baseline-target flag)",
+    "pass the target explicitly (the --target DOMAIN:KEY flag)",
     "add an entry for this file to the config file's targets map",
     "invoke the tool with the resource in its input",
 )
