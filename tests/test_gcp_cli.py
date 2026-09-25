@@ -649,9 +649,13 @@ def test_the_json_document_keeps_two_space_indent_and_real_unicode(
     assert "promises in force (" not in err
     missing = [r for r in harness_records
                if "sec evidence channel is unavailable" in r.getMessage()]
-    # Both users of the channel say so, and truthiness is the assertion:
+    # EVERY user of the channel says so, and truthiness is the assertion:
     # logging leaves `exc_info` FALSE, never None, when the call passed False.
-    assert len(missing) == 2 and all(r.exc_info for r in missing)
+    # Three of them now — the json document, the narrative's promise block, and
+    # the summary row's not-checked markers, which read the channel's own
+    # cross-reference rather than deriving a second answer to "was this promise
+    # evaluated".
+    assert len(missing) == 3 and all(r.exc_info for r in missing)
 
 
 # -- no phantom helper survives here ------------------------------------------
