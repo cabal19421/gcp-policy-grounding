@@ -1448,7 +1448,14 @@ def _eval_options(args: argparse.Namespace, settings: discovery.Settings,
     ``drift`` crosses one vocabulary boundary here and nowhere else: the loading
     side speaks :data:`gcp_grounding.drift.DRIFT_POLICIES` (annotate / block /
     abstain) and the engine speaks :data:`gcp_grounding.engine.DRIFT_MODES`
-    (report / block). Only ``block`` means the same thing in both.
+    (report / block). Only ``block`` means the same thing in both — which is why
+    the RESOLVED POLICY TRAVELS TOO, on ``drift_policy``: ``abstain`` has no
+    spelling in the two-value mode, and the taint adjudicator that implements it
+    would otherwise re-read ``$GCP_GROUNDING_DRIFT_POLICY`` and let the
+    environment beat the flag. ``settings.options`` has already applied this
+    run's precedence (flag over environment over config file), so resolving it
+    once here is what makes the documented order true for both halves of the
+    flag.
     """
     options = settings.options
     max_age = freshness.parse_duration(options.max_age) \
@@ -1458,6 +1465,7 @@ def _eval_options(args: argparse.Namespace, settings: discovery.Settings,
         as_of=options.now,
         max_age_seconds=None if max_age is None else int(max_age.total_seconds()),
         drift="block" if policy == "block" else engine.DEFAULT_DRIFT_MODE,
+        drift_policy=policy,
         auto_baseline=not getattr(args, "no_auto_baseline", False),
         hints=_hints(settings, path))
 
@@ -1529,11 +1537,13 @@ def _ground_routed(args: argparse.Namespace, settings: discovery.Settings,
     state-source verdict is added to the report, and the rule set carries the
     compiled requirements the engine will not load for itself.
     """
+    policy = settings.options.drift_policy or drift.DEFAULT_DRIFT_POLICY
     if not _state_configured(settings):
         snapshot, stale, problem = _snapshot_only_freshness(settings, snapshot)
         if problem is not None:
             return _Ground(report=GroundingReport(), problem=problem)
-        report = ground_policy(path, snapshot, baseline=args.baseline, rules=rules)
+        report = ground_policy(path, snapshot, baseline=args.baseline, rules=rules,
+                               drift_policy=policy)
         # The carry verdicts are what keeps a rejected or unverified promise
         # visible: without them a requirement that did not run is
         # indistinguishable from one that passed.
@@ -1578,7 +1588,8 @@ def _ground_routed(args: argparse.Namespace, settings: discovery.Settings,
     elif error is not None:
         # There is no proposal to prepare. The one loader's fail-open shape is
         # still the honest answer, and it already says what could not be read.
-        report = ground_policy(path, snapshot, baseline=args.baseline, rules=rules)
+        report = ground_policy(path, snapshot, baseline=args.baseline, rules=rules,
+                               drift_policy=policy)
         for verdict in carried:
             report.add(verdict)
         return _Ground(report=_finish_report(report, current.snapshot or snapshot,
