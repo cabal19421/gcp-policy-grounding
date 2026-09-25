@@ -238,13 +238,54 @@ def resolve_now(explicit: Any = None,
 
 
 def _describe(delta: timedelta) -> str:
-    """*delta* in whole days, or in whole hours when it is under a day."""
+    """A MEASURED age: *delta* in whole days, or in whole hours when it is
+    under a day. Whole units are the right resolution for an age, where the
+    reader wants the order of magnitude and not the remainder.
+
+    A CONFIGURED ceiling is the other case and takes :func:`_describe_limit`:
+    rounding a number the operator typed renames it.
+    """
     seconds = int(delta.total_seconds())
     if seconds >= DURATION_UNITS["d"]:
         days = seconds // DURATION_UNITS["d"]
         return f"{days} day{'' if days == 1 else 's'}"
     hours = seconds // DURATION_UNITS["h"]
     return f"{hours} hour{'' if hours == 1 else 's'}"
+
+
+#: The ladder :func:`_describe_limit` walks, largest unit first, paired with
+#: the English for each. ``w`` is deliberately absent: the one ceiling every
+#: surface in the tree quotes is :data:`MAX_AGE_DEFAULT`, and "7 days" is the
+#: spelling the operator configured and the documentation carries — naming it
+#: "1 week" would rename the default to fix a rounding bug in the others.
+_LIMIT_UNITS = (("d", "day"), ("h", "hour"), ("m", "minute"), ("s", "second"))
+
+
+def _describe_limit(delta: timedelta) -> str:
+    """A CONFIGURED ceiling, named in the largest unit that divides it
+    EXACTLY: ``36h`` stays "36 hours" and ``90m`` stays "90 minutes".
+
+    :func:`_describe` cannot render a ceiling, and the failure is not
+    cosmetic: it floors to whole days or whole hours, so ``--max-age 36h``
+    reads back as "1 day" — a ceiling the operator did not configure and,
+    worse, a tighter one than the gate is actually applying. Under an hour it
+    floors to "0 hours", which reads as no ceiling at all.
+
+    Exactness is what keeps the rendering faithful without inventing a
+    multi-unit grammar: a duration is named in one unit or in seconds, never
+    in a unit it does not fill. A ceiling with a remainder in no unit at all
+    (``90s``) is named in seconds, which is what the operator could have
+    typed.
+    """
+    seconds = int(delta.total_seconds())
+    for suffix, noun in _LIMIT_UNITS:
+        unit = DURATION_UNITS[suffix]
+        if seconds >= unit and seconds % unit == 0:
+            count = seconds // unit
+            return f"{count} {noun}{'' if count == 1 else 's'}"
+    # Zero (and anything below it) fills no unit: "0 seconds" is the ceiling
+    # that was configured, and it says so — nothing can be fresh under it.
+    return f"{seconds} second{'' if seconds == 1 else 's'}"
 
 
 def _annotate(existing: str, addition: str) -> str:
@@ -326,7 +367,9 @@ def check_freshness(ledger: SourceLedger, *, now: datetime,
     if not _is_aware(now):
         raise ValueError(f"check_freshness(now={now!r}) needs an AWARE datetime; "
                          f"resolve it through resolve_now(), which refuses a naive one")
-    limit = _describe(max_age)
+    # The CEILING is named faithfully (_describe_limit); the AGES below are
+    # measured, and whole units are the right resolution for those.
+    limit = _describe_limit(max_age)
     verdicts: list[Verdict] = []
     for source_id in sorted(ledger.sources):
         record = ledger.sources[source_id]
