@@ -649,6 +649,51 @@ def test_the_json_document_keeps_two_space_indent_and_real_unicode(
     assert "promises in force (" not in err
     missing = [r for r in harness_records
                if "sec evidence channel is unavailable" in r.getMessage()]
-    # Both users of the channel say so, and truthiness is the assertion:
+    # EVERY user of the channel says so, and truthiness is the assertion:
     # logging leaves `exc_info` FALSE, never None, when the call passed False.
-    assert len(missing) == 2 and all(r.exc_info for r in missing)
+    # Three of them now — the json document, the narrative's promise block, and
+    # the summary row's not-checked markers, which read the channel's own
+    # cross-reference rather than deriving a second answer to "was this promise
+    # evaluated".
+    assert len(missing) == 3 and all(r.exc_info for r in missing)
+
+
+# -- no phantom helper survives here ------------------------------------------
+
+
+def test_every_module_level_def_in_cli_is_named_somewhere_besides_its_own_def():
+    """Audit row R30 found a one-line wrapper returning
+    `_collection_reading(...)[0]` — in no `__all__`, reachable by no name, and
+    named exactly once in the whole tree: its own `def`. It was deleted, and this
+    is what stops the next one living here unnoticed. (The row names it; this
+    docstring does not, because a mention here would be the second one and would
+    hide exactly the defect this asserts.)
+
+    A def is judged by MENTIONS, not by import graph: one occurrence of the name
+    across every tracked `.py`, `.md`, `.sh` and `.toml` in the repo means only
+    the definition mentions it — a string dispatch, an entry point in
+    `pyproject.toml`, a documented name or a test all count as a reader. This is
+    cli.py's own pin because that is the module the row is about; the package's
+    three other dead members were public methods, and each is now exercised by a
+    test of its own.
+    """
+    import ast
+
+    texts = []
+    for pattern in ("gcp_grounding/**/*.py", "tests/**/*.py", "*.py", "*.md",
+                    "*.sh", "*.toml", "sec_requirements/*.md", "examples/**/*.md"):
+        for path in sorted(REPO_ROOT.glob(pattern)):
+            if path.is_file():
+                texts.append(path.read_text(encoding="utf-8", errors="replace"))
+    assert len(texts) > 150, "the mention sweep read almost nothing"
+
+    source = (REPO_ROOT / "gcp_grounding" / "cli.py").read_text(encoding="utf-8")
+    orphans = []
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if sum(text.count(node.name) for text in texts) <= 1:
+                orphans.append(f"cli.py:{node.lineno} {node.name}")
+    assert not orphans, (
+        f"module-level defs nothing names: {orphans}. Either a caller was lost "
+        "with a refactor, or the def is dead and goes with it — a private "
+        "wrapper no name reaches is not API.")

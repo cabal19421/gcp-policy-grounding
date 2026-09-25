@@ -171,6 +171,34 @@ def test_a_lone_string_path_is_one_path_not_its_characters():
     assert sources.SourceOptions(terraform_dir="/tf").terraform_dir == ("/tf",)
 
 
+def test_any_source_is_configured_as_a_boolean_and_zero_is_not_an_error():
+    """``SourceOptions`` is exported and ``any_source`` is public, and until audit
+    row R29 nothing read it — so its docstring's two claims ("whether ANY source
+    is configured", "zero is not an error") were true of ``bool(configured())``
+    and asserted nowhere.
+
+    Both are pinned here, on every source kind one at a time, because that is the
+    axis a new field can silently miss: a kind that lands in ``configured()``
+    without reaching this property would make the same options read "no source"
+    to a caller that asks this way and "one source" to the callers that ask
+    ``configured()`` directly. And the no-source case is False rather than a
+    raise, which is what "zero is not an error" means.
+    """
+    assert sources.SourceOptions().any_source is False, "zero is not an error"
+    assert sources.SourceOptions().configured() == ()
+    for field, value in (("primary", "/estate.json"), ("extra", ("/more.json",)),
+                         ("terraform_state", ("/s.tfstate",)),
+                         ("terraform_plan", ("/p.json",)),
+                         ("terraform_dir", ("/tf",))):
+        options = sources.SourceOptions(**{field: value})
+        assert options.any_source is True, field
+        assert options.any_source is bool(options.configured()), field
+    # A provider schema is deliberately NOT a current-state source, so it does
+    # not make this True — the same exclusion `configured()` records.
+    schema_only = sources.SourceOptions(provider_schema=("/schema.json",))
+    assert schema_only.any_source is False and schema_only.configured() == ()
+
+
 # -- the sidecar location -----------------------------------------------------
 
 

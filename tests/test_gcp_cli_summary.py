@@ -224,7 +224,7 @@ def test_several_schemas_are_one_per_line(capsys, tmp_path):
                               str(AGENTIC_SNAPSHOT), "--provider-schema",
                               str(PROVIDER_SCHEMA), "--provider-schema",
                               str(broken), "--explain")
-    captured = json.loads(PROVIDER_SCHEMA.read_text(encoding="utf-8"))
+    captured = json.loads(PROVIDER_SCHEMA.read_text(encoding="utf-8"))["raw"]
     types = len(captured["provider_schemas"]
                 ["registry.terraform.io/hashicorp/google"]["resource_schemas"])
     assert row(err, "provider") == "2 schemas in force"
@@ -260,7 +260,7 @@ def test_the_provider_row_names_the_captured_provider_and_its_types(capsys):
                               str(SCHEMA_PROPOSAL), "--snapshot",
                               str(AGENTIC_SNAPSHOT), "--provider-schema",
                               str(PROVIDER_SCHEMA), "--explain")
-    captured = json.loads(PROVIDER_SCHEMA.read_text(encoding="utf-8"))
+    captured = json.loads(PROVIDER_SCHEMA.read_text(encoding="utf-8"))["raw"]
     types = len(captured["provider_schemas"]
                 ["registry.terraform.io/hashicorp/google"]["resource_schemas"])
     assert row(err, "provider") == \
@@ -959,7 +959,13 @@ def test_the_promises_row_agrees_with_the_promises_block(capsys, tmp_path):
     """One count of what enforces, shared with the block above it: the summary
     reads the same rules and the same carry verdicts, so it cannot call a
     promise enforcing that the block called stalled. The ids are no longer on
-    the row — they are the block below it, one per line."""
+    the row — they are the block below it, one per line.
+
+    RE-PINNED for R47: the row used to read ``6 enforcing, 2 not`` over a run
+    that put three of those six to no document at all, which is the audit's
+    finding. The not-checked clause is now part of the count, and it is what
+    the block below marks.
+    """
     compiled = compiled_requirements(tmp_path)
     capsys.readouterr()
     _code, _out, err = invoke(capsys, "verify-policy", str(A10_POLICY),
@@ -967,26 +973,38 @@ def test_the_promises_row_agrees_with_the_promises_block(capsys, tmp_path):
                               "--requirements", str(compiled), "--explain")
     assert "promises in force (6 enforcing, 2 not" in err
     assert row(err, "promises in force") == \
-        f"6 enforcing, 2 not — from {compiled} [cli]"
+        f"6 enforcing (3 not checked), 2 not — from {compiled} [cli]"
 
 
 @_needs_z3
 def test_each_promise_in_force_gets_a_line_and_the_authors_own_sentence(
         capsys, tmp_path):
     """One line per enforcing promise, ids sorted, and under each the sentence
-    the artifact stored — verbatim, compared against the artifact itself."""
+    the artifact stored — verbatim, compared against the artifact itself.
+
+    RE-PINNED for R47: the three promises whose domain this IAM document does
+    not cover used to print bare here while the narrative five lines above
+    called them ``not checked``. They keep their place in the id order and
+    their author's sentence — a promise in force this run did not reach is not
+    a promise that stopped enforcing — and carry the narrative's own marker.
+    """
     compiled = compiled_requirements(tmp_path)
     capsys.readouterr()
     _code, _out, err = invoke(capsys, "verify-policy", str(A10_POLICY),
                               "--snapshot", str(AGENTIC_SNAPSHOT),
                               "--requirements", str(compiled), "--explain")
     stored = stored_sentences(compiled)
+    # The three that no IAM document can reach: a firewall, a perimeter and an
+    # org-policy promise.
+    unchecked = {"no-open-ssh-rdp-ingress", "perimeter-restricts-storage",
+                 "sa-key-creation-disabled"}
     enforcing = ["impersonation-sre-only", "no-open-ssh-rdp-ingress",
                  "no-primitive-roles-outside-domain", "no-public-principals",
                  "perimeter-restricts-storage", "sa-key-creation-disabled"]
     expected = []
     for promise_id in enforcing:
-        expected.append(f"      {promise_id}")
+        marker = "not checked  " if promise_id in unchecked else ""
+        expected.append(f"      {marker}{promise_id}")
         expected.append(f"        “{stored[promise_id]}”")
     assert promise_block(err)[:len(expected)] == expected
 

@@ -339,14 +339,14 @@ def test_every_awaiting_owner_is_recorded_and_never_a_typo():
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=("ESC-GX-SPEC-002: SA-SECAST-CALLED-ONCE is owned by sx-sec-ast, a "
-            "task of the PREDECESSOR design document, so no task id in "
-            "gcp-gx-fixes.md can own it"),
-)
 def test_every_awaiting_owner_is_a_task_in_this_document():
-    """The clause-literal assertion, landed strict-xfailed per house rule 4."""
+    """The clause-literal assertion, LIVE since ESC-GX-SPEC-002 was retired.
+
+    It was landed strict-xfailed per house rule 4 while SA-SECAST-CALLED-ONCE
+    was awaited under `sx-sec-ast`, a task of the predecessor design document.
+    That predicate is present now, so the entry left AWAITING, the escalation
+    XPASSed its way out of the register, and the clause holds as written.
+    """
     stray = sorted({owner for _, owner in AWAITING} - set(TASK_IDS))
     assert not stray, f"owners outside designs/gcp-gx-fixes.md: {stray}"
 

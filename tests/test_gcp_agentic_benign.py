@@ -67,9 +67,11 @@ pinned is stated in the corpus README and beside the proposal instead.
 
 from __future__ import annotations
 
+import ast
 import io
 import json
 import os
+import re
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
@@ -741,3 +743,74 @@ def _render(session, *, noisy_only: bool = False, degraded: bool = False) -> str
         blocks.append(f"--- {turn_id} ({result.proposal.tool_name} "
                       f"{result.proposal.rel_path})\n{outcome}")
     return "\n".join(blocks) or "(no turns)"
+
+
+# -- the corpus a reviewer reads ----------------------------------------------
+
+
+#: A ``| n | file | lands as | why |`` row of the corpus README's table.
+_CORPUS_ROW = re.compile(r"^\|\s*(\d+)\s*\|([^|]*)\|([^|]*)\|([^|]*)\|\s*$")
+
+
+def _corpus_table() -> list[tuple[int, str, str]]:
+    """The corpus README's table as ``(n, file, lands as)``, parsed here rather
+    than trusted: it is the document the reviewer reads instead of the script."""
+    rows = []
+    for line in (BENIGN_DIR / "README.md").read_text(encoding="utf-8").splitlines():
+        cells = _CORPUS_ROW.match(line)
+        if cells is not None:
+            rows.append((int(cells.group(1)),
+                         cells.group(2).replace("`", "").strip(),
+                         cells.group(3).replace("`", "").strip()))
+    return rows
+
+
+def _script_payload_names() -> list[str]:
+    """The payload file names :data:`BENIGN_SCRIPT` loads, in script order.
+
+    Read off this module's own source because ``payload()`` returns the parsed
+    document and keeps no name on the ``Proposal`` it builds — so the name is
+    only in the call, and the call is the thing the table must agree with.
+    """
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    for node in tree.body:
+        targets = list(getattr(node, "targets", []))
+        if isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        if not any(isinstance(t, ast.Name) and t.id == "BENIGN_SCRIPT"
+                   for t in targets):
+            continue
+        loaded = [(call.lineno, call.args[0].value) for call in ast.walk(node)
+                  if isinstance(call, ast.Call)
+                  and isinstance(call.func, ast.Name) and call.func.id == "payload"]
+        return [name for _, name in sorted(loaded)]
+    raise AssertionError("BENIGN_SCRIPT is not a module-level assignment here")
+
+
+def test_the_corpus_readme_table_names_exactly_the_payloads_the_script_loads():
+    """The corpus README's own claim, asserted: "Every document in this directory
+    is a payload of the twelve-proposal script".
+
+    It did not hold of the README itself — of the 157 files under
+    ``tests/fixtures/``, that one was the only one no test opened and no child's
+    argv named (audit row R49), so its twelve-row table was the one description
+    of this corpus that nothing graded. A file renamed on one side, a row
+    reordered, or a payload dropped from the script would have left the table
+    reading plausibly and describing a corpus that is not there.
+
+    Three columns, three agreements: the row numbers are the script's turns in
+    order, the ``file`` column is exactly what ``payload()`` loads, and the
+    ``lands as`` column is exactly each proposal's ``rel_path``. The directory
+    itself is compared too, so a committed document no row names is caught from
+    the other side.
+    """
+    table = _corpus_table()
+    assert [n for n, _, _ in table] == list(range(1, len(BENIGN_SCRIPT) + 1)), (
+        f"the table's rows are not the script's {len(BENIGN_SCRIPT)} turns in "
+        f"order: {[n for n, _, _ in table]}")
+    assert [name for _, name, _ in table] == _script_payload_names()
+    assert [lands for _, _, lands in table] == [p.rel_path for p in BENIGN_SCRIPT]
+    committed = {p.name for p in BENIGN_DIR.iterdir()} - {"README.md"}
+    assert committed == set(_script_payload_names()), (
+        f"committed but named by no row: {sorted(committed - set(_script_payload_names()))}; "
+        f"named but not committed: {sorted(set(_script_payload_names()) - committed)}")

@@ -884,15 +884,17 @@ def test_a_dry_run_removal_traces_the_projects_that_leave_enforcement(
     assert_not_silently_dropped(report, REMOVED_SERVICE)
 
 
-@pytest.mark.xfail(strict=True, reason="ESC-GX-VPCSC-REMOVAL-CEILING: all three "
-                   "removals KILL — every named node measured FAILED under its "
-                   "mutant and PASSED on clean source — but the frozen spawn "
-                   "ceiling has zero headroom, so flipping an already-counted "
-                   "Removal live overflows it by one child apiece")
 def test_the_vpcsc_removals_are_live_in_the_contract():
     """The clause, landed literally: the removals that take this domain and its
     record-level guard away must REDDEN named cases, which they can only do
-    through the gate once they stop being ``pending``."""
+    through the gate once they stop being ``pending``.
+
+    It was strict-xfailed under ESC-GX-VPCSC-REMOVAL-CEILING, which recorded all
+    three as measured kills — every named node FAILED under its mutant and PASSED
+    on clean source — held out by the spawn ceiling's zero headroom alone. Audit
+    row R43 corrected ``CONTRACT_CONTROL_SPAWNS`` to the 21 controls the contract
+    really spends, the rescale that escalation named, so all three are live.
+    """
     from tests.mutation_entries import REMOVALS
 
     pending = [r.id for r in REMOVALS

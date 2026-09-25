@@ -266,7 +266,7 @@ FROZEN_PATH_EDITS: tuple[FrozenPathEdit, ...] = (
     FrozenPathEdit(
         path="tests/spec_assertions.py",
         branch_blob="1ffd5c2d8d59a65aff0339c48b1ff8545d71e285",
-        head_blob="2e1872219fa427d9f93a85793e813d0a5d0cf9de",
+        head_blob="4883eccfb20aaf28a86f2945a248a26605b6cd9a",
         commit="3ddf1e2fd79bde581afd4b718b6f36a682385dfe",
         what_changed=(
             "TASK_IDS loses `gx-mutation-contract` and gains its four AMENDMENT-4 "
@@ -274,7 +274,18 @@ FROZEN_PATH_EDITS: tuple[FrozenPathEdit, ...] = (
             "comment recording why. Every predicate in the register, including "
             "test_task_ids_are_a_subset_of_the_documents_own_task_ids itself, is "
             "textually untouched — only that one frozenset entry and the comment "
-            "differ from the blob the branches carry."
+            "differ from the blob the branches carry. SECOND EDIT, recorded here "
+            "rather than left for the self-test to find: "
+            "`fix-tests-and-registers` removed the one AWAITING pair "
+            "('SA-SECAST-CALLED-ONCE', 'sx-sec-ast') and emptied "
+            "OUT_OF_DOCUMENT_OWNERS, leaving a comment in each place. That is the "
+            "REGISTER RECORDING A PREDICATE THAT LANDED and not a weakening: "
+            "audit row R03 found tests/test_gcp_sec_ast.py asserting "
+            "`calls[\"n\"] <= 1`, which zero calls satisfy, and the entry's own "
+            "`predicate` field names the strict `calls[\"n\"] == 1` that has now "
+            "landed verbatim. AWAITING may only SHRINK and did (15 -> 14, under "
+            "a ceiling of 15); every other predicate, including the AWAITING "
+            "rules themselves, is textually untouched."
         ),
         why_open=(
             "BOTH available resolutions are forbidden here, which is why this is "
@@ -285,14 +296,26 @@ FROZEN_PATH_EDITS: tuple[FrozenPathEdit, ...] = (
             "PRE-EXISTING red that belongs to agent/gx-spec-register, reproduced "
             "by checking the blob out and running the module. (2) Landing that "
             "assertion under xfail(strict=True) per house rule 4 requires editing "
-            "tests/test_gcp_spec_assertions.py, which is frozen too and is "
-            "byte-identical to its single branch blob today — trading one frozen "
-            "path for another. The register's own docstring rules out the third "
+            "tests/test_gcp_spec_assertions.py, which is frozen too — trading one "
+            "frozen path for another. (That file WAS byte-identical to its single "
+            "branch blob when this was written and is not any more: the second "
+            "edit below is what retired the strict xfail it carried, so the trade "
+            "is now a thing that happened under a design that asked for it, not a "
+            "hypothetical this entry refuses.) The register's own docstring rules "
+            "out the third "
             "option in as many words: 'Editing this register is not one of the "
             "options: it is a frozen acceptance path.' What was done instead — "
             "editing the DATA the frozen assertion inspects until it passes — "
             "leaves the assertion intact and replaces its subject, and that is "
-            "not a resolution an integrator may take on its own authority."
+            "not a resolution an integrator may take on its own authority. "
+            "THE SECOND EDIT IS OPEN FOR A DIFFERENT AND SMALLER REASON: it is "
+            "not a divergence anyone has to resolve. The register's own rule for "
+            "an AWAITING pair is 'PRESENCE ALWAYS WINS', the predicate is present, "
+            "and the task text of designs/gcp-audit-fixes.md asks for exactly this "
+            "in as many words ('retires the AWAITING spec entry'). It is recorded "
+            "because the path is frozen and the blob moved, which is the only "
+            "thing this register measures — not because anything about it is "
+            "unresolved."
         ),
         what_closes=(
             "Either owner acts: the design document declares `gx-mutation-contract` "
@@ -300,7 +323,10 @@ FROZEN_PATH_EDITS: tuple[FrozenPathEdit, ...] = (
             "already satisfies), or agent/gx-spec-register — the branch that owns "
             "this register and on which the failure is already red — lands the "
             "successor ids itself. Until one of those, the divergence stays "
-            "recorded here and the operator is the one who decides."
+            "recorded here and the operator is the one who decides. The second "
+            "edit closes when the freeze does: it asks nothing of anyone, so the "
+            "day tests/spec_assertions.py stops being a frozen acceptance path "
+            "this entry is retired whole rather than updated again."
         ),
     ),
 )

@@ -25,13 +25,18 @@ class SubprocessBudget:
     #: RE-DERIVED FOR THE INTEGRATED SUITE. 260 was the ceiling measured when
     #: this counter landed, against the agentic modules that existed on ONE
     #: branch. The integrated tree carries nineteen spawn-using modules, each
-    #: sized under its own MODULE_SPAWN_CAP, and their union measures 408 spawns
-    #: in a full run that still completes in well under a minute — so the
-    #: property this ceiling exists to protect (the full run stays a usable
-    #: oracle) holds, while the old number cannot be met by any subset of the
-    #: modules without deleting cases. The ceiling is therefore the measured
-    #: integrated total plus headroom, and it still BITES: it is a hard aggregate
-    #: cap, and each module's own teardown cap is unchanged and unrelaxed.
+    #: sized under its own MODULE_SPAWN_CAP, and their union measures 474 spawns
+    #: against the 488 below — MEASURED 2026-09-25 by instrumenting a full run,
+    #: which still completes in well under two minutes — so the property this
+    #: ceiling exists to protect (the full run stays a usable oracle) holds,
+    #: while the old number cannot be met by any subset of the modules without
+    #: deleting cases. (That measured total read 408 here for as long as the
+    #: per-raise accounting below was kept up and the absolute was not: audit
+    #: row R25. It is a MEASUREMENT, dated, with no in-process oracle — the
+    #: accounting underneath it is what a diff is held to.) The ceiling is
+    #: therefore the measured integrated total plus headroom, and it still
+    #: BITES: it is a hard aggregate cap, and each module's own teardown cap is
+    #: unchanged and unrelaxed.
     #: 450 -> 466 when tx-agentic-tf-block (8 spawns) and tx-agentic-tf-drift
     #: (6) landed: the measured total moved to 456, and the ceiling moved by
     #: exactly the two modules' declared budgets plus two of headroom.

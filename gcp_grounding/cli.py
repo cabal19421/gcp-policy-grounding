@@ -1112,7 +1112,7 @@ def _cmd_verify_policy(args: argparse.Namespace) -> int:
     # render is the one a person reads off a terminal.
     print(rendered if args.format == "json" else terminal.present(rendered,
                                                                   sys.stdout))
-    if args.state_explain is not None:
+    if args.state_explain is not None and not _state_explain_is_a_repeat(args):
         _show("\n".join(_state_explain_lines(ground, settings, args.state_explain)),
               sys.stderr)
     _incomplete_notice(ground, settings, hook=False)
@@ -1448,7 +1448,14 @@ def _eval_options(args: argparse.Namespace, settings: discovery.Settings,
     ``drift`` crosses one vocabulary boundary here and nowhere else: the loading
     side speaks :data:`gcp_grounding.drift.DRIFT_POLICIES` (annotate / block /
     abstain) and the engine speaks :data:`gcp_grounding.engine.DRIFT_MODES`
-    (report / block). Only ``block`` means the same thing in both.
+    (report / block). Only ``block`` means the same thing in both — which is why
+    the RESOLVED POLICY TRAVELS TOO, on ``drift_policy``: ``abstain`` has no
+    spelling in the two-value mode, and the taint adjudicator that implements it
+    would otherwise re-read ``$GCP_GROUNDING_DRIFT_POLICY`` and let the
+    environment beat the flag. ``settings.options`` has already applied this
+    run's precedence (flag over environment over config file), so resolving it
+    once here is what makes the documented order true for both halves of the
+    flag.
     """
     options = settings.options
     max_age = freshness.parse_duration(options.max_age) \
@@ -1458,6 +1465,7 @@ def _eval_options(args: argparse.Namespace, settings: discovery.Settings,
         as_of=options.now,
         max_age_seconds=None if max_age is None else int(max_age.total_seconds()),
         drift="block" if policy == "block" else engine.DEFAULT_DRIFT_MODE,
+        drift_policy=policy,
         auto_baseline=not getattr(args, "no_auto_baseline", False),
         hints=_hints(settings, path))
 
@@ -1529,11 +1537,13 @@ def _ground_routed(args: argparse.Namespace, settings: discovery.Settings,
     state-source verdict is added to the report, and the rule set carries the
     compiled requirements the engine will not load for itself.
     """
+    policy = settings.options.drift_policy or drift.DEFAULT_DRIFT_POLICY
     if not _state_configured(settings):
         snapshot, stale, problem = _snapshot_only_freshness(settings, snapshot)
         if problem is not None:
             return _Ground(report=GroundingReport(), problem=problem)
-        report = ground_policy(path, snapshot, baseline=args.baseline, rules=rules)
+        report = ground_policy(path, snapshot, baseline=args.baseline, rules=rules,
+                               drift_policy=policy)
         # The carry verdicts are what keeps a rejected or unverified promise
         # visible: without them a requirement that did not run is
         # indistinguishable from one that passed.
@@ -1578,7 +1588,8 @@ def _ground_routed(args: argparse.Namespace, settings: discovery.Settings,
     elif error is not None:
         # There is no proposal to prepare. The one loader's fail-open shape is
         # still the honest answer, and it already says what could not be read.
-        report = ground_policy(path, snapshot, baseline=args.baseline, rules=rules)
+        report = ground_policy(path, snapshot, baseline=args.baseline, rules=rules,
+                               drift_policy=policy)
         for verdict in carried:
             report.add(verdict)
         return _Ground(report=_finish_report(report, current.snapshot or snapshot,
@@ -1682,6 +1693,22 @@ def _state_explain_lines(ground: _Ground, settings: discovery.Settings,
         return explain_state.fact_lines(ground.result, ledger, domain.strip(),
                                         key.strip())
     return explain_state.state_lines(ground.result, ledger, settings)
+
+
+def _state_explain_is_a_repeat(args: argparse.Namespace) -> bool:
+    """Whether emitting ``--state-explain``'s own block would print again what
+    ``--explain``'s narrative already ended with.
+
+    :func:`_narrative_lines` closes on the BARE provenance block, so under both
+    flags the unargumented form is the same block a second time — every line of
+    it, which is the whole of ``--state-explain``'s output. One block is what
+    the flag's documentation promises ("``--explain`` appends the same lines").
+
+    A ``DOMAIN:KEY`` argument is not a repeat: that form prints a DIFFERENT
+    drill-down block (:func:`gcp_grounding.explain_state.fact_lines`), which the
+    narrative never carries, so it stays additional under both flags.
+    """
+    return bool(getattr(args, "explain", False)) and not args.state_explain
 
 
 def _incomplete_notice(ground: _Ground, settings: discovery.Settings, *,
@@ -2090,7 +2117,7 @@ def _run_hook(args: argparse.Namespace) -> int:
         print("\n".join(_narrative_lines(path, args.baseline, ground, settings,
                                          source, rules, carried, hook=True)),
               file=sys.stderr)
-    if args.state_explain is not None:
+    if args.state_explain is not None and not _state_explain_is_a_repeat(args):
         print("\n".join(_state_explain_lines(ground, settings, args.state_explain)),
               file=sys.stderr)
     _incomplete_notice(ground, settings, hook=True)
@@ -2300,9 +2327,17 @@ def _bash_hook_lines(verdicts: list[Verdict], *, event: Mapping[str, Any],
     # of the *report*, and still misleading directly under a BLOCKED headline.
     lines.extend(rendered.splitlines()[1:])
     lines.append(_bash_timing_line(event, blocking))
-    lines.append("  Express this change as a policy document or `terraform "
-                 "show -json` plan output so the gate can check it — or pass "
-                 "--bash-policy=warn if the command is intentional.")
+    # The escape clause is printed ONLY under `block`, the one policy it is an
+    # escape from. Under `warn` the flag it names is already in force and the
+    # command was not stopped, so the advice is a remedy for a problem this run
+    # does not have — and remediation text an agent has already followed costs a
+    # retry of something that changes nothing. What to express the change AS is
+    # the half that holds under both policies, so that half always prints.
+    advice = ("  Express this change as a policy document or `terraform show "
+              "-json` plan output so the gate can check it")
+    if policy == "block":
+        advice += " — or pass --bash-policy=warn if the command is intentional"
+    lines.append(f"{advice}.")
     return lines
 
 
@@ -3314,16 +3349,42 @@ def _state_rows(settings: discovery.Settings) -> list[str]:
             + _block_items(paths))
 
 
-def _promise_summary(settings: discovery.Settings, source: str | None,
-                     rules, carried) -> str:
-    """The ``promises in force`` value: how many compiled promises enforce, how
-    many do not, and where they came from. The ids themselves are the block
-    under the row (:func:`_promise_block_lines`).
+def _unchecked_promises(rules, report: GroundingReport) -> tuple[str, ...]:
+    """The ids of the promises in force that THIS RUN never evaluated.
 
-    The two counts are derived exactly as :func:`_requirements_notice` derives
+    Read off :func:`gcp_grounding.sec_evidence.unchecked_ids`, which is the
+    same cross-reference the narrative's ``not checked`` marker is rendered
+    from, so the summary below cannot label a promise differently from the
+    stanza above it. Requirements unavailable costs the markers and nothing
+    else — the counts and ids still print.
+    """
+    try:
+        sec_evidence = importlib.import_module("gcp_grounding.sec_evidence")
+    except ImportError:
+        logger.debug("the sec evidence channel is unavailable", exc_info=True)
+        return ()
+    return sec_evidence.unchecked_ids(rules, verdicts=report.verdicts)
+
+
+def _promise_summary(settings: discovery.Settings, source: str | None,
+                     rules, carried, unchecked: Sequence[str] = ()) -> str:
+    """The ``promises in force`` value: how many compiled promises enforce, how
+    many of those this run did not reach, how many do not enforce at all, and
+    where they came from. The ids themselves are the block under the row
+    (:func:`_promise_block_lines`).
+
+    The counts are derived exactly as :func:`_requirements_notice` derives
     them — the enforcing ids are the registered rules', and a promise that never
     compiled exists only as a carry verdict — so the summary cannot claim a
     promise is enforcing that the notice above called stalled.
+
+    THE NOT-CHECKED CLAUSE IS PART OF THE ENFORCING COUNT, not a third bucket
+    subtracted from it: such a promise did compile and is in force, and a run
+    whose document its domain does not cover has not weakened it. What the
+    clause prevents is the other reading — "6 enforcing" alone, to a reader of
+    the summary and nothing else, says this run put six promises to the
+    document when it put three. It is printed only when some promise went
+    unreached, so a run that checked everything it loaded reads as before.
     """
     if source is None:
         return "none loaded"
@@ -3331,7 +3392,8 @@ def _promise_summary(settings: discovery.Settings, source: str | None,
     registered = set(enforcing)
     stalled = {verdict.target for verdict in carried
                if verdict.target not in registered}
-    return (f"{len(enforcing)} enforcing, {len(stalled)} not — from "
+    unreached = f" ({len(unchecked)} not checked)" if unchecked else ""
+    return (f"{len(enforcing)} enforcing{unreached}, {len(stalled)} not — from "
             f"{_layered((source,), settings.origin_of('requirements'))}")
 
 
@@ -3359,18 +3421,24 @@ def _promise_sentence(rule: Any) -> str:
     return _promise_text(getattr(source, "text", ""))
 
 
-def _promise_id_lines(ids: Sequence[str], sentences: Mapping[str, str]
-                      ) -> list[str]:
+def _promise_id_lines(ids: Sequence[str], sentences: Mapping[str, str],
+                      markers: Mapping[str, str] | None = None) -> list[str]:
     """One line per promise id, each with the author's stored sentence under
     it, bounded like every other block in the section.
 
     *sentences* is the id → stored-sentence map of the rules this run admitted;
     an id it does not carry prints alone rather than borrowing a neighbour's
     English.
+
+    *markers* is the id → marker map for the ids that need one (today: ``not
+    checked``, in the same column the block's ``not enforcing`` lines use). An
+    id it does not carry prints bare, which is what an unremarkable promise is.
     """
+    marked = markers or {}
     lines: list[str] = []
     for promise_id in list(ids)[:_SUMMARY_BLOCK_CAP]:
-        lines.append(f"{_SUMMARY_ITEM_INDENT}{promise_id}")
+        marker = marked.get(promise_id, "")
+        lines.append(f"{_SUMMARY_ITEM_INDENT}{marker}{promise_id}")
         sentence = sentences.get(promise_id, "")
         if sentence:
             lines.append(f"{_SUMMARY_TEXT_INDENT}“{sentence}”")
@@ -3394,7 +3462,8 @@ def _stalled_reason(message: str) -> str:
     return _promise_text(tail if separator and tail.strip() else message)
 
 
-def _promise_block_lines(rules, carried) -> list[str]:
+def _promise_block_lines(rules, carried,
+                         unchecked: Sequence[str] = ()) -> list[str]:
     """The ``promises in force`` block: one line per promise, with what the
     artifact stored about it underneath.
 
@@ -3403,9 +3472,17 @@ def _promise_block_lines(rules, carried) -> list[str]:
     admitted — the registered rules and the carry verdicts they came in with —
     which is the same pair of inputs :func:`_promise_summary` counts, so the
     lines can never disagree with the counts above them.
+
+    An id in *unchecked* is one the run never evaluated, and it carries the
+    narrative's own ``not checked`` marker for it: the sentence is still the
+    author's and the promise is still in force, so it stays in the enforcing
+    list in id order rather than being moved to the stalled one. Marking it is
+    what keeps a reader of the summary alone from taking the count above as six
+    promises put to this document.
     """
     sentences = {getattr(rule.promise, "id", ""): _promise_sentence(rule)
                  for rule in rules}
+    markers = {promise_id: "not checked  " for promise_id in unchecked}
     enforcing = sorted(sentences)
     # A promise that never compiled exists only as a carry verdict, and one
     # promise can carry several; the first message in id-then-message order
@@ -3416,7 +3493,7 @@ def _promise_block_lines(rules, carried) -> list[str]:
         if target in sentences:
             continue
         reasons.setdefault(target, _stalled_reason(str(verdict.message)))
-    lines = _promise_id_lines(enforcing, sentences)
+    lines = _promise_id_lines(enforcing, sentences, markers)
     stalled = sorted(reasons)
     for promise_id in stalled[:_SUMMARY_BLOCK_CAP]:
         lines.append(f"{_SUMMARY_ITEM_INDENT}not enforcing  {promise_id}")
@@ -3724,16 +3801,6 @@ def _collection_reading(sec_rules: Any, ctx: Any,
                      exc_info=True)
         return (), f"the {name} rows were not available"
     return records, missing
-
-
-def _collection_rows(sec_rules: Any, ctx: Any, name: str) -> tuple:
-    """The records collection *name* yields for *ctx* — empty when this checkout
-    registered no extractor for it, or when the extractor abstained.
-
-    An abstention contributes NO sentence: the collection was not extracted over
-    this document, and a sentence would be about rows nobody read.
-    """
-    return _collection_reading(sec_rules, ctx, name)[0]
 
 
 def _address_of(record: Mapping[str, Any]) -> str:
@@ -4509,10 +4576,14 @@ def _summary_section_lines(path: str, report: GroundingReport,
     """
     lines = ["", _SUMMARY_HEADER]
     lines.extend(_state_rows(settings))
+    # The row and the block below it are marked from ONE list of the promises
+    # this run left unreached, so the count and the lines cannot disagree about
+    # which promise that was.
+    unchecked = _unchecked_promises(rules, report)
     lines.append(_summary_row("promises in force",
                               _promise_summary(settings, source, rules,
-                                               carried)))
-    lines.extend(_promise_block_lines(rules, carried))
+                                               carried, unchecked)))
+    lines.extend(_promise_block_lines(rules, carried, unchecked))
     lines.extend(_provider_rows(settings))
     try:
         census = _census_clause(path)
