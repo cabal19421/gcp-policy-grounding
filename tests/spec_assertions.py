@@ -262,7 +262,9 @@ AWAITING: tuple[tuple[str, str], ...] = (
     ("SA-BUDGET-CHECKED-IN-CONFTEST", "gx-hookrunner-budget"),
     ("SA-BENIGN-EXIT-CODE-SET", "gx-agentic-benign-repin"),
     ("SA-BENIGN-STDERR-BYTE-EMPTY", "gx-agentic-benign-repin"),
-    ("SA-SECAST-CALLED-ONCE", "sx-sec-ast"),
+    # SA-SECAST-CALLED-ONCE LEFT AWAITING: `fix-tests-and-registers` landed the
+    # strict `calls["n"] == 1` counter proof in tests/test_gcp_sec_ast.py (audit
+    # row R03), so the entry is PRESENT and needs no owner to excuse it.
     ("SA-SEXPR-ONE-FORM", "gx-sexpr-one-form"),
     ("SA-IAM-UNTRANSLATABLE-NAMED", "gx-agentic-iam-repin"),
 )
@@ -270,14 +272,15 @@ AWAITING: tuple[tuple[str, str], ...] = (
 
 # An AWAITING owner that is NOT a task in gcp-gx-fixes.md, mapped to the
 # escalation that records why. The design requires every owner to be a task id
-# in that document; `tests/test_gcp_sec_ast.py` is owned by `sx-sec-ast`, a task
-# of the PREDECESSOR design document, and no task in this one can own it. That
-# clause is therefore escalated rather than routed around: the spec-literal
-# assertion is landed under xfail(strict=True), and this mapping keeps the
-# live, non-literal check strict enough to still catch a typo'd owner.
-OUT_OF_DOCUMENT_OWNERS: dict[str, str] = {
-    "sx-sec-ast": "ESC-GX-SPEC-002",
-}
+# in that document, so an out-of-document owner is escalated rather than routed
+# around, and this mapping keeps the live, non-literal check strict enough to
+# still catch a typo'd owner.
+#
+# EMPTY TODAY. Its one entry mapped `sx-sec-ast` — the predecessor-document
+# owner of tests/test_gcp_sec_ast.py — to ESC-GX-SPEC-002; that predicate
+# (SA-SECAST-CALLED-ONCE) is now PRESENT, so the entry left AWAITING and the
+# escalation was retired with it. Every owner is a task of this document again.
+OUT_OF_DOCUMENT_OWNERS: dict[str, str] = {}
 
 
 # Modules a registered entry names that are NOT in this checkout yet. A missing
