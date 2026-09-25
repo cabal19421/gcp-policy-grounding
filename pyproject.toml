@@ -23,3 +23,9 @@ include = ["gcp_grounding*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Every xfail in this suite is an ESCALATION: it names the clause it cannot
+# satisfy, and the day that clause is satisfiable it must XPASS and go RED so the
+# escalation is retired deliberately rather than by rot. Each marker passes
+# strict=True today; this makes the default strict as well, so a future marker
+# that omits it is not silently non-strict (audit row R41).
+xfail_strict = true

@@ -205,9 +205,9 @@ def _member_in(member_v1: str, member_v2: str, spelling: str,
         return _project_set_member(member_v1, matched.group("number"), spelling,
                                    snapshot)
     if spelling.startswith(_GROUP_SET):
-        return _Tri("undecided", f"group membership of {member_v1!r} in {spelling!r} is not captured in any snapshot category")
+        return _Tri("undecided", f"group membership of {member_v1!r} in {spelling!r} is not captured in any snapshot category (ESC-DENY-GROUP-MEMBERSHIP)")
     return _undecided(f"the principal set {spelling!r} is outside the curated "
-                      f"containment table")
+                      f"containment table (ESC-DENY-PRINCIPAL-HIERARCHY)")
 
 
 def _project_set_member(member_v1: str, number: str, spelling: str,
@@ -443,11 +443,12 @@ def _covered(member: str, rule: _DenyRule, snapshot: Any) -> tuple[str, str]:
     if state == "covered" and rule.condition_state == "present":
         return "undecided", (f"covered only under condition "
                              f"{rule.condition!r} — request-time truth is not "
-                             f"decidable offline")
+                             f"decidable offline (ESC-DENY-CONDITION-SAT)")
     if state == "covered" and rule.condition_state == "unreadable":
         return "undecided", ("the rule's denialCondition block is present "
                              "but unreadable — an unread condition can "
-                             "neither prove nor waive coverage")
+                             "neither prove nor waive coverage "
+                             "(ESC-DENY-CONDITION-SAT)")
     return state, detail
 
 

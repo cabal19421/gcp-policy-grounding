@@ -36,6 +36,8 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -48,6 +50,9 @@ from gcp_grounding.report import PolicyReport
 from gcp_grounding.sec_evidence import SEC_REPORT_SCHEMA
 from tests.lineno_invariant import assert_no_line_numbers
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+#: This module's own repo-relative path — what the solver-less child below runs.
+MODULE = "tests/" + Path(__file__).name
 FIXTURES = Path(__file__).parent / "fixtures" / "gcp"
 POLICIES = FIXTURES / "policies"
 SNAPSHOT = FIXTURES / "snapshot.json"
@@ -904,13 +909,48 @@ def test_no_solver_pickup_says_nothing_is_enforcing(capsys, clean_artifacts):
         f"compile-requirements)"]
 
 
+@_needs_z3
+def test_this_module_is_green_and_its_fallback_cases_run_in_a_solverless_child(
+        no_z3_env):
+    """The two cases above run in NO documented install: ``pyproject.toml`` puts
+    z3 in both the ``z3`` and the ``dev`` extra and the README installs
+    ``.[dev]``, so where the suite runs they are always SKIPPED and the world
+    they describe is asserted nowhere.
+
+    So this runs the module once in a z3-blocked child — the degraded world
+    ``blocked_import_env`` already builds for the agentic suites — and reads the
+    two node ids off ``-rA``: they must report PASSED there, and the whole module
+    must exit 0, so a case that only holds with a solver cannot sit in this file
+    unmarked. ``_needs_z3`` is what stops the recursion: inside the child there
+    is no solver, so the child skips this very test.
+    """
+    done = subprocess.run(
+        [sys.executable, "-B", "-m", "pytest", "-q", "-rA", MODULE],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+        env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1", **no_z3_env))
+    tail = done.stdout[-3000:] + done.stderr[-2000:]
+    assert done.returncode == 0, tail
+    for name in ("test_no_solver_compile_exits_zero_with_every_promise_unverified",
+                 "test_no_solver_pickup_says_nothing_is_enforcing"):
+        assert f"PASSED {MODULE}::{name}" in done.stdout, tail
+    assert f"SKIPPED [1] {MODULE}:" in done.stdout, (
+        "the solver-dependent cases must SKIP there, never fail", tail)
+
+
 # -- the shared lineno invariant ----------------------------------------------
 
 
+@_needs_z3
 def test_no_sec_verdict_carries_a_line_number(clean_artifacts, stalled_artifacts,
                                               tmp_path):
     """Every verdict the requirements channel adds reports ``lineno`` 0 — see
     lineno_invariant.
+
+    ``_needs_z3`` because the closing non-vacuity assertion needs a minted
+    witness: with no solver no promise compiles, ``load_directory`` admits no
+    rule and no ``sec:`` verdict is minted at all, so the assertion reads
+    ``assert False`` there. An explicit SKIP, like every other case in this
+    module that needs a witness — never a bare ``return``.
 
     The sec carry verdicts are minted with the same ``Verdict(..., 0, ...)``
     shape as the domain checks and reach the report through

@@ -509,7 +509,15 @@ CHILD_MARK = "GCP_MUTATION_CONTRACT_CHILD"
 SPAWNS_PER_ENTRY = 4
 #: The self-test's own fixed cost: its synthetic executions, its bare
 #: ``materialise``, its inert removal, the cached collect. A PIN as the 450 is.
-CONTRACT_CONTROL_SPAWNS = 16
+#: 16 -> 21, the CORRECTION audit row R43 asks for and that
+#: ESC-GX-{GATE-002,NETWORK,VPCSC,ABSTAIN}-REMOVAL-CEILING each named as what
+#: would close them: MEASURED, the controls really cost 21, and the five-slot
+#: under-count was being absorbed by the per-Removal slots of the five
+#: ``Removal``s that were kept ``pending`` for exactly that reason -- a full run
+#: sat at the ceiling with zero headroom while five mutations recorded as
+#: proven-to-kill were never executed. This is not headroom: the register term is
+#: untouched, every removal is live, and the ceiling is again exactly consumed.
+CONTRACT_CONTROL_SPAWNS = 21
 
 
 def contract_spawn_ceiling() -> int:
