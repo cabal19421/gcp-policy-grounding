@@ -290,11 +290,23 @@ class EvalOptions:
     record describes the whole run and the explain surface can say what the
     evaluation was configured with, rather than reconstructing it from the
     environment.
+
+    ``drift`` and ``drift_policy`` ARE THE SAME SETTING IN TWO VOCABULARIES, and
+    both are needed because they answer different questions. ``drift`` is this
+    module's own two-value ``report``/``block`` mode and decides the STATUS of a
+    ``drift:material`` verdict. ``drift_policy`` is the loading side's
+    :data:`gcp_grounding.drift.DRIFT_POLICIES` (annotate / block / abstain),
+    which the taint adjudicator needs in full: ``abstain`` is invisible in the
+    two-value mode, so a run that carried only ``drift`` left the adjudicator
+    re-reading :data:`gcp_grounding.registry.DRIFT_POLICY_ENV` and an exported
+    variable outranked the flag. Empty means this caller resolved no policy and
+    that fallback still applies — see :func:`gcp_grounding.registry._drift_policy`.
     """
 
     as_of: str | None = None
     max_age_seconds: int | None = None
     drift: str = DEFAULT_DRIFT_MODE
+    drift_policy: str = ""
     auto_baseline: bool = True
     hints: baseline.Hints = field(default_factory=baseline.Hints)
     tiers: tuple[str, ...] = TIERS
@@ -304,6 +316,9 @@ class EvalOptions:
         if self.drift not in DRIFT_MODES:
             raise ValueError(f"EvalOptions.drift {self.drift!r} is not one of "
                              f"{list(DRIFT_MODES)}")
+        if self.drift_policy and self.drift_policy not in drift.DRIFT_POLICIES:
+            raise ValueError(f"EvalOptions.drift_policy {self.drift_policy!r} is "
+                             f"not one of {list(drift.DRIFT_POLICIES)}")
 
 
 @dataclass(frozen=True)
@@ -410,7 +425,7 @@ def evaluate(proposal: Proposal, current: Any, rules: RuleSet, *,
 
         # STAGE 1 — the proposal tier.
         _stage(report, proposal, "proposal-tier",
-               lambda: _stage_proposal(report, proposal, vocabulary))
+               lambda: _stage_proposal(report, proposal, vocabulary, options))
 
         # STAGE 2 — the baseline.
         derivation = _stage(report, proposal, "baseline",
@@ -439,7 +454,7 @@ def evaluate(proposal: Proposal, current: Any, rules: RuleSet, *,
         # STAGE 5 — the compiled rules.
         _stage(report, proposal, "compiled-rules",
                lambda: _stage_rules(report, proposal, vocabulary, solver,
-                                    derivation, rules))
+                                    derivation, rules, options))
 
         # STAGE 6 — per-source drift.
         drift_paths: dict[int, tuple[str, ...]] = {}
@@ -522,7 +537,8 @@ def _stage_vocabulary(report: GroundingReport, proposal: Proposal, current: Any
 
 
 def _stage_proposal(report: GroundingReport, proposal: Proposal,
-                    vocabulary: GcpSnapshot) -> None:
+                    vocabulary: GcpSnapshot,
+                    options: EvalOptions = _DEFAULT_OPTIONS) -> None:
     """Ground the document against the vocabulary, then put every stripped
     attribute on the record.
 
@@ -530,8 +546,18 @@ def _stage_proposal(report: GroundingReport, proposal: Proposal,
     baseline entry in stage 3, and handing a whole multi-resource plan to a
     single pair check would compare an entire plan against one resource's
     counterpart.
+
+    IT IS CALLED WITH THE RESOLVED DRIFT POLICY, though: every claim check and
+    every document check runs inside ``ground_policy``, so this is the seam the
+    policy has to cross or the adjudicator grades those verdicts under the
+    environment instead of under what the caller configured. *options* keeps a
+    default because ``gate._terraform_report`` reaches this stage directly on
+    the NO-STATE route, where the vocabulary is a plain
+    :class:`~gcp_grounding.knowledge.GcpSnapshot` and there is no provenance for
+    any policy to grade.
     """
-    merged = preflight.ground_policy(proposal.document, vocabulary)
+    merged = preflight.ground_policy(proposal.document, vocabulary,
+                                     drift_policy=options.drift_policy)
     report.backend = merged.backend
     for verdict in merged.verdicts:
         report.add(verdict)
@@ -631,7 +657,7 @@ def _stage_pair(report: GroundingReport, proposal: Proposal,
             continue
         document = _proposed_document(projected, entry, proposal)
         verdicts, identity = _run_pair(entry.kind, document, entry, vocabulary,
-                                       solver, proposal)
+                                       solver, proposal, options.drift_policy)
         verdicts = _apply_baseline_soundness(verdicts, identity,
                                              _entry_scope(ledger, entry),
                                              entry.source_id or "the current state")
@@ -652,8 +678,8 @@ def _proposed_document(projected: Mapping[str, tuple[Any, str | None]], entry: A
 
 
 def _run_pair(kind: str | None, document: Any, entry: Any,
-              vocabulary: GcpSnapshot, solver: Any, proposal: Proposal
-              ) -> tuple[tuple[Verdict, ...], str]:
+              vocabulary: GcpSnapshot, solver: Any, proposal: Proposal,
+              drift_policy: str = "") -> tuple[tuple[Verdict, ...], str]:
     """``(verdicts, check identity)`` for one baseline entry.
 
     A registered domain widening check first, then — for an IAM policy ONLY —
@@ -672,7 +698,8 @@ def _run_pair(kind: str | None, document: Any, entry: Any,
         ctx = CheckContext(snapshot=vocabulary, solver=solver, document=document,
                            document_kind=kind, source=proposal.source,
                            claims=_pair_claims(kind, document),
-                           baseline=entry.document, baseline_kind=entry.kind)
+                           baseline=entry.document, baseline_kind=entry.kind,
+                           drift_policy=drift_policy)
         row = entry.key or entry.target.key
         return tuple(_addressed(v, row)
                      for v in registry.run_pair_check(fn, ctx)), str(kind)
@@ -857,7 +884,7 @@ def _stage_estate(report: GroundingReport) -> tuple[Verdict, ...]:
 
 def _stage_rules(report: GroundingReport, proposal: Proposal,
                  vocabulary: GcpSnapshot, solver: Any, derivation: Any,
-                 rules: RuleSet) -> None:
+                 rules: RuleSet, options: EvalOptions = _DEFAULT_OPTIONS) -> None:
     """Evaluate the compiled requirement rules, and carry the compiler's verdicts.
 
     The estate-tier soundness gate is NOT re-applied here — ``CompiledRule``
@@ -865,6 +892,11 @@ def _stage_rules(report: GroundingReport, proposal: Proposal,
     duplicate-verdict trap stage 4 just avoided. The PAIR-tier
     :data:`BASELINE_SOUNDNESS` rewrite still applies to a rule whose tier is
     pair, because nothing else does it for a rule.
+
+    ``RuleContext`` carries the run's resolved drift policy, which is the only
+    way ``sec_rules._adjudicate_one`` learns it: unlike the built-in checks it
+    has no environment fallback at all, so leaving the field at its default made
+    ``--drift-policy abstain`` unreachable for every compiled promise.
     """
     for verdict in rules.carry_verdicts:
         report.add(verdict)
@@ -882,7 +914,8 @@ def _stage_rules(report: GroundingReport, proposal: Proposal,
         snapshot=vocabulary, document=proposal.document,
         document_kind=proposal.kind, source=proposal.source,
         baseline=primary.document if primary is not None else None,
-        estate=_estate_records(vocabulary), solver=solver)
+        estate=_estate_records(vocabulary), solver=solver,
+        drift_policy=options.drift_policy)
     for rule in rules.compiled:
         verdict = solver_census.evaluate_rule(rule, rule_ctx)
         if verdict is None:
@@ -966,7 +999,7 @@ def _stage_drift(report: GroundingReport, proposal: Proposal,
         for candidate in entry.others:
             verdicts = _per_source_verdicts(candidate, category, entry, entry.kind,
                                             document, vocabulary, solver, proposal,
-                                            ledger)
+                                            ledger, options.drift_policy)
             statuses.update(v.status for v in verdicts)
             for verdict in verdicts:
                 report.add(verdict)
@@ -984,8 +1017,8 @@ def _stage_drift(report: GroundingReport, proposal: Proposal,
 
 def _per_source_verdicts(candidate: Any, category: str, entry: Any,
                          kind: str | None, document: Any, vocabulary: GcpSnapshot,
-                         solver: Any, proposal: Proposal, ledger: Any
-                         ) -> tuple[Verdict, ...]:
+                         solver: Any, proposal: Proposal, ledger: Any,
+                         drift_policy: str = "") -> tuple[Verdict, ...]:
     """The pair check re-run against ONE losing source's whole record.
 
     The alternate's record is projected exactly as the winner's was, so the two
@@ -1003,7 +1036,7 @@ def _per_source_verdicts(candidate: Any, category: str, entry: Any,
                         record=candidate.record, source_id=candidate.source_id,
                         others=())
     verdicts, identity = _run_pair(kind, document, alternate, vocabulary, solver,
-                                   proposal)
+                                   proposal, drift_policy)
     scope = _source_scope(ledger, candidate.source_id)
     verdicts = _apply_baseline_soundness(verdicts, identity, scope,
                                          candidate.source_id or "an unnamed source")
