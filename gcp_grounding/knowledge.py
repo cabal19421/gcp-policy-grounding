@@ -742,7 +742,7 @@ class GcpSnapshot:
         the captured table when exactly one row carries that leaf name.
 
         The table is keyed ``projects/<project>/global/securityPolicies/<name>``,
-        as :data:`gcp_grounding.identity.CATEGORY_SPECS` requires, but a
+        as :data:`gcp_grounding.identity.SPECS` requires, but a
         terraform ``google_compute_security_policy_rule`` names its parent policy
         bare (``security_policy = "armor-policy-prod"``), so a proposed rule
         carries no project to qualify it with. Resolving the leaf name here does

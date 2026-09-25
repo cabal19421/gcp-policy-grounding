@@ -614,6 +614,37 @@ def test_end_to_end_the_deny_delete_blocks_the_gate():
                for v in report.verdicts)
 
 
+def test_end_to_end_an_emptied_rest_policy_wakes_the_grant_and_exits_1(
+        tmp_path, capsys):
+    """AUDIT R02 regression, the corpus shape the audit ran: the baseline
+    carries the rule, the proposal is the same policy with ``rules: []``.
+
+    That run used to exit 0 — ``PASSED — NOTHING VERIFIED`` beside a
+    ``document kind was not recognized`` abstention — because ``detect_kind``
+    demanded a NON-EMPTY rules list to call a document a deny policy, so the
+    REST spelling of the loudest removal there is never reached C4 at all.
+    The narrowing of the same rule was caught throughout; only the emptying
+    was mute. Driven through the CLI because the audit's finding was about the
+    EXIT CODE an agent or a CI step reads.
+    """
+    emptied = json.loads(json.dumps(STRONG))
+    emptied["rules"] = []
+    proposal = tmp_path / "wake_removed.json"
+    proposal.write_text(json.dumps(emptied), encoding="utf-8")
+    baseline = tmp_path / "wake_baseline.json"
+    baseline.write_text(json.dumps(STRONG), encoding="utf-8")
+
+    code = cli.main(["verify-policy", "--proposal", str(proposal),
+                     "--baseline", str(baseline),
+                     "--snapshot", str(FIXTURES / "snapshot_deny_estate.json")])
+    out, _ = capsys.readouterr()
+    assert code == 1, out
+    woken = [line for line in out.splitlines() if f"[{KIND}]" in line]
+    assert len(woken) == 1, out
+    assert "wakes the dormant grant" in woken[0]
+    assert f"{TOKEN} (impersonation)" in woken[0] and CI_SA in woken[0]
+
+
 # -- the iam_deny_policies parser (knowledge.py) ---------------------------
 
 
