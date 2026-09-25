@@ -147,7 +147,7 @@ prints — stays truthful about which layer supplied each value.
 
 :func:`_load_snapshot` takes its options from
 ``discovery.to_source_options(discovery.resolve_settings(...))`` and NEVER from
-``sources.SourceOptions.from_env``: ``from_env`` resolves the environment and
+``sources.from_env``: ``from_env`` resolves the environment and
 explicit overrides only, so building the primary through it would silently
 bypass the config-file and auto-detect layers and ignore a snapshot path the
 user wrote in a discovered config — with no error, no note, and a
@@ -1165,7 +1165,7 @@ def _load_snapshot(args: argparse.Namespace, *,
     meaningful; never raises.
 
     THE PRIMARY COMES FROM ``discovery.to_source_options(resolve_settings(...))``
-    AND NEVER FROM ``sources.SourceOptions.from_env``, and the distinction is the
+    AND NEVER FROM ``sources.from_env``, and the distinction is the
     whole point: ``from_env`` resolves the environment and explicit overrides
     ONLY, so building the primary through it silently bypasses the config-file
     and auto-detect layers this command promises — a snapshot path the user
@@ -2996,12 +2996,12 @@ def _proposed_lines(path: str) -> list[str]:
     problem on the header line and costs only the summary, because the explain
     path must never crash a run the gate itself survived.
 
-    Terraform CONFIGURATION is routed by :func:`gcp_grounding.gate.
-    terraform_route` — the same suffix decision the grounding pass makes — and
-    never by ``detect_kind``, which does not recognize terraform's JSON
-    configuration syntax and would headline the demo's own proposal as "not a
-    recognized policy document kind" while the decision below it denies over
-    that very document.
+    Terraform CONFIGURATION is routed by
+    :func:`gcp_grounding.gate.terraform_route` — the same suffix decision the
+    grounding pass makes — and never by ``detect_kind``, which does not
+    recognize terraform's JSON configuration syntax and would headline the
+    demo's own proposal as "not a recognized policy document kind" while the
+    decision below it denies over that very document.
     """
     lines = ["what was proposed:"]
     raw_hcl = gate.terraform_route(path)
@@ -4038,12 +4038,12 @@ def _firewall_sentences(records: Sequence[Mapping[str, Any]]
 def _layer4_label(record: Mapping[str, Any]) -> str:
     """``tcp/22`` for one flattened firewall row.
 
-    The protocol is spelled back through :data:`gcp_grounding.sec_domains.
-    PROTOCOL_NUMBERS` — the table the row's number came out of, read in reverse
-    rather than restated. A row with NO protocol key is the "every protocol"
-    rule the flattening records by omitting it; a number that table cannot name
-    is printed as the number, because "all protocols" is what an absent key
-    means and would be a different rule.
+    The protocol is spelled back through
+    :data:`gcp_grounding.sec_domains.PROTOCOL_NUMBERS` — the table the row's
+    number came out of, read in reverse rather than restated. A row with NO
+    protocol key is the "every protocol" rule the flattening records by omitting
+    it; a number that table cannot name is printed as the number, because "all
+    protocols" is what an absent key means and would be a different rule.
     """
     if "protocol" not in record:
         protocol = "all protocols"

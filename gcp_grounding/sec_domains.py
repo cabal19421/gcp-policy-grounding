@@ -38,9 +38,9 @@ from passing vacuously:
   ports, a port range too wide to enumerate — see :data:`MAX_PORT_SPAN`). The
   rule still produces rows, so a promise that does not mention the field still
   judges it; a promise that DOES mention it abstains loudly through
-  ``sec_encode``'s "missing from the record" :class:`~gcp_grounding.sec_encode.
-  UnsupportedTerm`. Filling in ``0.0.0.0/0`` or ``0.0.0.0/32`` instead would
-  fabricate either a false ``contradicted`` or a false pass.
+  ``sec_encode``'s "missing from the record"
+  :class:`~gcp_grounding.sec_encode.UnsupportedTerm`. Filling in ``0.0.0.0/0``
+  or ``0.0.0.0/32`` would fabricate a false ``contradicted`` or a false pass.
 * A ``Str`` dimension with no values contributes the empty string, which is an
   honest "no tag" / "no expression".
 
@@ -80,7 +80,7 @@ The estate-tier extractors read
 and honour the captured bit by comparing with ``is`` — never truth-testing,
 because :data:`gcp_grounding.knowledge.UNKNOWN` refuses ``bool``. Records are
 sorted by their scalar fields for determinism, mirroring the sorted-pairs
-convention of ``constraints.check_policy_subset`` (constraints.py:442-446).
+convention of ``constraints.check_policy_subset``.
 """
 
 from __future__ import annotations

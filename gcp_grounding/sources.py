@@ -35,9 +35,10 @@ second source today.
 
 The two provider-schema options ride on :class:`SourceOptions` so the settings
 layers, the origin tracking and ``--state-explain`` treat them like every other
-setting — but they are NOT current-state sources: :meth:`SourceOptions
-.configured` does not list them, ``load_current`` never reads them, and the
-schema file is consumed by :mod:`gcp_grounding.tf_schema_checks` through
+setting — but they are NOT current-state sources:
+:meth:`SourceOptions.configured` does not list them, ``load_current`` never
+reads them, and the schema file is consumed by
+:mod:`gcp_grounding.tf_schema_checks` through
 :mod:`gcp_grounding.provider_schema` alone.
 
 ``completeness`` is the ONE option with no environment variable, on purpose. It

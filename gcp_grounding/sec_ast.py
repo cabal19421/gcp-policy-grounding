@@ -10,10 +10,10 @@ its kind. Terms carry a *sort* drawn from :data:`SORTS`; :func:`validate` is one
 recursive pass that rejects every ill-typed or ill-formed shape, naming the
 offending path (e.g. ``and.args[1].cmp.right``). :func:`canonical` gives a
 deterministic normal form so the committed artifact is byte-stable under trivial
-source reorderings, mirroring ``fetch.write_snapshot`` at fetch.py:344-349.
+source reorderings, mirroring ``fetch.write_snapshot``.
 
 Collections referenced by quantifiers come from :data:`COLLECTIONS`, a registry
-seeded with the four base entries and extended by the six domain sections
+seeded with the four base entries and extended by the eleven domain sections
 through :func:`register_collection`. The domain collections are resolved lazily
 by :func:`_ensure_domains`, fail-open exactly like ``preflight._tf_plan_extractor``
 so a checkout without ``sec_domains`` simply keeps the four base collections and
@@ -138,7 +138,7 @@ def register_collection(spec: CollectionSpec) -> None:
 
 # -- domain resolution hook ---------------------------------------------------
 #
-# The six domain collections would exist only if something happened to import
+# The eleven domain collections would exist only if something happened to import
 # ``sec_domains`` first. ``_ensure_domains`` closes that gap: it runs once at the
 # top of ``validate``, ``derived_tier`` and ``collections_used``, importing and
 # registering the domains lazily and fail-open — exactly like
@@ -539,7 +539,7 @@ def canonical(node):
 def dumps(node) -> str:
     """Canonicalize and serialize *node* to a byte-stable JSON string.
 
-    Mirrors ``fetch.write_snapshot`` (fetch.py:344-349).
+    Mirrors ``fetch.write_snapshot``.
     """
     return json.dumps(canonical(node), indent=2, sort_keys=True, ensure_ascii=False)
 

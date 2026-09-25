@@ -632,7 +632,8 @@ def _stage_pair(report: GroundingReport, proposal: Proposal,
                 ) -> dict[int, tuple[Verdict, ...]]:
     """DISPATCHED PER BASELINE ENTRY AND NEVER PER FILE.
 
-    ``registry.PAIR_CHECKS`` is keyed by DOCUMENT KIND, and the gate hands every
+    The providers' ``PAIR_CHECKS`` tables are keyed by DOCUMENT KIND — the gate
+    reads them through :func:`registry.pair_check` — and the gate hands every
     ``.tf`` / ``.tf.json`` edit to this engine as a terraform-plan-kind proposal.
     Dispatching on the PROPOSAL kind therefore means ``pair_check("tf_plan")`` is
     None, the IAM fallback does not apply, and NO pair check ever runs for a
@@ -748,8 +749,8 @@ def _pair_claims(kind: str | None, document: Any) -> tuple[Any, ...]:
 def _addressed(verdict: Verdict, row: str) -> Verdict:
     """*verdict* re-addressed to the ROW the pair tier was dispatched for.
 
-    ``registry.PAIR_CHECKS`` is dispatched once per baseline entry, so its
-    findings are about that row — but a check names its own answer's scope in
+    A provider's ``PAIR_CHECKS`` entry is dispatched once per baseline entry, so
+    its findings are about that row — but a check names its own answer's scope in
     ``target`` (``fw_checks`` names the ``(network, direction)`` group), which
     leaves a per-row report with no verdict addressed to the row. The check's
     own spelling is kept in the message rather than dropped, and the built-in

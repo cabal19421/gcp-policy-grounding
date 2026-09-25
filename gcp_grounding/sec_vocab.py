@@ -25,7 +25,7 @@ contract:
   the ungrounded :class:`Verdict` carries the reasoner's near-misses. This is
   the marquee behaviour.
 - **unverified** — the snapshot never captured the category, so absence is not
-  provable (the ``captured`` guard at ``reasoner.py:114-115`` abstained). This
+  provable (the ``captured`` guard in ``reasoner._enumerated`` abstained). This
   still COMPILES: the value is recorded in ``Promise.vocabulary_unverified``
   and the reasoner's ``unverified`` verdict flows into the compile report. The
   rationale: the promise's formula does not depend on the snapshot, and only
