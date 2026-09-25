@@ -509,9 +509,9 @@ def _subset_verdict(doc: Mapping[str, Any], kind: str | None, solver,
     *ctx* — never re-reads the path.
 
     For IAM policies this is the z3 new⊆old comparison; for any other document
-    kind a registered :data:`~gcp_grounding.registry.PAIR_CHECKS` widening check
-    runs first, and only when there is none does the pairing record as an honest
-    ``unverified``."""
+    kind a widening check from a provider's ``PAIR_CHECKS`` table — read through
+    :func:`~gcp_grounding.registry.pair_check` — runs first, and only when there
+    is none does the pairing record as an honest ``unverified``."""
     if kind != "iam_policy":
         pair = registry.pair_check(kind)
         if pair is not None:

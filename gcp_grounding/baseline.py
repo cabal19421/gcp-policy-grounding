@@ -771,8 +771,8 @@ def _project_org_policy(key: str, record: Mapping[str, Any]) -> dict[str, Any]:
     return {"name": f"{node}/policies/{short}", "spec": spec}
 
 
-#: category → (projector, document kind). The five categories with no entry
-#: have no document form: a flat vocabulary has names and not records, and
+#: category → (projector, document kind). The two record categories with no
+#: entry have no document form: a flat vocabulary has names and not records, and
 #: ``roles`` and ``resource_hierarchy`` are compared field-wise by the estate
 #: tier rather than as documents.
 _PROJECTIONS = {

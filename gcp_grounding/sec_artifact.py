@@ -16,11 +16,11 @@ input, copied from ``GcpSnapshot.captured_at``) and provenance by
 comes from :func:`dumps` — ``json.dumps(..., sort_keys=True)`` over a tree whose
 tuples the dataclasses keep sorted.
 
-Loading is strict, mirroring :meth:`GcpSnapshot.from_dict`
-(``knowledge.py:151-155``): a typo must never silently demote a compiled promise
-to unverified, so unrecognized keys are rejected at every object level. The
-invariants in ``__post_init__`` make it structurally impossible to ship a
-``compiled`` promise with no witnesses or an unsatisfiable well-formedness verdict.
+Loading is strict, mirroring :meth:`GcpSnapshot.from_dict`: a typo must never
+silently demote a compiled promise to unverified, so unrecognized keys are
+rejected at every object level. The invariants in ``__post_init__`` make it
+structurally impossible to ship a ``compiled`` promise with no witnesses or an
+unsatisfiable well-formedness verdict.
 """
 
 from __future__ import annotations
@@ -443,7 +443,7 @@ def load(path: str | os.PathLike[str]) -> PromiseDoc:
     """Load and strictly validate a ``*.promises.json`` file.
 
     Wraps every failure as ``ValueError(f"{path}: {exc}")``, mirroring
-    :meth:`GcpSnapshot.load` (``knowledge.py:139-142``).
+    :meth:`GcpSnapshot.load`.
     """
     with open(path, encoding="utf-8") as fh:
         try:

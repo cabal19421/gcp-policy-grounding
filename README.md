@@ -107,8 +107,14 @@ principal coverage is decided by a small curated v1→v2 containment table
 (`user:` / `serviceAccount:` / `group:` / `allUsers`); group *membership* is
 not captured in any snapshot category, `denialCondition` satisfiability is
 not reasoned about, and uncurated `principalSet://` spellings all abstain by
-name; and the `iam_deny_policies` estate table has no fetch path yet, so the
-estate-side interaction over a snapshot without it yields one
+name; a REST allow-policy document names no project anywhere, so the
+estate-side masked and threaded arcs abstain on one by name (*the grant names
+no readable project, so whether the deny policy attached at '…' governs it was
+not decided*) and that direction of the interaction is decided only over
+terraform, whose resources carry `project` — `--target iam_bindings:<key>`
+resolves a baseline row and does not supply it; and the `iam_deny_policies`
+estate table has no fetch path yet, so the estate-side interaction over a
+snapshot without it yields one
 `estate:incomplete` abstention saying the allow×deny interaction was not
 decided — never a silent assumption that no deny policy exists.
 
@@ -234,6 +240,16 @@ constant of the rule, so nothing should pin it; the `…` elsewhere covers the
 recap's third deny line, an `[sec:iam]` refutation, and the tail of two rows
 this page wraps — every summary row, every promise sentence, and every
 sentence under the proposed change is one line on your terminal)
+
+One more convention, and it holds for **every** quoted block below. A verdict
+line in a check listing really ends with its provenance suffix — `[snapshot
+<captured_at>]` on every line, plus `[pair scope <network> <direction>]` and
+`[target <key> | source <path> | how <how>]` on a pair-tier finding — and this
+page quotes the lines without it. The suffix is how a verdict names the source
+that licensed it, so it is worth reading on your own terminal; it is also the
+same on every line of one run, which is why repeating it in every block below
+would cost more width than it explains. `--state-explain` is where to read the
+same provenance in full.
 
 The summary is the closing block of every `--explain` run: each input row
 names the settings layer that supplied it — `[cli]`, `[env]`, `[config
@@ -465,6 +481,8 @@ No binding may grant roles/owner to a principal outside domain acme.example.
 id: owner-stays-inside-acme
 vocab: role roles/owner
 vocab: principal domain:acme.example
+note: domain membership is read off the member id's suffix, which is what the estate's own principal ids spell — the gate captures no group or domain membership graph, so a suffix test is the strongest sound reading of "outside the domain" available offline
+note: the collection is iam_bindings, whose rows are one per (role, member) pair; a binding listing three members is three rows, so the quantifier below binds each member separately instead of matching a list
 smt:
   exists b in iam_bindings
     and
@@ -817,8 +835,8 @@ compiler. Never edit a compiled artifact by hand.
 
 Everything the section has described, on four committed files.
 `./run_demo.sh w` runs the whole arc — the compile of step three above, then the
-verify below and its REST-policy counterpart — and checks each step's exit
-against the one this page documents.
+REST-policy counterpart and the verify below, in that order — and checks each
+step's exit against the one this page documents.
 
 **The current state.** `examples/walkthrough/terraform.tfstate` — one applied
 binding, granting a read role to an internal group:
@@ -998,6 +1016,15 @@ the three, and the report says which of them each answer came from.
 
 - The **proposal** is the document or terraform file the agent just wrote — the
   thing under review. It is the only input the tool ever reads from the edit.
+  A `.tf` or `.tf.json` proposal is read as terraform only when a current-state
+  or provider-schema option is configured too (`--terraform-state`,
+  `--terraform-plan`, `--terraform-dir`, `--provider-schema`, a config-file
+  equivalent, or the auto-detected sibling `terraform.tfstate`), because the
+  terraform reader lives on the path those select. With `--snapshot` alone the
+  run does not refuse — it says what it did not do (`? [document] … nothing was
+  checked`, headline `PASSED — NOTHING VERIFIED`, exit 0), so read the headline
+  rather than the exit code. Rendered plan JSON needs no such option, and
+  §"Proposing a terraform change" spells all three forms out.
 - The **current** state is what exists now, before the edit lands. Without it
   the tool can say "this role does not exist" but never "this change grants
   something that was not granted before".
@@ -1287,12 +1314,14 @@ gcp-ground verify-policy policies/prod-iam.json \
 
 ```text
 state fact iam_bindings //cloudresourcemanager.googleapis.com/projects/acme-prod:
-  chosen: source=estate/api-snapshot.json [unattributed] locator=- domain-scope=partial taint=-
+  chosen: source=estate/api-snapshot.json [unattributed] origin=estate/api-snapshot.json
+      locator=- captured_at=2026-07-18T09:30:00Z domain-scope=partial taint=-
     record: {'bindings': [...]}
   alternates: 1
     alternate: source=infra/prod/terraform.tfstate locator=google_project_iam_binding.owner
       reason=lost to 'estate/api-snapshot.json' under precedence 'api-wins'; the losing
              record is kept WHOLE so a pair check can be re-run against it
+      record: {'bindings': [...]}
   differences:
     none - no comparable field difference was recorded for this key
 ```
@@ -2470,7 +2499,7 @@ everything else is identical):
 decision recap: DENIED (exit 1) — because:
   ⚠ [firewall_reopen] google_compute_firewall.egress_vendor_sync: this allow
       at priority 900 re-opens traffic that the existing deny
-      'deny-egress-world' at priority 65534 blocks — e.g. src (…); dst (…);
+      'deny-egress-world' at priority 65534 blocks — e.g. src …; dst …;
       protocol 6; port 443
   ⚠ [sec:vpc_firewall] egress-firewall-policy-high-strength-vpc-firewall:
       refuted by proposed_firewall_rules[1]
@@ -2639,9 +2668,12 @@ from demo/compiled-denypolicy)` with all three `holds` stanzas, and the check
 listing shows the guardrail working from every side — the masked-grant
 warning (riding on `grounded`: a masked grant is not an exposure, and
 blocking it would block a safe state) and the INERT org finding (loud on
-purpose — a restatement that changes nothing is a signal reviewers need):
+purpose — a restatement that changes nothing is a signal reviewers need). Three
+of its lines below, with `…` for the existence and promise verdicts around
+them:
 
 ```text
+…
 ✓ [iam_deny_shadow] google_project_iam_binding.payroll_ci_token_creator:
     warning — rule 0 of google_iam_deny_policy.guard_token_mint masks
     iam.serviceAccounts.getAccessToken (impersonation),
@@ -2654,9 +2686,11 @@ purpose — a restatement that changes nothing is a signal reviewers need):
     constraints/iam.disableServiceAccountKeyCreation already in force at
     organizations/123456789012, and the effective state is unchanged at
     every node it governs (4 node(s))
+…
 ✓ [sec:iam] no-principal-threads-the-guardrail: the obligation holds over
     the document — grounded; the deny document under review: every deny rule
     was read and none carries a principal exception
+…
 ```
 
 The abstention taste is two `no offline check is wired for claim kind

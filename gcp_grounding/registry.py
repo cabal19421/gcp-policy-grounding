@@ -1,4 +1,4 @@
-"""The single extension seam for the twelve later grounding-domain modules.
+"""The single extension seam for the sixteen later grounding-domain modules.
 
 :func:`~gcp_grounding.preflight.ground_policy` consults this registry before
 its honest catch-all, so a domain module (VPC firewall, hierarchical firewall,
@@ -604,11 +604,11 @@ def _incomplete_view(snapshot: Any) -> str:
     """What is not complete about *snapshot* as a whole, or ``""``.
 
     A snapshot with no ledger is the PLAIN-``GcpSnapshot`` case and reads as
-    complete — exactly the semantics :func:`~gcp_grounding.provenance
-    .require_complete` gives it, and what keeps this gate byte-identical on the
-    single-capture path it must not disturb. A ledger that declares no category
-    at all licenses nothing, which is not the same thing and is not silently
-    read as one.
+    complete — exactly the semantics
+    :func:`~gcp_grounding.provenance.require_complete` gives it, and what keeps
+    this gate byte-identical on the single-capture path it must not disturb. A
+    ledger that declares no category at all licenses nothing, which is not the
+    same thing and is not silently read as one.
     """
     ledger = getattr(snapshot, "ledger", None)
     if ledger is None:

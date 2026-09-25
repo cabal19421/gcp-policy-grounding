@@ -200,11 +200,12 @@ def sec_document(policy_report: Any, table: WitnessTable,
                  rules: Iterable[Any] = ()) -> dict[str, Any]:
     """``policy_report.to_dict()`` plus exactly one new top-level key, ``"sec"``.
 
-    The base document (``report.py:91-112``, untouched) is reproduced key for
-    key and value for value; ``"sec"`` carries :data:`SEC_REPORT_SCHEMA`, the
-    table's rows and one entry per loaded rule. The key is always present, even
-    with no rules and an empty table (see the module docstring). *policy_report*
-    may also be a plain mapping — it is copied, never mutated.
+    The base document — what ``report.PolicyReport.to_dict`` returns, untouched
+    — is reproduced key for key and value for value; ``"sec"`` carries
+    :data:`SEC_REPORT_SCHEMA`, the table's rows and one entry per loaded rule.
+    The key is always present, even with no rules and an empty table (see the
+    module docstring). *policy_report* may also be a plain mapping — it is
+    copied, never mutated.
     """
     base = (policy_report.to_dict() if hasattr(policy_report, "to_dict")
             else dict(policy_report))

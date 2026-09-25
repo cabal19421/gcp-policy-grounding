@@ -14,10 +14,10 @@ THE EMIT POLICY, AND WHY IT IS THIS LIST
 and ``network_tags``. The reasoner's enumeration helper never reads the first
 three, so a partial table there cannot produce an ``ungrounded``; and
 ``network_tags`` is presence-only at the Datalog layer — a tag is created
-implicitly by the rule naming it, so ``knowledge.network_tag_exists`` answers
-``True`` or UNKNOWN and never ``False``. For all four, a missing key makes a
-check MISS a finding rather than BLOCK a valid change, which is the only
-direction a partial view may err in.
+implicitly by the rule naming it, so
+``knowledge.GcpSnapshot.network_tag_exists`` answers ``True`` or UNKNOWN and
+never ``False``. For all four, a missing key makes a check MISS a finding rather
+than BLOCK a valid change, which is the only direction a partial view may err in.
 
 :data:`EXISTENCE_LICENSING` is every OTHER :data:`gcp_grounding.facts.TF_CATEGORIES`
 member. Those are OPT-IN ONLY, and opting one in sets ``existence_licensed`` on

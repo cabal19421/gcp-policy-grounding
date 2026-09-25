@@ -1,9 +1,10 @@
 """THE canonical current-state object: a snapshot that knows where it came from.
 
 A :class:`ReconciledSnapshot` is what the merge engine hands the grounding
-engine — the merged estate data, plus the :class:`~gcp_grounding.provenance
-.SourceLedger` that says which source won every fact, the disputes nobody could
-resolve, and the name of the precedence policy that decided them.
+engine — the merged estate data, plus the
+:class:`~gcp_grounding.provenance.SourceLedger` that says which source won every
+fact, the disputes nobody could resolve, and the name of the precedence policy
+that decided them.
 
 WHY A SUBCLASS AND NOT A WRAPPER. ``gate.py`` does a real
 ``isinstance(snapshot, GcpSnapshot)`` check, and ``preflight``, the reasoner,

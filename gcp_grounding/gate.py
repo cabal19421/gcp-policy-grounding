@@ -424,9 +424,9 @@ def terraform_route(path: str) -> bool | None:
 def read_tf_json(path: str, facts: Any) -> tuple[Any, tuple[str, ...], str]:
     """``.tf.json`` through ``json.load`` and NO parser at all.
 
-    Loaded through the one fail-open loader :meth:`PolicyGroundingGate.
-    _ground_with_state` already uses, so "not valid JSON" is phrased in exactly
-    one place.
+    Loaded through the one fail-open loader
+    :meth:`PolicyGroundingGate._ground_with_state` already uses, so "not valid
+    JSON" is phrased in exactly one place.
     """
     document, source, error = preflight._load_document(path)
     if error is not None:
